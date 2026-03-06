@@ -1,0 +1,50 @@
+# ns-3 / CMake build outputs
+/build/
+/build-*/
+!/build-support/
+/cmake-build-*/
+/cmake-cache/
+/Testing/
+/CMakeFiles/
+/CMakeCache.txt
+/CTestTestfile.cmake
+/cmake_install.cmake
+/compile_commands.json
+/.lock-ns3_*
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# IDE and editor files
+/.vscode/
+/.idea/
+/.vs/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# macOS filesystem noise
+.DS_Store
+
+# Local CMake and tool metadata
+CMakeUserPresets.json
+.cache/
+
+# Research simulation outputs
+# Keep generated experiment data local by default; promote selected baselines explicitly later.
+/hex_grid_cells.csv
+/sat_beam_trace.csv
+/sat_attenuation_per_time.csv
+/sat_attenuation_summary.csv
+/sat_attenuation_time_matrix.csv
+/scratch/results/**
+!/scratch/results/
+!/scratch/results/README.md
+/results/
+/runs/
+/artifacts/
+/out/
