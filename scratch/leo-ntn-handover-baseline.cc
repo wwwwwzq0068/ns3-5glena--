@@ -10,9 +10,9 @@
 #include "ns3/nr-ue-rrc.h"
 #include "beam-link-budget.h"
 #include "leo-orbit-calculator.h"
-#include "myfirst-reporting.h"
-#include "myfirst-runtime.h"
-#include "myfirst-utils.h"
+#include "leo-ntn-handover-reporting.h"
+#include "leo-ntn-handover-runtime.h"
+#include "leo-ntn-handover-utils.h"
 #include "wgs84-hex-grid.h"
 #include <algorithm>
 #include <cmath>
@@ -30,7 +30,7 @@
 
 /*
  * 文件说明：
- * `myfirst.cc` 是当前毕设基础组的主仿真入口。
+ * `leo-ntn-handover-baseline.cc` 是当前毕设基础组的主仿真入口。
  *
  * 当前场景目标：
  * - 使用 5G-LENA/NR 搭建一个可解释的 LEO 多卫星、多 UE 切换基线；

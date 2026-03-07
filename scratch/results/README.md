@@ -1,6 +1,10 @@
 # Simulation Results Staging
 
-This directory is the default landing area for generated outputs from `scratch/myfirst.cc`.
+This directory is the default landing area for generated outputs from
+`scratch/leo-ntn-handover-baseline.cc`.
+
+As constellation size grows, expect trace volume here to increase; keep routine
+large-scale runs in this directory and only promote selected baseline outputs.
 
 Current default files include:
 - `hex_grid_cells.csv`

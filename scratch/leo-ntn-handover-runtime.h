@@ -3,7 +3,8 @@
 
 /*
  * 文件说明：
- * `myfirst-runtime.h` 负责保存 `myfirst.cc` 在仿真运行期间需要维护的核心状态。
+ * `leo-ntn-handover-runtime.h` 负责保存 `leo-ntn-handover-baseline.cc`
+ * 在仿真运行期间需要维护的核心状态。
  *
  * 这里放的是“运行时上下文”：
  * - 卫星侧对象与邻区状态；
@@ -11,8 +12,8 @@
  * - 若干与运行时状态直接相关的辅助函数。
  *
  * 不放在本文件中的内容：
- * - 纯数学/几何工具函数，仍放在 `myfirst-utils.h`；
- * - 最终结果汇总与控制台输出，放在 `myfirst-reporting.h`。
+ * - 纯数学/几何工具函数，仍放在 `leo-ntn-handover-utils.h`；
+ * - 最终结果汇总与控制台输出，放在 `leo-ntn-handover-reporting.h`。
  */
 
 #include "ns3/applications-module.h"

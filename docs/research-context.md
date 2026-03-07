@@ -23,6 +23,7 @@
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
+- Expand constellation scale so handover observations are not limited to a very small local overpass.
 - Implement custom handover logic in NS-3 C++.
 - Use signal quality metrics such as RSRP and RSRQ.
 - Combine signal quality with load or cost-function based decision rules.
@@ -38,10 +39,10 @@
 - load balance, if modeled
 
 ## Default Files To Inspect
-- `scratch/myfirst.cc`
+- `scratch/leo-ntn-handover-baseline.cc`
 - `scratch/beam-link-budget.h`
 - `scratch/leo-orbit-calculator.h`
-- `scratch/myfirst-utils.h`
+- `scratch/leo-ntn-handover-utils.h`
 - `scratch/wgs84-hex-grid.h`
 
 ## Response Style For This Project
@@ -51,4 +52,8 @@
 - Call out when a conclusion is inferred from code rather than explicitly stated.
 
 ## Code Organization Preference
-- When feasible, move reusable logic and common definitions out of the main simulation file into helper headers, so `scratch/myfirst.cc` remains focused on scenario assembly and experiment flow.
+- When feasible, move reusable logic and common definitions out of the main simulation file into
+  helper headers, so `scratch/leo-ntn-handover-baseline.cc` remains focused on scenario assembly and
+  experiment flow.
+- At the current phase, treat code organization as largely settled and prioritize scenario scaling work
+  unless a structural change is required by the constellation expansion itself.

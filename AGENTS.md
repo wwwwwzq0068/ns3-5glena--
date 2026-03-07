@@ -17,8 +17,9 @@
   - load-aware decision logic when present
 
 ## Working Defaults
-- When a task involves simulation behavior or logs, read `scratch/myfirst.cc` first.
+- When a task involves simulation behavior or logs, read `scratch/leo-ntn-handover-baseline.cc` first.
 - Treat inter-beam and inter-satellite handover as the main scenarios of interest.
 - Prefer research-oriented interpretation first, code explanation second.
 - When proposing changes, keep evaluation tied to handover success rate, handover delay, throughput, continuity, and signaling overhead.
 - When code grows, prefer moving reusable logic, helper functions, and shared definitions into external header files when reasonable, so the main simulation script stays easier to read.
+- Current implementation phase: baseline file reorganization and handover log cleanup are considered complete; prioritize constellation scaling and scenario representativeness next.

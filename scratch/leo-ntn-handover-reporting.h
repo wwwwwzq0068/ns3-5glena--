@@ -3,7 +3,8 @@
 
 /*
  * 文件说明：
- * `myfirst-reporting.h` 负责集中管理 `scratch/myfirst.cc` 的最终统计汇总逻辑。
+ * `leo-ntn-handover-reporting.h` 负责集中管理
+ * `scratch/leo-ntn-handover-baseline.cc` 的最终统计汇总逻辑。
  *
  * 设计目的：
  * 1. 将“仿真运行期状态”与“结果统计输出”解耦；
@@ -13,7 +14,7 @@
  * 当前本文件只处理控制台摘要输出，不负责事件级实时日志。
  */
 
-#include "myfirst-runtime.h"
+#include "leo-ntn-handover-runtime.h"
 #include <iomanip>
 #include <iostream>
 #include <vector>

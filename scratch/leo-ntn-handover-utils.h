@@ -3,7 +3,8 @@
 
 /*
  * 文件说明：
- * `myfirst-utils.h` 存放 `myfirst.cc` 使用的通用辅助工具函数。
+ * `leo-ntn-handover-utils.h` 存放
+ * `leo-ntn-handover-baseline.cc` 使用的通用辅助工具函数。
  *
  * 这些内容的特点是：
  * - 偏计算或格式化；

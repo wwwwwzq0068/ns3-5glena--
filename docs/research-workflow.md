@@ -7,8 +7,9 @@
 
 ## 当前 `3.0` 的含义
 - 基于 `ns-3.46 + contrib/nr` 的当前研究基线。
-- 主仿真入口为 `scratch/myfirst.cc`。
+- 主仿真入口为 `scratch/leo-ntn-handover-baseline.cc`。
 - 当前默认基础组仍以 LEO 多卫星、多 UE 切换基线为主。
+- 当前阶段优先任务已从文件整理和日志收敛切换到星座规模扩展。
 - 当前默认输出目录为 `scratch/results/`，结果默认不直接纳入 Git。
 
 ## 分支规则
@@ -17,6 +18,9 @@
 - `experiment/v3.0-xxx`：实验性方案验证，例如新 TTT、hysteresis、目标选择策略。
 - `fix/v3.0-xxx`：缺陷修复。
 - `docs/v3.0-xxx`：文档、实验记录和说明更新。
+- 当前优先推荐的功能分支主题：
+  - `feature/v3.0-constellation-scaling`
+  - `feature/v3.0-neighbor-scaling`
 
 ## 提交信息规则
 - 推荐格式：`type(v3.0): 简短说明`
