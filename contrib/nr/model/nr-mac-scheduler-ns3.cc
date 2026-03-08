@@ -918,8 +918,14 @@ NrMacSchedulerNs3::DoSchedDlCqiInfoReq(
 
     for (const auto& cqi : params.m_cqiList)
     {
-        NS_ASSERT(m_ueMap.find(cqi.m_rnti) != m_ueMap.end());
-        const std::shared_ptr<NrMacSchedulerUeInfo>& ue = m_ueMap.find(cqi.m_rnti)->second;
+        auto itUe = m_ueMap.find(cqi.m_rnti);
+        if (itUe == m_ueMap.end())
+        {
+            NS_LOG_INFO("DL CQI for UE " << cqi.m_rnti
+                                         << " ignored because UE context was already released");
+            continue;
+        }
+        const std::shared_ptr<NrMacSchedulerUeInfo>& ue = itUe->second;
         m_cqiManagement.DlCqiReported(cqi, ue, expirationTime, m_maxDlMcs, GetBandwidthInRbg());
         m_csiFeedbackReceived(GetCellId(), GetBwpId(), ue);
     }
@@ -976,7 +982,14 @@ NrMacSchedulerNs3::DoSchedUlCqiInfoReq(
             if (allocation.m_symStart == symStart)
             {
                 auto itUe = m_ueMap.find(allocation.m_rnti);
-                NS_ASSERT(itUe != m_ueMap.end());
+                if (itUe == m_ueMap.end())
+                {
+                    NS_LOG_INFO("UL CQI for UE " << allocation.m_rnti
+                                                 << " ignored because UE context was already released");
+                    found = true;
+                    it = ulAllocations.erase(it);
+                    continue;
+                }
                 NS_ASSERT(allocation.m_numSym > 0);
                 NS_ASSERT(allocation.m_tbs > 0);
 
