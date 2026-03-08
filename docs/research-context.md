@@ -19,15 +19,15 @@
 - Reduce unnecessary handovers and ping-pong behavior.
 - Maintain throughput continuity during serving satellite changes.
 - Keep handover delay and service interruption low.
-- Support load-aware target selection when the model includes load information.
+- Incorporate load-aware target selection rather than leaving it as an optional extension, because the thesis task explicitly requires considering both signal quality and satellite load.
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
-- Expand constellation scale so handover observations are not limited to a very small local overpass.
-- Implement custom handover logic in NS-3 C++.
+- Use the current `2x4` dual-plane local scenario as a controllable baseline before any further constellation scaling.
+- Implement a clean traditional A3-style baseline in NS-3 C++.
 - Use signal quality metrics such as RSRP and RSRQ.
-- Combine signal quality with load or cost-function based decision rules.
-- Compare the custom strategy against a baseline handover method.
+- Design a custom strategy that combines signal quality with load or cost-function based decision rules.
+- Compare the improved strategy against the baseline handover method in the same scenario.
 
 ## Default Evaluation Metrics
 - handover success rate
@@ -55,5 +55,5 @@
 - When feasible, move reusable logic and common definitions out of the main simulation file into
   helper headers, so `scratch/leo-ntn-handover-baseline.cc` remains focused on scenario assembly and
   experiment flow.
-- At the current phase, treat code organization as largely settled and prioritize scenario scaling work
-  unless a structural change is required by the constellation expansion itself.
+- At the current phase, treat code organization as largely settled and prioritize baseline-vs-improved
+  handover strategy work unless a structural change is required by the algorithm implementation.
