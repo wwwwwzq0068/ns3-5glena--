@@ -2487,8 +2487,27 @@ NrMacSchedulerNs3::DoSchedDlTriggerReq(
         //    these are generated.. but anyway..
         for (auto it = dlHarqFeedback.begin(); it != dlHarqFeedback.end(); /* no inc */)
         {
-            auto& ueInfo = m_ueMap.find(it->m_rnti)->second;
-            auto& process = ueInfo->m_dlHarq.Find(it->m_harqProcessId)->second;
+            auto itUe = m_ueMap.find(it->m_rnti);
+            if (itUe == m_ueMap.end())
+            {
+                NS_LOG_INFO("Feedback for UE " << it->m_rnti << " process "
+                                               << static_cast<uint32_t>(it->m_harqProcessId)
+                                               << " ignored because UE context was already released");
+                it = dlHarqFeedback.erase(it); /* INC */
+                continue;
+            }
+
+            auto itProcess = itUe->second->m_dlHarq.Find(it->m_harqProcessId);
+            if (itProcess == itUe->second->m_dlHarq.End())
+            {
+                NS_LOG_INFO("Feedback for UE " << it->m_rnti << " process "
+                                               << static_cast<uint32_t>(it->m_harqProcessId)
+                                               << " ignored because HARQ process no longer exists");
+                it = dlHarqFeedback.erase(it); /* INC */
+                continue;
+            }
+
+            auto& process = itProcess->second;
             NS_LOG_INFO("Analyzing feedback for UE " << it->m_rnti << " process "
                                                      << static_cast<uint32_t>(it->m_harqProcessId));
             if (!process.m_active)
@@ -2576,8 +2595,27 @@ NrMacSchedulerNs3::DoSchedUlTriggerReq(
         // if there are feedbacks for expired process, remove them
         for (auto it = ulHarqFeedback.begin(); it != ulHarqFeedback.end(); /* no inc */)
         {
-            auto& ueInfo = m_ueMap.find(it->m_rnti)->second;
-            auto& process = ueInfo->m_ulHarq.Find(it->m_harqProcessId)->second;
+            auto itUe = m_ueMap.find(it->m_rnti);
+            if (itUe == m_ueMap.end())
+            {
+                NS_LOG_INFO("Feedback for UE " << it->m_rnti << " process "
+                                               << static_cast<uint32_t>(it->m_harqProcessId)
+                                               << " ignored because UE context was already released");
+                it = ulHarqFeedback.erase(it); /* INC */
+                continue;
+            }
+
+            auto itProcess = itUe->second->m_ulHarq.Find(it->m_harqProcessId);
+            if (itProcess == itUe->second->m_ulHarq.End())
+            {
+                NS_LOG_INFO("Feedback for UE " << it->m_rnti << " process "
+                                               << static_cast<uint32_t>(it->m_harqProcessId)
+                                               << " ignored because HARQ process no longer exists");
+                it = ulHarqFeedback.erase(it); /* INC */
+                continue;
+            }
+
+            auto& process = itProcess->second;
             if (!process.m_active)
             {
                 NS_LOG_INFO("Feedback for UE " << it->m_rnti << " process "

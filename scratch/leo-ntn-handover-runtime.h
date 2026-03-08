@@ -46,6 +46,12 @@ struct SatelliteRuntime
     /** 当前卫星对应的轨道参数。 */
     LeoOrbitCalculator::KeplerElements orbit;
 
+    /** 当前卫星所属的轨道面编号。 */
+    uint32_t orbitPlaneIndex = 0;
+
+    /** 当前卫星在所属轨道面内的序号。 */
+    uint32_t orbitSlotIndex = 0;
+
     /** 当前卫星波束所指向的小区锚点 ECEF 坐标。 */
     Vector cellAnchorEcef;
 

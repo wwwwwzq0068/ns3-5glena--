@@ -97,7 +97,10 @@ static bool g_printKpiReports = false;
 static bool g_printNrtEvents = false;
 static bool g_printOrbitCheck = false;
 static bool g_printRrcStateTransitions = false;
+static bool g_printSimulationProgress = true;
 static double g_kpiIntervalSeconds = 1.0;
+static double g_progressReportIntervalSeconds = 2.0;
+static double g_progressStopTimeSeconds = 0.0;
 
 // 严格邻区守卫：只有满足可见、波束锁定和门限条件的邻区才会被激活。
 static bool g_strictNrtGuard = true;
@@ -445,6 +448,31 @@ PrintDlThroughput(uint32_t packetSizeBytes, Time interval)
 }
 
 /**
+ * 周期性输出仿真当前推进到的模拟时间。
+ */
+static void
+PrintSimulationProgress(Time interval)
+{
+    if (!g_printSimulationProgress || g_progressStopTimeSeconds <= 0.0)
+    {
+        return;
+    }
+
+    const double nowSeconds = Simulator::Now().GetSeconds();
+    const double progressPercent =
+        std::min(100.0, nowSeconds * 100.0 / std::max(1e-9, g_progressStopTimeSeconds));
+
+    std::cout << "[Progress] t=" << std::fixed << std::setprecision(3) << nowSeconds << "s / "
+              << g_progressStopTimeSeconds << "s"
+              << " (" << std::setprecision(1) << progressPercent << "%)" << std::endl;
+
+    if (Simulator::Now() + interval <= Seconds(g_progressStopTimeSeconds) + NanoSeconds(1))
+    {
+        Simulator::Schedule(interval, &PrintSimulationProgress, interval);
+    }
+}
+
+/**
  * 控制底层 A3 provider 是否对指定服务卫星开放。
  *
  * 目前多 UE 场景主要走自定义 A3 执行器，这个函数更多用于保留单 UE 兼容路径。
@@ -587,21 +615,22 @@ static void
 UpdateConstellation(Time interval, Time stopTime)
 {
     const double nowSeconds = Simulator::Now().GetSeconds();
-    std::vector<LeoOrbitCalculator::OrbitState> referenceStates(g_satellites.size());
+    std::vector<LeoOrbitCalculator::OrbitState> commonSatelliteStates(g_satellites.size());
     for (uint32_t i = 0; i < g_satellites.size(); ++i)
     {
-        referenceStates[i] = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                            g_satellites[i].orbit,
-                                                            g_gmstAtEpochRad,
-                                                            g_ueGroundPoint,
-                                                            g_carrierFrequencyHz,
-                                                            g_minElevationRad);
+        commonSatelliteStates[i] =
+            LeoOrbitCalculator::CalculateSatelliteState(nowSeconds, g_satellites[i].orbit, g_gmstAtEpochRad);
+        const auto referenceState =
+            LeoOrbitCalculator::CalculateObservation(commonSatelliteStates[i],
+                                                     g_ueGroundPoint,
+                                                     g_carrierFrequencyHz,
+                                                     g_minElevationRad);
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
-        g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
-        UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
-        if (referenceStates[i].slantRangeMeters < g_minDistances[i])
+        g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(commonSatelliteStates[i].ecef);
+        UpdateSatelliteAnchorFromGrid(i, commonSatelliteStates[i].ecef, nowSeconds, false);
+        if (referenceState.slantRangeMeters < g_minDistances[i])
         {
-            g_minDistances[i] = referenceStates[i].slantRangeMeters;
+            g_minDistances[i] = referenceState.slantRangeMeters;
             g_minDistTimes[i] = nowSeconds;
         }
     }
@@ -622,12 +651,10 @@ UpdateConstellation(Time interval, Time stopTime)
         std::vector<double> distancesMeters(g_satellites.size(), 0.0);
         for (uint32_t i = 0; i < g_satellites.size(); ++i)
         {
-            states[i] = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                      g_satellites[i].orbit,
-                                                      g_gmstAtEpochRad,
-                                                      ue.groundPoint,
-                                                      g_carrierFrequencyHz,
-                                                      g_minElevationRad);
+            states[i] = LeoOrbitCalculator::CalculateObservation(commonSatelliteStates[i],
+                                                                 ue.groundPoint,
+                                                                 g_carrierFrequencyHz,
+                                                                 g_minElevationRad);
             beamBudgets[i] = CalculateEarthFixedBeamBudget(states[i].ecef,
                                                            ueEcef,
                                                            g_satellites[i].cellAnchorEcef,
@@ -778,7 +805,8 @@ UpdateConstellation(Time interval, Time stopTime)
                 // 多 UE 路径优先使用自定义执行器；单 UE 时保留 A3 gate 兼容逻辑。
                 if (g_useCustomA3Executor)
                 {
-                    ExecuteCustomA3Handover(ue, ueIdx, servingSatIdx, bestNeighbourIdx, neighbourQualified, nowSeconds);
+                    ExecuteCustomA3Handover(
+                        ue, ueIdx, servingSatIdx, bestNeighbourIdx, neighbourQualified, nowSeconds);
                 }
                 else if (g_ues.size() == 1)
                 {
@@ -870,25 +898,32 @@ main(int argc, char* argv[])
     // 1. 默认参数
     // ------------------------------
 
-    double simTime = 30.0;
+    double simTime = 40.0;
     double appStartTime = 1.0;
 
-    // 基础组默认配置：5 颗同轨卫星，3 个按东西方向拉开的 UE。
-    uint16_t gNbNum = 5;
-    uint32_t ueNum = 3;
-    double ueSpacingMeters = 5000.0;
+    // 基础组默认配置：8 颗卫星、2 个轨道面、6 个按东西方向拉开的 UE。
+    uint16_t gNbNum = 8;
+    uint32_t ueNum = 6;
+    double ueSpacingMeters = 10000.0;
     double satAltitudeMeters = 600000.0;
     double orbitEccentricity = 0.0;
     double orbitInclinationDeg = 53.0;
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
+    uint32_t orbitPlaneCount = 2;
+    // 双轨调参思路：
+    // 1. 减小轨道面 RAAN 间隔，让两条轨道对同一区域形成更强的可见重叠；
+    // 2. 减小轨道面之间的时序偏移，让跨轨候选更接近同时出现；
+    // 3. 缩小同轨过境间隔并拉长仿真时长，使一个窗口内能看到更多服务星竞争。
+    double interPlaneRaanSpacingDeg = 12.0;
+    double interPlaneTimeOffsetSeconds = 2.0;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
-    double overpassGapSeconds = 6.0;
-    double overpassTimeOffsetSeconds = 6.0;
-    double updateIntervalMs = 100.0;
+    double overpassGapSeconds = 4.0;
+    double overpassTimeOffsetSeconds = 0.0;
+    double updateIntervalMs = 200.0;
     double minElevationDeg = 10.0;
     double ueLatitudeDeg = 45.6;
     double ueLongitudeDeg = 84.9;
@@ -918,7 +953,7 @@ main(int argc, char* argv[])
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
-    double lambda = 1000.0;
+    double lambda = 250.0;
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
@@ -941,13 +976,17 @@ main(int argc, char* argv[])
     bool printNrtEvents = false;
     bool printOrbitCheck = false;
     bool printRrcStateTransitions = false;
+    bool printSimulationProgress = true;
     bool startupVerbose = false;
     double kpiIntervalSeconds = 2.0;
-    bool runAttenuationScript = true;
+    double progressReportIntervalSeconds = 2.0;
+    bool recordBeamTraceCsv = false;
+    bool runAttenuationScript = false;
     std::string attenuationScriptPath = std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_attenuation_report.py";
     std::string attenuationInputPath = defaultAttenuationInputPath;
     std::string attenuationPerTimePath = defaultAttenuationPerTimePath;
     double throughputReportIntervalSeconds = 0.0;
+    double channelUpdatePeriodMs = 20.0;
 
     // 将关键参数暴露为命令行选项，便于后续批量实验。
     CommandLine cmd(__FILE__);
@@ -962,6 +1001,9 @@ main(int argc, char* argv[])
     addArg("orbitInclinationDeg", orbitInclinationDeg);
     addArg("orbitRaanDeg", orbitRaanDeg);
     addArg("orbitArgPerigeeDeg", orbitArgPerigeeDeg);
+    addArg("orbitPlaneCount", orbitPlaneCount);
+    addArg("interPlaneRaanSpacingDeg", interPlaneRaanSpacingDeg);
+    addArg("interPlaneTimeOffsetSeconds", interPlaneTimeOffsetSeconds);
     addArg("baseTrueAnomalyDeg", baseTrueAnomalyDeg);
     addArg("gmstAtEpochDeg", gmstAtEpochDeg);
     addArg("autoAlignToUe", autoAlignToUe);
@@ -1006,13 +1048,17 @@ main(int argc, char* argv[])
     addArg("printNrtEvents", printNrtEvents);
     addArg("printOrbitCheck", printOrbitCheck);
     addArg("printRrcStateTransitions", printRrcStateTransitions);
+    addArg("printSimulationProgress", printSimulationProgress);
     addArg("startupVerbose", startupVerbose);
     addArg("kpiIntervalSeconds", kpiIntervalSeconds);
+    addArg("progressReportIntervalSeconds", progressReportIntervalSeconds);
+    addArg("recordBeamTraceCsv", recordBeamTraceCsv);
     addArg("runAttenuationScript", runAttenuationScript);
     addArg("attenuationScriptPath", attenuationScriptPath);
     addArg("attenuationInputPath", attenuationInputPath);
     addArg("attenuationPerTimePath", attenuationPerTimePath);
     addArg("throughputReportIntervalSeconds", throughputReportIntervalSeconds);
+    addArg("channelUpdatePeriodMs", channelUpdatePeriodMs);
     cmd.Parse(argc, argv);
 
     if (gridCatalogPath == defaultGridCatalogPath && outputDir != defaultOutputDir)
@@ -1036,8 +1082,12 @@ main(int argc, char* argv[])
     // ------------------------------
     NS_ABORT_MSG_IF(gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(ueNum == 0, "ueNum must be >= 1");
+    NS_ABORT_MSG_IF(orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
+    NS_ABORT_MSG_IF(gNbNum < orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(orbitEccentricity < 0.0 || orbitEccentricity >= 1.0,
                     "orbitEccentricity must satisfy 0 <= e < 1");
+    NS_ABORT_MSG_IF(interPlaneRaanSpacingDeg < 0.0, "interPlaneRaanSpacingDeg must be >= 0");
+    NS_ABORT_MSG_IF(interPlaneTimeOffsetSeconds < 0.0, "interPlaneTimeOffsetSeconds must be >= 0");
     NS_ABORT_MSG_IF(scanMaxDeg <= 0.0 || scanMaxDeg >= 90.0, "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
     NS_ABORT_MSG_IF(kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
@@ -1046,6 +1096,8 @@ main(int argc, char* argv[])
     NS_ABORT_MSG_IF(hexCellRadiusKm <= 0.0, "hexCellRadiusKm must be > 0");
     NS_ABORT_MSG_IF(gridNearestK == 0, "gridNearestK must be >= 1");
     NS_ABORT_MSG_IF(outputDir.empty(), "outputDir must not be empty");
+    NS_ABORT_MSG_IF(progressReportIntervalSeconds <= 0.0, "progressReportIntervalSeconds must be > 0");
+    NS_ABORT_MSG_IF(channelUpdatePeriodMs <= 0.0, "channelUpdatePeriodMs must be > 0");
     if (strictNrtMarginDb < 0.0)
     {
         strictNrtMarginDb = hoHysteresisDb;
@@ -1151,6 +1203,9 @@ main(int argc, char* argv[])
     g_printOrbitCheck = printOrbitCheck;
     g_printRrcStateTransitions = printRrcStateTransitions;
     g_kpiIntervalSeconds = kpiIntervalSeconds;
+    g_printSimulationProgress = printSimulationProgress;
+    g_progressReportIntervalSeconds = progressReportIntervalSeconds;
+    g_progressStopTimeSeconds = simTime;
     g_strictNrtGuard = strictNrtGuard;
     g_strictNrtMarginDb = strictNrtMarginDb;
     g_manualHoTttSeconds = static_cast<double>(hoTttMs) / 1000.0;
@@ -1160,11 +1215,26 @@ main(int argc, char* argv[])
               << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
               << " alphaMax=" << scanMaxDeg << "deg"
               << " theta3dB=" << theta3dBDeg << "deg" << std::endl;
+    std::cout << "[Constellation] satellites=" << gNbNum
+              << " planes=" << orbitPlaneCount
+              << " ue=" << ueNum
+              << " ueSpacing=" << ueSpacingMeters / 1000.0 << "km"
+              << " raanSpacing=" << interPlaneRaanSpacingDeg << "deg"
+              << " planeTimeOffset=" << interPlaneTimeOffsetSeconds << "s" << std::endl;
     std::cout << "[NRT] strict=" << (g_strictNrtGuard ? "ON" : "OFF")
               << " margin=" << g_strictNrtMarginDb << "dB";
     if (g_strictNrtGuard && g_useCustomA3Executor)
     {
         std::cout << " a3=custom(ttt=" << g_manualHoTttSeconds << "s)";
+    }
+    std::cout << std::endl;
+    std::cout << "[Runtime] updateInterval=" << updateIntervalMs << "ms"
+              << " channelUpdate=" << channelUpdatePeriodMs << "ms"
+              << " lambda=" << lambda << "pkt/s/ue"
+              << " progress=" << (g_printSimulationProgress ? "ON" : "OFF");
+    if (g_printSimulationProgress)
+    {
+        std::cout << "(" << g_progressReportIntervalSeconds << "s)";
     }
     std::cout << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
@@ -1173,7 +1243,6 @@ main(int argc, char* argv[])
     const double meanMotionRadPerSec =
         std::sqrt(LeoOrbitCalculator::kEarthGravitationalMu / std::pow(semiMajorAxisMeters, 3.0));
     const double centerOverpass = simTime / 2.0;
-    const double centerIndex = (static_cast<double>(gNbNum) - 1.0) / 2.0;
 
     const double inclinationRad = LeoOrbitCalculator::DegToRad(orbitInclinationDeg);
     double raanRad = LeoOrbitCalculator::DegToRad(orbitRaanDeg);
@@ -1204,11 +1273,17 @@ main(int argc, char* argv[])
                   << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad)
                   << "deg tCenter=" << centerOverpass << "s" << std::endl;
     }
+    if (orbitPlaneCount > 1)
+    {
+        std::cout << "[Setup] multi-plane mode: plane0 keeps the aligned reference orbit, "
+                  << "additional planes use RAAN/time offsets" << std::endl;
+    }
 
     // ------------------------------
     // 4. NR/EPC 与信道配置
     // ------------------------------
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(10)));
+    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod",
+                       TimeValue(MilliSeconds(channelUpdatePeriodMs)));
     Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod", TimeValue(MilliSeconds(50)));
     Config::SetDefault("ns3::NrAnr::Threshold", UintegerValue(0));
 
@@ -1321,70 +1396,90 @@ main(int argc, char* argv[])
     g_satellites.clear();
     g_cellToSatellite.clear();
     g_satellites.reserve(gNbNum);
+    std::vector<uint32_t> satellitesPerPlane(orbitPlaneCount, gNbNum / orbitPlaneCount);
+    for (uint32_t planeIdx = 0; planeIdx < (gNbNum % orbitPlaneCount); ++planeIdx)
+    {
+        satellitesPerPlane[planeIdx]++;
+    }
 
     // 为每颗卫星绑定轨道、初始位置和初始网格锚点。
-    for (uint32_t i = 0; i < gNbNetDev.GetN(); ++i)
+    uint32_t globalSatIdx = 0;
+    for (uint32_t planeIdx = 0; planeIdx < orbitPlaneCount; ++planeIdx)
     {
-        auto dev = DynamicCast<NrGnbNetDevice>(gNbNetDev.Get(i));
-        auto rrc = dev->GetRrc();
+        const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
+        const double planeCenterIndex = (static_cast<double>(satsInPlane) - 1.0) / 2.0;
+        const double planeRaanRad =
+            LeoOrbitCalculator::NormalizeAngle(raanRad +
+                                               LeoOrbitCalculator::DegToRad(interPlaneRaanSpacingDeg) * planeIdx);
+        const double planeRaanDeg = LeoOrbitCalculator::RadToDeg(planeRaanRad);
+        const double planeTimeOffset = interPlaneTimeOffsetSeconds * planeIdx;
 
-        const double overpassTime = centerOverpass + (static_cast<double>(i) - centerIndex) * overpassGapSeconds +
-                                    overpassTimeOffsetSeconds;
-        LeoOrbitCalculator::KeplerElements orbit;
-        orbit.semiMajorAxisMeters = semiMajorAxisMeters;
-        orbit.eccentricity = orbitEccentricity;
-        orbit.inclinationRad = inclinationRad;
-        orbit.raanRad = raanRad;
-        orbit.argPerigeeRad = argPerigeeRad;
-        // 对近圆 LEO 而言，平移真近点角可近似实现按时间错开的过顶相位。
-        orbit.trueAnomalyAtEpochRad = baseTrueAnomalyRad - meanMotionRadPerSec * overpassTime;
-
-        const auto initState = LeoOrbitCalculator::Calculate(0.0,
-                                                             orbit,
-                                                             g_gmstAtEpochRad,
-                                                             g_ueGroundPoint,
-                                                             centralFrequency,
-                                                             g_minElevationRad);
-        gNbNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(initState.ecef);
-
-        SatelliteRuntime sat;
-        sat.node = gNbNodes.Get(i);
-        sat.dev = dev;
-        sat.rrc = rrc;
-        sat.orbit = orbit;
-        sat.cellAnchorEcef = g_cellGroundPoint.ecef;
-
-        if (g_useWgs84HexGrid && !g_hexGridCells.empty())
+        for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
         {
-            const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, initState.ecef, g_gridNearestK);
-            if (anchor.found)
+            auto dev = DynamicCast<NrGnbNetDevice>(gNbNetDev.Get(globalSatIdx));
+            auto rrc = dev->GetRrc();
+
+            const double overpassTime =
+                centerOverpass + (static_cast<double>(slotIdx) - planeCenterIndex) * overpassGapSeconds +
+                overpassTimeOffsetSeconds + planeTimeOffset;
+            LeoOrbitCalculator::KeplerElements orbit;
+            orbit.semiMajorAxisMeters = semiMajorAxisMeters;
+            orbit.eccentricity = orbitEccentricity;
+            orbit.inclinationRad = inclinationRad;
+            orbit.raanRad = planeRaanRad;
+            orbit.argPerigeeRad = argPerigeeRad;
+            // 对近圆 LEO 而言，平移真近点角可近似实现按时间错开的过顶相位。
+            orbit.trueAnomalyAtEpochRad = baseTrueAnomalyRad - meanMotionRadPerSec * overpassTime;
+
+            const auto initState = LeoOrbitCalculator::Calculate(0.0,
+                                                                 orbit,
+                                                                 g_gmstAtEpochRad,
+                                                                 g_ueGroundPoint,
+                                                                 centralFrequency,
+                                                                 g_minElevationRad);
+            gNbNodes.Get(globalSatIdx)->GetObject<MobilityModel>()->SetPosition(initState.ecef);
+
+            SatelliteRuntime sat;
+            sat.node = gNbNodes.Get(globalSatIdx);
+            sat.dev = dev;
+            sat.rrc = rrc;
+            sat.orbit = orbit;
+            sat.orbitPlaneIndex = planeIdx;
+            sat.orbitSlotIndex = slotIdx;
+            sat.cellAnchorEcef = g_cellGroundPoint.ecef;
+
+            if (g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
-                sat.currentAnchorGridId = anchor.anchorGridId;
-                sat.cellAnchorEcef = anchor.anchorEcef;
-                sat.nearestGridIds = anchor.nearestGridIds;
+                const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, initState.ecef, g_gridNearestK);
+                if (anchor.found)
+                {
+                    sat.currentAnchorGridId = anchor.anchorGridId;
+                    sat.cellAnchorEcef = anchor.anchorEcef;
+                    sat.nearestGridIds = anchor.nearestGridIds;
+                }
             }
-        }
-        g_cellToSatellite[dev->GetCellId()] = i;
-        g_satellites.push_back(sat);
+            g_cellToSatellite[dev->GetCellId()] = globalSatIdx;
+            g_satellites.push_back(sat);
 
-        if (startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
-        {
-            UpdateSatelliteAnchorFromGrid(i, initState.ecef, 0.0, true);
-        }
-
-        std::cout << "[Setup] sat" << i << " cell=" << dev->GetCellId()
-                  << " overpass=" << overpassTime << "s";
-        if (startupVerbose)
-        {
-            std::cout << " nu0=" << LeoOrbitCalculator::RadToDeg(orbit.trueAnomalyAtEpochRad) << "deg"
-                      << " i=" << orbitInclinationDeg << "deg"
-                      << " RAAN=" << orbitRaanDeg << "deg";
-            if (g_useWgs84HexGrid && g_satellites[i].currentAnchorGridId != 0)
+            if (startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
-                std::cout << " anchorGrid=" << g_satellites[i].currentAnchorGridId;
+                UpdateSatelliteAnchorFromGrid(globalSatIdx, initState.ecef, 0.0, true);
             }
+
+            std::cout << "[Setup] sat" << globalSatIdx << " plane=" << planeIdx << " slot=" << slotIdx
+                      << " cell=" << dev->GetCellId() << " overpass=" << overpassTime << "s";
+            if (startupVerbose)
+            {
+                std::cout << " nu0=" << LeoOrbitCalculator::RadToDeg(orbit.trueAnomalyAtEpochRad) << "deg"
+                          << " i=" << orbitInclinationDeg << "deg"
+                          << " RAAN=" << planeRaanDeg << "deg";
+                if (g_useWgs84HexGrid && g_satellites[globalSatIdx].currentAnchorGridId != 0)
+                {
+                    std::cout << " anchorGrid=" << g_satellites[globalSatIdx].currentAnchorGridId;
+                }
+            }
+            std::cout << std::endl;
         }
-        std::cout << std::endl;
     }
 
     // ------------------------------
@@ -1550,14 +1645,18 @@ main(int argc, char* argv[])
     // 8. 运行时复位、回调注册与周期事件调度
     // ------------------------------
     ResetRuntimeState(gNbNum);
+    const bool writeBeamTraceCsv = recordBeamTraceCsv || runAttenuationScript;
     if (g_satBeamTrace.is_open())
     {
         g_satBeamTrace.close();
     }
-    g_satBeamTrace.open(attenuationInputPath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(), "Failed to open beam trace CSV: " << attenuationInputPath);
-    g_satBeamTrace
-        << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm\n";
+    if (writeBeamTraceCsv)
+    {
+        g_satBeamTrace.open(attenuationInputPath, std::ios::out | std::ios::trunc);
+        NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(), "Failed to open beam trace CSV: " << attenuationInputPath);
+        g_satBeamTrace
+            << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm\n";
+    }
 
     g_gnbRrcs.clear();
     for (const auto& sat : g_satellites)
@@ -1599,6 +1698,12 @@ main(int argc, char* argv[])
                             &PrintDlThroughput,
                             udpPacketSize,
                             Seconds(throughputReportIntervalSeconds));
+    }
+    if (g_printSimulationProgress)
+    {
+        Simulator::Schedule(Seconds(std::min(g_progressReportIntervalSeconds, simTime)),
+                            &PrintSimulationProgress,
+                            Seconds(g_progressReportIntervalSeconds));
     }
 
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)

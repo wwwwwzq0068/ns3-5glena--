@@ -154,15 +154,10 @@ class LeoOrbitCalculator
     }
 
     /**
-     * 计算给定时刻的卫星轨道状态以及相对 UE 的观测几何量。
+     * 只计算给定时刻的卫星轨道状态，不引入任何 UE 观测几何量。
      */
     static OrbitState
-    Calculate(double tSeconds,
-              const KeplerElements& elements,
-              double gmstAtEpochRad,
-              const GroundPoint& uePoint,
-              double carrierFrequencyHz,
-              double minElevationRad)
+    CalculateSatelliteState(double tSeconds, const KeplerElements& elements, double gmstAtEpochRad)
     {
         const double e = std::clamp(elements.eccentricity, 0.0, 0.999999);
         const double n = std::sqrt(kEarthGravitationalMu / std::pow(elements.semiMajorAxisMeters, 3.0));
@@ -199,7 +194,32 @@ class LeoOrbitCalculator
                            rotatedVEcef.y - kEarthRotationRateRadPerSec * rEcef.x,
                            rotatedVEcef.z);
 
-        const Vector slant(rEcef.x - uePoint.ecef.x, rEcef.y - uePoint.ecef.y, rEcef.z - uePoint.ecef.z);
+        OrbitState state;
+        state.eci = rEci;
+        state.vEci = vEci;
+        state.ecef = rEcef;
+        state.vEcef = vEcef;
+        state.slantRangeEcef = Vector(0.0, 0.0, 0.0);
+        state.slantRangeMeters = 0.0;
+        state.azimuthRad = 0.0;
+        state.elevationRad = -kPi / 2.0;
+        state.dopplerHz = 0.0;
+        state.visible = false;
+        return state;
+    }
+
+    /**
+     * 在已知卫星公共运动状态的前提下，补充相对某个 UE 的观测几何量。
+     */
+    static OrbitState
+    CalculateObservation(const OrbitState& satelliteState,
+                         const GroundPoint& uePoint,
+                         double carrierFrequencyHz,
+                         double minElevationRad)
+    {
+        const Vector slant(satelliteState.ecef.x - uePoint.ecef.x,
+                           satelliteState.ecef.y - uePoint.ecef.y,
+                           satelliteState.ecef.z - uePoint.ecef.z);
         const double slantRangeMeters = Norm(slant);
         const Vector losUnit =
             (slantRangeMeters > 0.0)
@@ -215,14 +235,10 @@ class LeoOrbitCalculator
             azimuthRad += 2.0 * kPi;
         }
 
-        const double rangeRate = Dot(vEcef, losUnit);
+        const double rangeRate = Dot(satelliteState.vEcef, losUnit);
         const double dopplerHz = -(carrierFrequencyHz / kSpeedOfLight) * rangeRate;
 
-        OrbitState state;
-        state.eci = rEci;
-        state.vEci = vEci;
-        state.ecef = rEcef;
-        state.vEcef = vEcef;
+        OrbitState state = satelliteState;
         state.slantRangeEcef = slant;
         state.slantRangeMeters = slantRangeMeters;
         state.azimuthRad = azimuthRad;
@@ -230,6 +246,24 @@ class LeoOrbitCalculator
         state.dopplerHz = dopplerHz;
         state.visible = (elevationRad >= minElevationRad);
         return state;
+    }
+
+    /**
+     * 计算给定时刻的卫星轨道状态以及相对 UE 的观测几何量。
+     */
+    static OrbitState
+    Calculate(double tSeconds,
+              const KeplerElements& elements,
+              double gmstAtEpochRad,
+              const GroundPoint& uePoint,
+              double carrierFrequencyHz,
+              double minElevationRad)
+    {
+        return CalculateObservation(
+            CalculateSatelliteState(tSeconds, elements, gmstAtEpochRad),
+            uePoint,
+            carrierFrequencyHz,
+            minElevationRad);
     }
 
   private:
