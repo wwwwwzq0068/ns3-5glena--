@@ -63,6 +63,18 @@ struct SatelliteRuntime
 
     /** 当前被加入邻区列表的小区 ID 集合。 */
     std::set<uint16_t> activeNeighbours;
+
+    /** `attachedUeCount`（已接入 UE 数）：当前接入到该卫星小区的 UE 数。 */
+    uint32_t attachedUeCount = 0;
+
+    /** `offeredPacketRate`（汇总业务到达率）：当前汇总到该卫星的业务到达率，单位 pkt/s。 */
+    double offeredPacketRate = 0.0;
+
+    /** `loadScore`（负载评分）：归一化负载分数，数值越大表示越忙。 */
+    double loadScore = 0.0;
+
+    /** `admissionAllowed`（是否允许接纳切入）：当前是否允许继续接纳新的切入 UE。 */
+    bool admissionAllowed = true;
 };
 
 struct UeRuntime

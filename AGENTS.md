@@ -23,3 +23,14 @@
 - When proposing changes, keep evaluation tied to handover success rate, handover delay, throughput, continuity, and signaling overhead.
 - When code grows, prefer moving reusable logic, helper functions, and shared definitions into external header files when reasonable, so the main simulation script stays easier to read.
 - Current implementation phase: baseline file reorganization and handover log cleanup are considered complete; prioritize constellation scaling and scenario representativeness next.
+
+## Collaboration Preferences
+- Prefer editing existing files over creating new documents or parallel explanations.
+- When a file becomes long or repetitive, simplify or replace content instead of appending more text.
+- Keep documentation short and decision-oriented; avoid stacking background information unless necessary.
+- Keep code changes minimal and focused; prefer the simplest design that preserves future extensibility.
+- When possible, make one small, clear change at a time instead of expanding scope.
+- When explaining simulation logic or code behavior, prefer plain-language explanations before formal terminology.
+- Start with the core idea first, then map it to parameter names and code details.
+- Use small numeric examples when they make the behavior easier to understand.
+- Avoid overly abstract explanations when a concrete description would be clearer.

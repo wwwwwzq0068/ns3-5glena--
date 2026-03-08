@@ -97,10 +97,13 @@ static bool g_printKpiReports = false;
 static bool g_printNrtEvents = false;
 static bool g_printOrbitCheck = false;
 static bool g_printRrcStateTransitions = false;
-static bool g_printSimulationProgress = true;
 static double g_kpiIntervalSeconds = 1.0;
+static bool g_printSimulationProgress = true;
 static double g_progressReportIntervalSeconds = 2.0;
 static double g_progressStopTimeSeconds = 0.0;
+static double g_offeredPacketRatePerUe = 1000.0;
+static double g_maxSupportedUesPerSatellite = 3.0;
+static double g_loadCongestionThreshold = 0.8;
 
 // 严格邻区守卫：只有满足可见、波束锁定和门限条件的邻区才会被激活。
 static bool g_strictNrtGuard = true;
@@ -614,23 +617,46 @@ ExecuteCustomA3Handover(UeRuntime& ue,
 static void
 UpdateConstellation(Time interval, Time stopTime)
 {
+    struct BeamTraceRow
+    {
+        double timeSeconds = 0.0;
+        uint32_t ueIndex = 0;
+        uint32_t satIndex = 0;
+        uint16_t cellId = 0;
+        bool beamLocked = false;
+        double scanLossDb = 0.0;
+        double patternLossDb = 0.0;
+        double fsplDb = 0.0;
+        double atmLossDb = 0.0;
+        double rsrpDbm = 0.0;
+    };
+
     const double nowSeconds = Simulator::Now().GetSeconds();
-    std::vector<LeoOrbitCalculator::OrbitState> commonSatelliteStates(g_satellites.size());
+    for (auto& sat : g_satellites)
+    {
+        sat.attachedUeCount = 0;
+        sat.offeredPacketRate = 0.0;
+        sat.loadScore = 0.0;
+        sat.admissionAllowed = true;
+    }
+
+    std::vector<LeoOrbitCalculator::OrbitState> referenceStates(g_satellites.size());
+    std::vector<BeamTraceRow> pendingBeamTraceRows;
+    pendingBeamTraceRows.reserve(g_ues.size() * g_satellites.size());
     for (uint32_t i = 0; i < g_satellites.size(); ++i)
     {
-        commonSatelliteStates[i] =
-            LeoOrbitCalculator::CalculateSatelliteState(nowSeconds, g_satellites[i].orbit, g_gmstAtEpochRad);
-        const auto referenceState =
-            LeoOrbitCalculator::CalculateObservation(commonSatelliteStates[i],
-                                                     g_ueGroundPoint,
-                                                     g_carrierFrequencyHz,
-                                                     g_minElevationRad);
+        referenceStates[i] = LeoOrbitCalculator::Calculate(nowSeconds,
+                                                            g_satellites[i].orbit,
+                                                            g_gmstAtEpochRad,
+                                                            g_ueGroundPoint,
+                                                            g_carrierFrequencyHz,
+                                                            g_minElevationRad);
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
-        g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(commonSatelliteStates[i].ecef);
-        UpdateSatelliteAnchorFromGrid(i, commonSatelliteStates[i].ecef, nowSeconds, false);
-        if (referenceState.slantRangeMeters < g_minDistances[i])
+        g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
+        UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
+        if (referenceStates[i].slantRangeMeters < g_minDistances[i])
         {
-            g_minDistances[i] = referenceState.slantRangeMeters;
+            g_minDistances[i] = referenceStates[i].slantRangeMeters;
             g_minDistTimes[i] = nowSeconds;
         }
     }
@@ -651,10 +677,12 @@ UpdateConstellation(Time interval, Time stopTime)
         std::vector<double> distancesMeters(g_satellites.size(), 0.0);
         for (uint32_t i = 0; i < g_satellites.size(); ++i)
         {
-            states[i] = LeoOrbitCalculator::CalculateObservation(commonSatelliteStates[i],
-                                                                 ue.groundPoint,
-                                                                 g_carrierFrequencyHz,
-                                                                 g_minElevationRad);
+            states[i] = LeoOrbitCalculator::Calculate(nowSeconds,
+                                                      g_satellites[i].orbit,
+                                                      g_gmstAtEpochRad,
+                                                      ue.groundPoint,
+                                                      g_carrierFrequencyHz,
+                                                      g_minElevationRad);
             beamBudgets[i] = CalculateEarthFixedBeamBudget(states[i].ecef,
                                                            ueEcef,
                                                            g_satellites[i].cellAnchorEcef,
@@ -663,18 +691,16 @@ UpdateConstellation(Time interval, Time stopTime)
 
             if (g_satBeamTrace.is_open())
             {
-                // 导出逐时刻逐 UE 逐卫星的链路预算明细，供 Python 脚本后处理。
-                g_satBeamTrace << std::fixed << std::setprecision(3)
-                               << nowSeconds << ","
-                               << ueIdx << ","
-                               << i << ","
-                               << g_satellites[i].dev->GetCellId() << ","
-                               << (beamBudgets[i].beamLocked ? 1 : 0) << ","
-                               << beamBudgets[i].scanLossDb << ","
-                               << beamBudgets[i].patternLossDb << ","
-                               << beamBudgets[i].fsplDb << ","
-                               << g_beamModelConfig.atmLossDb << ","
-                               << beamBudgets[i].rsrpDbm << "\n";
+                pendingBeamTraceRows.push_back({nowSeconds,
+                                                ueIdx,
+                                                i,
+                                                g_satellites[i].dev->GetCellId(),
+                                                beamBudgets[i].beamLocked,
+                                                beamBudgets[i].scanLossDb,
+                                                beamBudgets[i].patternLossDb,
+                                                beamBudgets[i].fsplDb,
+                                                g_beamModelConfig.atmLossDb,
+                                                beamBudgets[i].rsrpDbm});
             }
         }
 
@@ -697,6 +723,7 @@ UpdateConstellation(Time interval, Time stopTime)
             if (it != g_cellToSatellite.end())
             {
                 servingSatIdx = it->second;
+                g_satellites[servingSatIdx].attachedUeCount++;
             }
         }
 
@@ -844,6 +871,37 @@ UpdateConstellation(Time interval, Time stopTime)
         }
     }
 
+    const double safeMaxSupportedUes = std::max(1.0, g_maxSupportedUesPerSatellite);
+    for (auto& sat : g_satellites)
+    {
+        sat.offeredPacketRate = sat.attachedUeCount * g_offeredPacketRatePerUe;
+        sat.loadScore = std::min(1.0, static_cast<double>(sat.attachedUeCount) / safeMaxSupportedUes);
+        sat.admissionAllowed = (sat.loadScore + 1e-9 < g_loadCongestionThreshold);
+    }
+
+    if (g_satBeamTrace.is_open())
+    {
+        for (const auto& row : pendingBeamTraceRows)
+        {
+            const auto& sat = g_satellites[row.satIndex];
+            g_satBeamTrace << std::fixed << std::setprecision(3)
+                           << row.timeSeconds << ","
+                           << row.ueIndex << ","
+                           << row.satIndex << ","
+                           << row.cellId << ","
+                           << (row.beamLocked ? 1 : 0) << ","
+                           << row.scanLossDb << ","
+                           << row.patternLossDb << ","
+                           << row.fsplDb << ","
+                           << row.atmLossDb << ","
+                           << row.rsrpDbm << ","
+                           << sat.attachedUeCount << ","
+                           << sat.offeredPacketRate << ","
+                           << sat.loadScore << ","
+                           << (sat.admissionAllowed ? 1 : 0) << "\n";
+        }
+    }
+
     // 以“任一 UE 需要该邻区”为准，合并每颗服务卫星的动态邻区集合。
     for (uint32_t servingSatIdx = 0; servingSatIdx < g_satellites.size(); ++servingSatIdx)
     {
@@ -923,7 +981,7 @@ main(int argc, char* argv[])
     bool descendingPass = false;
     double overpassGapSeconds = 4.0;
     double overpassTimeOffsetSeconds = 0.0;
-    double updateIntervalMs = 200.0;
+    double updateIntervalMs = 100.0;
     double minElevationDeg = 10.0;
     double ueLatitudeDeg = 45.6;
     double ueLongitudeDeg = 84.9;
@@ -953,7 +1011,7 @@ main(int argc, char* argv[])
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
-    double lambda = 250.0;
+    double lambda = 1000.0;
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
@@ -976,17 +1034,17 @@ main(int argc, char* argv[])
     bool printNrtEvents = false;
     bool printOrbitCheck = false;
     bool printRrcStateTransitions = false;
-    bool printSimulationProgress = true;
     bool startupVerbose = false;
     double kpiIntervalSeconds = 2.0;
+    bool printSimulationProgress = true;
     double progressReportIntervalSeconds = 2.0;
-    bool recordBeamTraceCsv = false;
-    bool runAttenuationScript = false;
+    bool runAttenuationScript = true;
     std::string attenuationScriptPath = std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_attenuation_report.py";
     std::string attenuationInputPath = defaultAttenuationInputPath;
     std::string attenuationPerTimePath = defaultAttenuationPerTimePath;
     double throughputReportIntervalSeconds = 0.0;
-    double channelUpdatePeriodMs = 20.0;
+    double maxSupportedUesPerSatellite = 3.0;
+    double loadCongestionThreshold = 0.8;
 
     // 将关键参数暴露为命令行选项，便于后续批量实验。
     CommandLine cmd(__FILE__);
@@ -1048,17 +1106,17 @@ main(int argc, char* argv[])
     addArg("printNrtEvents", printNrtEvents);
     addArg("printOrbitCheck", printOrbitCheck);
     addArg("printRrcStateTransitions", printRrcStateTransitions);
-    addArg("printSimulationProgress", printSimulationProgress);
     addArg("startupVerbose", startupVerbose);
     addArg("kpiIntervalSeconds", kpiIntervalSeconds);
+    addArg("printSimulationProgress", printSimulationProgress);
     addArg("progressReportIntervalSeconds", progressReportIntervalSeconds);
-    addArg("recordBeamTraceCsv", recordBeamTraceCsv);
     addArg("runAttenuationScript", runAttenuationScript);
     addArg("attenuationScriptPath", attenuationScriptPath);
     addArg("attenuationInputPath", attenuationInputPath);
     addArg("attenuationPerTimePath", attenuationPerTimePath);
     addArg("throughputReportIntervalSeconds", throughputReportIntervalSeconds);
-    addArg("channelUpdatePeriodMs", channelUpdatePeriodMs);
+    addArg("maxSupportedUesPerSatellite", maxSupportedUesPerSatellite);
+    addArg("loadCongestionThreshold", loadCongestionThreshold);
     cmd.Parse(argc, argv);
 
     if (gridCatalogPath == defaultGridCatalogPath && outputDir != defaultOutputDir)
@@ -1097,7 +1155,9 @@ main(int argc, char* argv[])
     NS_ABORT_MSG_IF(gridNearestK == 0, "gridNearestK must be >= 1");
     NS_ABORT_MSG_IF(outputDir.empty(), "outputDir must not be empty");
     NS_ABORT_MSG_IF(progressReportIntervalSeconds <= 0.0, "progressReportIntervalSeconds must be > 0");
-    NS_ABORT_MSG_IF(channelUpdatePeriodMs <= 0.0, "channelUpdatePeriodMs must be > 0");
+    NS_ABORT_MSG_IF(maxSupportedUesPerSatellite <= 0.0, "maxSupportedUesPerSatellite must be > 0");
+    NS_ABORT_MSG_IF(loadCongestionThreshold <= 0.0 || loadCongestionThreshold > 1.0,
+                    "loadCongestionThreshold must satisfy 0 < x <= 1");
     if (strictNrtMarginDb < 0.0)
     {
         strictNrtMarginDb = hoHysteresisDb;
@@ -1206,6 +1266,9 @@ main(int argc, char* argv[])
     g_printSimulationProgress = printSimulationProgress;
     g_progressReportIntervalSeconds = progressReportIntervalSeconds;
     g_progressStopTimeSeconds = simTime;
+    g_offeredPacketRatePerUe = lambda;
+    g_maxSupportedUesPerSatellite = maxSupportedUesPerSatellite;
+    g_loadCongestionThreshold = loadCongestionThreshold;
     g_strictNrtGuard = strictNrtGuard;
     g_strictNrtMarginDb = strictNrtMarginDb;
     g_manualHoTttSeconds = static_cast<double>(hoTttMs) / 1000.0;
@@ -1226,15 +1289,6 @@ main(int argc, char* argv[])
     if (g_strictNrtGuard && g_useCustomA3Executor)
     {
         std::cout << " a3=custom(ttt=" << g_manualHoTttSeconds << "s)";
-    }
-    std::cout << std::endl;
-    std::cout << "[Runtime] updateInterval=" << updateIntervalMs << "ms"
-              << " channelUpdate=" << channelUpdatePeriodMs << "ms"
-              << " lambda=" << lambda << "pkt/s/ue"
-              << " progress=" << (g_printSimulationProgress ? "ON" : "OFF");
-    if (g_printSimulationProgress)
-    {
-        std::cout << "(" << g_progressReportIntervalSeconds << "s)";
     }
     std::cout << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
@@ -1282,8 +1336,7 @@ main(int argc, char* argv[])
     // ------------------------------
     // 4. NR/EPC 与信道配置
     // ------------------------------
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod",
-                       TimeValue(MilliSeconds(channelUpdatePeriodMs)));
+    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(10)));
     Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod", TimeValue(MilliSeconds(50)));
     Config::SetDefault("ns3::NrAnr::Threshold", UintegerValue(0));
 
@@ -1645,18 +1698,15 @@ main(int argc, char* argv[])
     // 8. 运行时复位、回调注册与周期事件调度
     // ------------------------------
     ResetRuntimeState(gNbNum);
-    const bool writeBeamTraceCsv = recordBeamTraceCsv || runAttenuationScript;
     if (g_satBeamTrace.is_open())
     {
         g_satBeamTrace.close();
     }
-    if (writeBeamTraceCsv)
-    {
-        g_satBeamTrace.open(attenuationInputPath, std::ios::out | std::ios::trunc);
-        NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(), "Failed to open beam trace CSV: " << attenuationInputPath);
-        g_satBeamTrace
-            << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm\n";
-    }
+    g_satBeamTrace.open(attenuationInputPath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(), "Failed to open beam trace CSV: " << attenuationInputPath);
+    g_satBeamTrace
+        << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm,"
+        << "attached_ue_count,offered_packet_rate,load_score,admission_allowed\n";
 
     g_gnbRrcs.clear();
     for (const auto& sat : g_satellites)
@@ -1699,12 +1749,6 @@ main(int argc, char* argv[])
                             udpPacketSize,
                             Seconds(throughputReportIntervalSeconds));
     }
-    if (g_printSimulationProgress)
-    {
-        Simulator::Schedule(Seconds(std::min(g_progressReportIntervalSeconds, simTime)),
-                            &PrintSimulationProgress,
-                            Seconds(g_progressReportIntervalSeconds));
-    }
 
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
     {
@@ -1729,6 +1773,12 @@ main(int argc, char* argv[])
                         &UpdateConstellation,
                         MilliSeconds(updateIntervalMs),
                         Seconds(simTime));
+    if (g_printSimulationProgress)
+    {
+        Simulator::Schedule(Seconds(std::min(g_progressReportIntervalSeconds, simTime)),
+                            &PrintSimulationProgress,
+                            Seconds(g_progressReportIntervalSeconds));
+    }
 
     // ------------------------------
     // 9. 仿真运行与结果输出
