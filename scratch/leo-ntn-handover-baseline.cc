@@ -92,7 +92,6 @@ static std::vector<Wgs84HexGridCell> g_hexGridCells;
 // 以下开关控制控制台输出详略程度。
 static bool g_compactReport = true;
 static bool g_printGridAnchorEvents = false;
-static bool g_printOverpassEvents = false;
 static bool g_printKpiReports = false;
 static bool g_printNrtEvents = false;
 static bool g_printOrbitCheck = false;
@@ -121,9 +120,6 @@ static uint32_t g_a3GateServingSat = std::numeric_limits<uint32_t>::max();
 static bool g_useCustomA3Executor = true;
 static double g_manualHoTttSeconds = 1.2;
 
-// 用于记录每颗卫星相对参考 UE 的最小距离及对应时刻。
-static std::vector<double> g_minDistances;
-static std::vector<double> g_minDistTimes;
 // 逐时刻卫星链路预算导出文件。
 static std::ofstream g_satBeamTrace;
 
@@ -137,8 +133,6 @@ static std::ofstream g_satBeamTrace;
 static void
 ResetRuntimeState(uint32_t gNbNum)
 {
-    g_minDistances.assign(gNbNum, std::numeric_limits<double>::max());
-    g_minDistTimes.assign(gNbNum, 0.0);
     g_seenAnyHandoverStart = false;
     g_seenAnyHandoverEndOk = false;
     g_handoverFrozen = false;
@@ -654,11 +648,6 @@ UpdateConstellation(Time interval, Time stopTime)
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
         g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
         UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
-        if (referenceStates[i].slantRangeMeters < g_minDistances[i])
-        {
-            g_minDistances[i] = referenceStates[i].slantRangeMeters;
-            g_minDistTimes[i] = nowSeconds;
-        }
     }
 
     std::map<uint32_t, std::set<uint16_t>> desiredActiveNeighbours;
@@ -703,16 +692,6 @@ UpdateConstellation(Time interval, Time stopTime)
                                                 beamBudgets[i].rsrpDbm});
             }
         }
-
-        const uint32_t nearestSatIdx = static_cast<uint32_t>(
-            std::distance(distancesMeters.begin(), std::min_element(distancesMeters.begin(), distancesMeters.end())));
-        if (g_printOverpassEvents && ue.lastNearestSat != nearestSatIdx)
-        {
-            std::cout << "[OVERPASS] t=" << std::fixed << std::setprecision(3)
-                      << nowSeconds << "s ue=" << ueIdx << " nearest satellite changed to sat" << nearestSatIdx
-                      << " (cell=" << g_satellites[nearestSatIdx].dev->GetCellId() << ")" << std::endl;
-        }
-        ue.lastNearestSat = nearestSatIdx;
 
         uint16_t servingCellId = 0;
         uint32_t servingSatIdx = std::numeric_limits<uint32_t>::max();
@@ -803,7 +782,6 @@ UpdateConstellation(Time interval, Time stopTime)
                 kpi << " bestSat=sat" << bestRsrpIdx << "(cell=" << g_satellites[bestRsrpIdx].dev->GetCellId()
                     << ") bestRsrp=" << bestRsrp << "dBm";
             }
-            kpi << " nearestSat=sat" << nearestSatIdx;
             std::cout << kpi.str() << std::endl;
             ue.lastKpiReportTime = nowSeconds;
         }
@@ -959,10 +937,19 @@ main(int argc, char* argv[])
     double simTime = 40.0;
     double appStartTime = 1.0;
 
-    // 基础组默认配置：8 颗卫星、2 个轨道面、6 个按东西方向拉开的 UE。
+    // 当前默认研究场景：8 颗卫星、2 个轨道面、25 个热点增加 + 边界增强的 UE。
+    // 当前默认参数优先放大负载不均衡和边界竞争，用于后续负载平衡与 ping-pong 研究。
     uint16_t gNbNum = 8;
-    uint32_t ueNum = 6;
-    double ueSpacingMeters = 10000.0;
+    uint32_t ueNum = 25;
+    std::string ueLayoutType = "hotspot-boundary";
+    double ueSpacingMeters = 40000.0;
+    double ueHotspotSpacingMeters = 8000.0;
+    double ueBoundarySpacingMeters = 12000.0;
+    double ueBoundaryOffsetMeters = 5000.0;
+    double ueBackgroundRadiusXMeters = 40000.0;
+    double ueBackgroundRadiusYMeters = 30000.0;
+    double ueHotspotCenterOffsetXMeters = -12000.0;
+    double ueHotspotCenterOffsetYMeters = 0.0;
     double satAltitudeMeters = 600000.0;
     double orbitEccentricity = 0.0;
     double orbitInclinationDeg = 53.0;
@@ -973,12 +960,13 @@ main(int argc, char* argv[])
     // 1. 减小轨道面 RAAN 间隔，让两条轨道对同一区域形成更强的可见重叠；
     // 2. 减小轨道面之间的时序偏移，让跨轨候选更接近同时出现；
     // 3. 缩小同轨过境间隔并拉长仿真时长，使一个窗口内能看到更多服务星竞争。
-    double interPlaneRaanSpacingDeg = 12.0;
-    double interPlaneTimeOffsetSeconds = 2.0;
+    double interPlaneRaanSpacingDeg = 6.0;
+    double interPlaneTimeOffsetSeconds = 1.0;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
+    double alignmentReferenceTimeSeconds = 20.0;
     double overpassGapSeconds = 4.0;
     double overpassTimeOffsetSeconds = 0.0;
     double updateIntervalMs = 100.0;
@@ -1029,7 +1017,6 @@ main(int argc, char* argv[])
     double strictNrtMarginDb = -1.0;
     bool compactReport = true;
     bool printGridAnchorEvents = false;
-    bool printOverpassEvents = false;
     bool printKpiReports = false;
     bool printNrtEvents = false;
     bool printOrbitCheck = false;
@@ -1045,6 +1032,9 @@ main(int argc, char* argv[])
     double throughputReportIntervalSeconds = 0.0;
     double maxSupportedUesPerSatellite = 3.0;
     double loadCongestionThreshold = 0.8;
+    bool enableSrsInFSlots = false;
+    bool enableSrsInUlSlots = false;
+    uint32_t srsSymbols = 0;
 
     // 将关键参数暴露为命令行选项，便于后续批量实验。
     CommandLine cmd(__FILE__);
@@ -1053,7 +1043,15 @@ main(int argc, char* argv[])
     addArg("appStartTime", appStartTime);
     addArg("gNbNum", gNbNum);
     addArg("ueNum", ueNum);
+    addArg("ueLayoutType", ueLayoutType);
     addArg("ueSpacingMeters", ueSpacingMeters);
+    addArg("ueHotspotSpacingMeters", ueHotspotSpacingMeters);
+    addArg("ueBoundarySpacingMeters", ueBoundarySpacingMeters);
+    addArg("ueBoundaryOffsetMeters", ueBoundaryOffsetMeters);
+    addArg("ueBackgroundRadiusXMeters", ueBackgroundRadiusXMeters);
+    addArg("ueBackgroundRadiusYMeters", ueBackgroundRadiusYMeters);
+    addArg("ueHotspotCenterOffsetXMeters", ueHotspotCenterOffsetXMeters);
+    addArg("ueHotspotCenterOffsetYMeters", ueHotspotCenterOffsetYMeters);
     addArg("satAltitudeMeters", satAltitudeMeters);
     addArg("orbitEccentricity", orbitEccentricity);
     addArg("orbitInclinationDeg", orbitInclinationDeg);
@@ -1066,6 +1064,7 @@ main(int argc, char* argv[])
     addArg("gmstAtEpochDeg", gmstAtEpochDeg);
     addArg("autoAlignToUe", autoAlignToUe);
     addArg("descendingPass", descendingPass);
+    addArg("alignmentReferenceTimeSeconds", alignmentReferenceTimeSeconds);
     addArg("overpassGapSeconds", overpassGapSeconds);
     addArg("overpassTimeOffsetSeconds", overpassTimeOffsetSeconds);
     addArg("updateIntervalMs", updateIntervalMs);
@@ -1101,7 +1100,6 @@ main(int argc, char* argv[])
     addArg("strictNrtMarginDb", strictNrtMarginDb);
     addArg("compactReport", compactReport);
     addArg("printGridAnchorEvents", printGridAnchorEvents);
-    addArg("printOverpassEvents", printOverpassEvents);
     addArg("printKpiReports", printKpiReports);
     addArg("printNrtEvents", printNrtEvents);
     addArg("printOrbitCheck", printOrbitCheck);
@@ -1117,6 +1115,9 @@ main(int argc, char* argv[])
     addArg("throughputReportIntervalSeconds", throughputReportIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", maxSupportedUesPerSatellite);
     addArg("loadCongestionThreshold", loadCongestionThreshold);
+    addArg("enableSrsInFSlots", enableSrsInFSlots);
+    addArg("enableSrsInUlSlots", enableSrsInUlSlots);
+    addArg("srsSymbols", srsSymbols);
     cmd.Parse(argc, argv);
 
     if (gridCatalogPath == defaultGridCatalogPath && outputDir != defaultOutputDir)
@@ -1140,6 +1141,16 @@ main(int argc, char* argv[])
     // ------------------------------
     NS_ABORT_MSG_IF(gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(ueNum == 0, "ueNum must be >= 1");
+    NS_ABORT_MSG_IF(ueLayoutType != "line" && ueLayoutType != "hotspot-boundary",
+                    "ueLayoutType must be either 'line' or 'hotspot-boundary'");
+    NS_ABORT_MSG_IF(ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
+    NS_ABORT_MSG_IF(ueHotspotSpacingMeters <= 0.0, "ueHotspotSpacingMeters must be > 0");
+    NS_ABORT_MSG_IF(ueBoundarySpacingMeters <= 0.0, "ueBoundarySpacingMeters must be > 0");
+    NS_ABORT_MSG_IF(ueBoundaryOffsetMeters <= 0.0, "ueBoundaryOffsetMeters must be > 0");
+    NS_ABORT_MSG_IF(ueBackgroundRadiusXMeters <= 0.0, "ueBackgroundRadiusXMeters must be > 0");
+    NS_ABORT_MSG_IF(ueBackgroundRadiusYMeters <= 0.0, "ueBackgroundRadiusYMeters must be > 0");
+    NS_ABORT_MSG_IF(ueLayoutType == "hotspot-boundary" && ueNum != 25,
+                    "hotspot-boundary layout currently requires ueNum == 25");
     NS_ABORT_MSG_IF(orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(gNbNum < orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(orbitEccentricity < 0.0 || orbitEccentricity >= 1.0,
@@ -1257,7 +1268,6 @@ main(int argc, char* argv[])
     }
     g_compactReport = compactReport;
     g_printGridAnchorEvents = printGridAnchorEvents;
-    g_printOverpassEvents = printOverpassEvents;
     g_printKpiReports = printKpiReports;
     g_printNrtEvents = printNrtEvents;
     g_printOrbitCheck = printOrbitCheck;
@@ -1281,9 +1291,25 @@ main(int argc, char* argv[])
     std::cout << "[Constellation] satellites=" << gNbNum
               << " planes=" << orbitPlaneCount
               << " ue=" << ueNum
-              << " ueSpacing=" << ueSpacingMeters / 1000.0 << "km"
               << " raanSpacing=" << interPlaneRaanSpacingDeg << "deg"
               << " planeTimeOffset=" << interPlaneTimeOffsetSeconds << "s" << std::endl;
+    std::cout << "[UE-Layout] type=" << ueLayoutType;
+    if (ueLayoutType == "hotspot-boundary")
+    {
+        std::cout << " groups=hotspot(9)+boundary(10)+background(6)"
+                  << " hotspotSpacing=" << ueHotspotSpacingMeters / 1000.0 << "km"
+                  << " boundarySpacing=" << ueBoundarySpacingMeters / 1000.0 << "km"
+                  << " boundaryOffset=" << ueBoundaryOffsetMeters / 1000.0 << "km"
+                  << " hotspotCenter=(" << ueHotspotCenterOffsetXMeters / 1000.0 << "kmE,"
+                  << ueHotspotCenterOffsetYMeters / 1000.0 << "kmN)"
+                  << " backgroundRadius=(" << ueBackgroundRadiusXMeters / 1000.0 << "km,"
+                  << ueBackgroundRadiusYMeters / 1000.0 << "km)";
+    }
+    else
+    {
+        std::cout << " spacing=" << ueSpacingMeters / 1000.0 << "km";
+    }
+    std::cout << std::endl;
     std::cout << "[NRT] strict=" << (g_strictNrtGuard ? "ON" : "OFF")
               << " margin=" << g_strictNrtMarginDb << "dB";
     if (g_strictNrtGuard && g_useCustomA3Executor)
@@ -1296,7 +1322,6 @@ main(int argc, char* argv[])
     const double semiMajorAxisMeters = LeoOrbitCalculator::kWgs84SemiMajorAxisMeters + satAltitudeMeters;
     const double meanMotionRadPerSec =
         std::sqrt(LeoOrbitCalculator::kEarthGravitationalMu / std::pow(semiMajorAxisMeters, 3.0));
-    const double centerOverpass = simTime / 2.0;
 
     const double inclinationRad = LeoOrbitCalculator::DegToRad(orbitInclinationDeg);
     double raanRad = LeoOrbitCalculator::DegToRad(orbitRaanDeg);
@@ -1305,7 +1330,7 @@ main(int argc, char* argv[])
 
     if (autoAlignToUe)
     {
-        const auto aligned = AutoAlignOrbitToUe(centerOverpass,
+        const auto aligned = AutoAlignOrbitToUe(alignmentReferenceTimeSeconds,
                                                 descendingPass,
                                                 semiMajorAxisMeters,
                                                 orbitEccentricity,
@@ -1324,8 +1349,7 @@ main(int argc, char* argv[])
         baseTrueAnomalyDeg = LeoOrbitCalculator::RadToDeg(baseTrueAnomalyRad);
 
         std::cout << "[Setup] autoAlign=ON branch=" << (descendingPass ? "descending" : "ascending")
-                  << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad)
-                  << "deg tCenter=" << centerOverpass << "s" << std::endl;
+                  << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad) << "deg" << std::endl;
     }
     if (orbitPlaneCount > 1)
     {
@@ -1396,6 +1420,9 @@ main(int argc, char* argv[])
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(ueTxPower));
 
     nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
+    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(enableSrsInFSlots));
+    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(enableSrsInUlSlots));
+    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(srsSymbols));
     nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(1));
     nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(2));
     nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
@@ -1423,11 +1450,22 @@ main(int argc, char* argv[])
     ueMobility.SetMobilityModel("ns3::GeocentricConstantPositionMobilityModel");
     ueMobility.Install(ueNodes);
 
-    const auto ueGroundPoints =
-        BuildUeGroundPoints(ueLatitudeDeg, ueLongitudeDeg, ueAltitudeMeters, ueNum, ueSpacingMeters);
+    UeLayoutConfig ueLayout;
+    ueLayout.layoutType = ueLayoutType;
+    ueLayout.lineSpacingMeters = ueSpacingMeters;
+    ueLayout.hotspotSpacingMeters = ueHotspotSpacingMeters;
+    ueLayout.boundarySpacingMeters = ueBoundarySpacingMeters;
+    ueLayout.boundaryOffsetMeters = ueBoundaryOffsetMeters;
+    ueLayout.backgroundRadiusXMeters = ueBackgroundRadiusXMeters;
+    ueLayout.backgroundRadiusYMeters = ueBackgroundRadiusYMeters;
+    ueLayout.hotspotCenterOffsetXMeters = ueHotspotCenterOffsetXMeters;
+    ueLayout.hotspotCenterOffsetYMeters = ueHotspotCenterOffsetYMeters;
+    const auto uePlacements =
+        BuildUePlacements(ueLatitudeDeg, ueLongitudeDeg, ueAltitudeMeters, ueNum, ueLayout);
+    NS_ABORT_MSG_IF(uePlacements.size() != ueNum, "UE placement count does not match ueNum");
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
     {
-        ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(ueGroundPoints[i].ecef);
+        ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(uePlacements[i].groundPoint.ecef);
     }
 
     NetDeviceContainer gNbNetDev = nrHelper->InstallGnbDevice(gNbNodes, allBwps);
@@ -1473,7 +1511,8 @@ main(int argc, char* argv[])
             auto rrc = dev->GetRrc();
 
             const double overpassTime =
-                centerOverpass + (static_cast<double>(slotIdx) - planeCenterIndex) * overpassGapSeconds +
+                alignmentReferenceTimeSeconds +
+                (static_cast<double>(slotIdx) - planeCenterIndex) * overpassGapSeconds +
                 overpassTimeOffsetSeconds + planeTimeOffset;
             LeoOrbitCalculator::KeplerElements orbit;
             orbit.semiMajorAxisMeters = semiMajorAxisMeters;
@@ -1520,7 +1559,7 @@ main(int argc, char* argv[])
             }
 
             std::cout << "[Setup] sat" << globalSatIdx << " plane=" << planeIdx << " slot=" << slotIdx
-                      << " cell=" << dev->GetCellId() << " overpass=" << overpassTime << "s";
+                      << " cell=" << dev->GetCellId();
             if (startupVerbose)
             {
                 std::cout << " nu0=" << LeoOrbitCalculator::RadToDeg(orbit.trueAnomalyAtEpochRad) << "deg"
@@ -1578,7 +1617,10 @@ main(int argc, char* argv[])
         UeRuntime ue;
         ue.node = ueNodes.Get(ueIdx);
         ue.dev = DynamicCast<NrUeNetDevice>(ueNetDev.Get(ueIdx));
-        ue.groundPoint = ueGroundPoints[ueIdx];
+        ue.groundPoint = uePlacements[ueIdx].groundPoint;
+        ue.placementRole = uePlacements[ueIdx].role;
+        ue.eastOffsetMeters = uePlacements[ueIdx].eastOffsetMeters;
+        ue.northOffsetMeters = uePlacements[ueIdx].northOffsetMeters;
 
         uint32_t initialAttachIdx = 0;
         uint32_t bestVisibleIdx = 0;
@@ -1754,7 +1796,10 @@ main(int argc, char* argv[])
     {
         const auto& ue = g_ues[ueIdx];
         std::cout << "[Setup] ue" << ueIdx << " start attach=sat" << ue.initialAttachIdx
-                  << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")";
+                  << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")"
+                  << " role=" << ue.placementRole
+                  << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
+                  << ue.northOffsetMeters / 1000.0 << "kmN)";
         if (ue.hasPredictedHandover)
         {
             std::cout << " predicted=sat" << ue.expectedSourceIndex
@@ -1788,7 +1833,6 @@ main(int argc, char* argv[])
 
     const double appDuration = std::max(0.0, simTime - appStartTime);
     PrintDlTrafficSummary(g_ues, appDuration, udpPacketSize);
-    PrintOverpassDistanceSummary(g_satellites, g_minDistances, g_minDistTimes);
     PrintHandoverSummary(g_ues);
 
     if (g_satBeamTrace.is_open())

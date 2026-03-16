@@ -856,7 +856,9 @@ NrEpcX2SnStatusTransferHeader::Deserialize(Buffer::Iterator start)
     int sz = i.ReadNtohU16();
 
     m_numberOfIes = 3;
-    m_headerLength = 6 + sz * (14 + (NrEpcX2Sap::m_maxPdcpSn / 64));
+    // The UL receive-status bitset is serialized as raw bytes packed into 64-bit words.
+    // Header length must therefore count m_maxPdcpSn / 8 bytes, not the number of 64-bit words.
+    m_headerLength = 6 + sz * (14 + (NrEpcX2Sap::m_maxPdcpSn / 8));
 
     for (int j = 0; j < sz; j++)
     {

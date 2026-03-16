@@ -197,6 +197,25 @@ NrPdcp::DoReceivePdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
 
+    if (p->GetSize() < 2)
+    {
+        NS_LOG_WARN("Dropping undersized PDCP PDU"
+                    << " rnti=" << m_rnti << " lcid=" << static_cast<uint32_t>(m_lcid)
+                    << " size=" << p->GetSize());
+        return;
+    }
+
+    uint8_t rawHeader[2] = {0, 0};
+    p->CopyData(rawHeader, sizeof(rawHeader));
+    const uint8_t dcBit = (rawHeader[0] & 0x80) ? NrPdcpHeader::DATA_PDU : NrPdcpHeader::CONTROL_PDU;
+    if (dcBit != NrPdcpHeader::DATA_PDU)
+    {
+        NS_LOG_WARN("Dropping non-data PDCP PDU"
+                    << " rnti=" << m_rnti << " lcid=" << static_cast<uint32_t>(m_lcid)
+                    << " size=" << p->GetSize());
+        return;
+    }
+
     // Receiver timestamp
     NrPdcpTag pdcpTag;
     Time delay;

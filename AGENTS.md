@@ -24,12 +24,35 @@
 - When code grows, prefer moving reusable logic, helper functions, and shared definitions into external header files when reasonable, so the main simulation script stays easier to read.
 - Current implementation phase: baseline file reorganization and handover log cleanup are considered complete; prioritize constellation scaling and scenario representativeness next.
 
+## Required Preflight
+- For every new task in this repository, read these files before making assumptions or editing code:
+  - `docs/research-context.md`
+  - `docs/current-task-memory.md`
+  - `docs/research-workflow.md`
+  - `scratch/README.md`
+  - `scratch/baseline-definition.md`
+  - `scratch/results/README.md`
+  - `scratch/midterm-report/README.md`
+  - `scratch/midterm-report/midterm-handover-flowcharts.md`
+  - `scratch/midterm-report/midterm-technical-summary.md`
+- After reading them, the first user-facing progress update must briefly restate:
+  - which document set was checked
+  - the current baseline/scenario understanding
+  - the immediate next step
+- Do not change scenario definition, default parameters, baseline wording, or midterm-report framing until these documents have been checked against the requested task.
+- If a request conflicts with the current documented research direction, call out the conflict explicitly before editing.
+- Any task that modifies important files under `scratch/` must end with a doc-sync check against at least:
+  - `scratch/README.md`
+  - `scratch/baseline-definition.md`
+  - relevant files under `scratch/midterm-report/`
+
 ## Collaboration Preferences
 - Prefer editing existing files over creating new documents or parallel explanations.
-- When a file becomes long or repetitive, simplify or replace content instead of appending more text.
+- When a file becomes long or repetitive, prefer a small local replacement over appending new layers, but do not broaden the edit into unrelated cleanup.
 - Keep documentation short and decision-oriented; avoid stacking background information unless necessary.
 - Keep code changes minimal and focused; prefer the simplest design that preserves future extensibility.
 - When possible, make one small, clear change at a time instead of expanding scope.
+- When modifying code, avoid both patch-stacking and aggressive pruning: add only what the task needs, and delete old logic only when it is directly related to the task and clearly low-value for the current research path.
 - When explaining simulation logic or code behavior, prefer plain-language explanations before formal terminology.
 - Start with the core idea first, then map it to parameter names and code details.
 - Use small numeric examples when they make the behavior easier to understand.

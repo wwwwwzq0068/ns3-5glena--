@@ -171,6 +171,8 @@ UdpServer::HandleRead(Ptr<Socket> socket)
 {
     NS_LOG_FUNCTION(this << socket);
     Address from;
+    SeqTsHeader seqTsProbe;
+    const auto seqTsHeaderSize = seqTsProbe.GetSerializedSize();
     while (auto packet = socket->RecvFrom(from))
     {
         Address localAddress;
@@ -180,6 +182,15 @@ UdpServer::HandleRead(Ptr<Socket> socket)
         if (packet->GetSize() > 0)
         {
             const auto receivedSize = packet->GetSize();
+            if (receivedSize < seqTsHeaderSize)
+            {
+                NS_LOG_WARN("Dropping undersized UDP payload before SeqTsHeader deserialize"
+                            << " size=" << receivedSize
+                            << " expected>=" << seqTsHeaderSize
+                            << " uid=" << packet->GetUid());
+                continue;
+            }
+
             SeqTsHeader seqTs;
             packet->RemoveHeader(seqTs);
             const auto currentSequenceNumber = seqTs.GetSeq();

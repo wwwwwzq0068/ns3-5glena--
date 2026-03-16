@@ -153,30 +153,6 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
 }
 
 /**
- * 打印每颗卫星在仿真期间的最小斜距和对应时刻。
- *
- * 这部分信息主要用于检查几何场景是否合理，
- * 例如卫星过境顺序、最近时刻是否按预期递进，以及不同卫星的最小距离是否大体一致。
- */
-inline void
-PrintOverpassDistanceSummary(const std::vector<SatelliteRuntime>& satellites,
-                             const std::vector<double>& minDistancesMeters,
-                             const std::vector<double>& minDistanceTimesSeconds)
-{
-    std::cout << "=== Overpass distance summary ===" << std::endl;
-    const uint32_t reportCount = std::min<uint32_t>(satellites.size(), minDistancesMeters.size());
-    for (uint32_t satIdx = 0; satIdx < reportCount; ++satIdx)
-    {
-        const uint16_t cellId = satellites[satIdx].dev ? satellites[satIdx].dev->GetCellId() : 0;
-        std::cout << "sat" << satIdx << " cell=" << cellId
-                  << " minDistance=" << minDistancesMeters[satIdx] / 1000.0 << " km"
-                  << " at t="
-                  << ((satIdx < minDistanceTimesSeconds.size()) ? minDistanceTimesSeconds[satIdx] : 0.0)
-                  << " s" << std::endl;
-    }
-}
-
-/**
  * 打印整体与分 UE 的切换汇总。
  */
 inline void

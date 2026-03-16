@@ -3,7 +3,8 @@
 ## 当前判断
 - 现在还不能说 baseline 已经设计完成。
 - 当前已有一个可运行的 baseline 候选平台：
-  - `2x4` 双轨、`6 UE`、持续业务流；
+  - `2x4` 双轨、`25 UE`、持续业务流；
+  - `hotspot-boundary`（热点增加 + 边界增强）二维 UE 部署；
   - `RSRP + hysteresis + TTT` 的 A3 风格切换骨架；
   - 基本邻区可达性约束。
 - 当前仍缺两件关键事：
@@ -13,7 +14,7 @@
 ## baseline 候选定义
 当前建议把 baseline 定义为：
 
-“在固定 `2x4` 双轨、`6 UE`、中等时长仿真场景下，采用仅基于信号质量的 A3 风格切换基线；决策只依赖 `RSRP` 比较、`hysteresis`、`TTT` 和邻区可达性约束，不引入负载感知、预测优化或学习型决策。”
+“在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 A3 风格切换基线；UE 采用热点增加与边界增强的二维部署，决策仍只依赖 `RSRP` 比较、`hysteresis`、`TTT` 和邻区可达性约束，不引入负载感知、预测优化或学习型决策。”
 
 说明：
 - 研究语义上，它属于传统 A3 baseline。
@@ -27,12 +28,20 @@
 - `appStartTime = 1s`
 - `gNbNum = 8`
 - `orbitPlaneCount = 2`
-- `ueNum = 6`
-- `ueSpacingMeters = 10000`
+- `ueNum = 25`
+- `ueLayoutType = hotspot-boundary`
+- `ueHotspotSpacingMeters = 8000`
+- `ueBoundarySpacingMeters = 12000`
+- `ueBoundaryOffsetMeters = 5000`
+- `ueHotspotCenterOffsetXMeters = -12000`
+- `ueHotspotCenterOffsetYMeters = 0`
+- `ueBackgroundRadiusXMeters = 40000`
+- `ueBackgroundRadiusYMeters = 30000`
 - `satAltitudeMeters = 600000`
 - `orbitInclinationDeg = 53`
-- `interPlaneRaanSpacingDeg = 12`
-- `interPlaneTimeOffsetSeconds = 2`
+- `interPlaneRaanSpacingDeg = 6`
+- `interPlaneTimeOffsetSeconds = 1`
+- `alignmentReferenceTimeSeconds = 20`
 - `overpassGapSeconds = 4`
 - `updateIntervalMs = 200`
 - `minElevationDeg = 10`
@@ -43,9 +52,9 @@
 - `strictNrtGuard = true`
 - `strictNrtMarginDb = hoHysteresisDb`
 - `useWgs84HexGrid = true`
-
 这套参数的定位是“当前主配置候选”，不是最优解。
-
+当前这一轮先不拉长 `simTime`（仿真时长），保持 `40s`，优先通过二维热点区、边界条带和外围背景区来放大负载不均衡与 ping-pong 暴露。
+其中 `alignmentReferenceTimeSeconds`（对齐参考时刻）默认保持 `20s`，与原先 `simTime / 2` 的默认行为一致，但后续调 `simTime` 时不再隐式改变初始几何。
 ## 负载接口草案
 当前 baseline 不使用负载做决策，但后续代码应预留最小接口。
 

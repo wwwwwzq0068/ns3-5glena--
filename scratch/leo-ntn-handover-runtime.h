@@ -27,6 +27,8 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace ns3
@@ -91,6 +93,15 @@ struct UeRuntime
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
 
+    /** UE 在场景中的部署角色，例如线性、热点、边界或背景。 */
+    std::string placementRole = "line";
+
+    /** UE 相对参考中心的东西向偏移，单位米。 */
+    double eastOffsetMeters = 0.0;
+
+    /** UE 相对参考中心的南北向偏移，单位米。 */
+    double northOffsetMeters = 0.0;
+
     /** 初始接入卫星的索引。 */
     uint32_t initialAttachIdx = std::numeric_limits<uint32_t>::max();
 
@@ -120,9 +131,6 @@ struct UeRuntime
 
     /** 最近一次 HO-START 的时刻，单位秒。 */
     double lastHoStartTimeSeconds = -1.0;
-
-    /** 最近一次判定得到的最近卫星索引。 */
-    uint32_t lastNearestSat = std::numeric_limits<uint32_t>::max();
 
     /** 上一次写入服务小区变化日志时的服务小区 ID。 */
     uint16_t lastServingCellForLog = 0;
@@ -161,13 +169,57 @@ struct UeRuntime
     std::vector<double> prevDistances;
 };
 
+struct UeLayoutConfig
+{
+    /** UE 部署类型：`line` 或 `hotspot-boundary`。 */
+    std::string layoutType = "line";
+
+    /** 线性部署时相邻 UE 的东西向间距。 */
+    double lineSpacingMeters = 0.0;
+
+    /** 热点中心相对场景中心的东西向偏移。 */
+    double hotspotCenterOffsetXMeters = -12000.0;
+
+    /** 热点中心相对场景中心的南北向偏移。 */
+    double hotspotCenterOffsetYMeters = 0.0;
+
+    /** 热点 3x3 团簇内部的格点间距。 */
+    double hotspotSpacingMeters = 8000.0;
+
+    /** 边界增强条带沿边界方向的采样间距。 */
+    double boundarySpacingMeters = 12000.0;
+
+    /** 边界增强条带跨边界两侧的横向偏移。 */
+    double boundaryOffsetMeters = 5000.0;
+
+    /** 外围背景 UE 的东西向外圈尺度。 */
+    double backgroundRadiusXMeters = 40000.0;
+
+    /** 外围背景 UE 的南北向外圈尺度。 */
+    double backgroundRadiusYMeters = 30000.0;
+};
+
+struct UePlacement
+{
+    /** 生成后的地面点。 */
+    LeoOrbitCalculator::GroundPoint groundPoint;
+
+    /** 部署角色。 */
+    std::string role = "line";
+
+    /** 相对参考中心的东西向偏移，单位米。 */
+    double eastOffsetMeters = 0.0;
+
+    /** 相对参考中心的南北向偏移，单位米。 */
+    double northOffsetMeters = 0.0;
+};
+
 /**
  * 将单个 UE 的运行时状态重置到新的仿真起点。
  */
 inline void
 ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
 {
-    ue.lastNearestSat = std::numeric_limits<uint32_t>::max();
     ue.lastServingCellForLog = 0;
     ue.lastKpiReportTime = -1.0;
     ue.lastRxPackets = 0;
@@ -205,33 +257,138 @@ ResolveUeIndexFromImsi(const std::map<uint64_t, uint32_t>& imsiToUe, uint64_t im
 }
 
 /**
- * 使用简单局部平面近似，为多 UE 基线场景生成等间距地面点。
+ * 使用简单局部平面近似，为多 UE 基线场景生成地面点。
  *
- * 当前实现只在东西方向上拉开 UE，用于构造一个可控、易解释的多 UE 基础组。
+ * 当前支持：
+ * - `line`：沿东西方向等间距拉开；
+ * - `hotspot-boundary`：热点增加 + 边界增强 + 背景补充。
  */
-inline std::vector<LeoOrbitCalculator::GroundPoint>
-BuildUeGroundPoints(double baseLatitudeDeg,
-                    double baseLongitudeDeg,
-                    double altitudeMeters,
-                    uint32_t ueNum,
-                    double ueSpacingMeters)
+inline UePlacement
+BuildUePlacement(double baseLatitudeDeg,
+                 double baseLongitudeDeg,
+                 double altitudeMeters,
+                 double eastOffsetMeters,
+                 double northOffsetMeters,
+                 const std::string& role)
 {
-    std::vector<LeoOrbitCalculator::GroundPoint> out;
-    out.reserve(ueNum);
     const double earthRadiusMeters = LeoOrbitCalculator::kWgs84SemiMajorAxisMeters;
     const double baseLatRad = LeoOrbitCalculator::DegToRad(baseLatitudeDeg);
     const double lonScale = std::max(0.1, std::cos(baseLatRad));
+    const double deltaLatRad = northOffsetMeters / earthRadiusMeters;
+    const double deltaLonRad = eastOffsetMeters / (earthRadiusMeters * lonScale);
+
+    UePlacement placement;
+    placement.groundPoint =
+        LeoOrbitCalculator::CreateGroundPoint(baseLatitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLatRad),
+                                              baseLongitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLonRad),
+                                              altitudeMeters);
+    placement.role = role;
+    placement.eastOffsetMeters = eastOffsetMeters;
+    placement.northOffsetMeters = northOffsetMeters;
+    return placement;
+}
+
+inline std::vector<UePlacement>
+BuildLineUePlacements(double baseLatitudeDeg,
+                      double baseLongitudeDeg,
+                      double altitudeMeters,
+                      uint32_t ueNum,
+                      double ueSpacingMeters)
+{
+    std::vector<UePlacement> out;
+    out.reserve(ueNum);
     const double center = (static_cast<double>(ueNum) - 1.0) / 2.0;
     for (uint32_t i = 0; i < ueNum; ++i)
     {
         const double eastOffsetMeters = (static_cast<double>(i) - center) * ueSpacingMeters;
-        const double deltaLonRad = eastOffsetMeters / (earthRadiusMeters * lonScale);
-        out.push_back(LeoOrbitCalculator::CreateGroundPoint(baseLatitudeDeg,
-                                                            baseLongitudeDeg +
-                                                                LeoOrbitCalculator::RadToDeg(deltaLonRad),
-                                                            altitudeMeters));
+        out.push_back(BuildUePlacement(baseLatitudeDeg,
+                                       baseLongitudeDeg,
+                                       altitudeMeters,
+                                       eastOffsetMeters,
+                                       0.0,
+                                       "line"));
     }
     return out;
+}
+
+inline std::vector<UePlacement>
+BuildHotspotBoundaryUePlacements(double baseLatitudeDeg,
+                                 double baseLongitudeDeg,
+                                 double altitudeMeters,
+                                 const UeLayoutConfig& layout)
+{
+    std::vector<UePlacement> out;
+    out.reserve(25);
+
+    for (int row = -1; row <= 1; ++row)
+    {
+        for (int col = -1; col <= 1; ++col)
+        {
+            const double eastOffsetMeters =
+                layout.hotspotCenterOffsetXMeters + static_cast<double>(col) * layout.hotspotSpacingMeters;
+            const double northOffsetMeters =
+                layout.hotspotCenterOffsetYMeters + static_cast<double>(row) * layout.hotspotSpacingMeters;
+            out.push_back(BuildUePlacement(baseLatitudeDeg,
+                                           baseLongitudeDeg,
+                                           altitudeMeters,
+                                           eastOffsetMeters,
+                                           northOffsetMeters,
+                                           "hotspot"));
+        }
+    }
+
+    for (int row = -2; row <= 2; ++row)
+    {
+        const double northOffsetMeters = static_cast<double>(row) * layout.boundarySpacingMeters;
+        out.push_back(BuildUePlacement(baseLatitudeDeg,
+                                       baseLongitudeDeg,
+                                       altitudeMeters,
+                                       -layout.boundaryOffsetMeters,
+                                       northOffsetMeters,
+                                       "boundary"));
+        out.push_back(BuildUePlacement(baseLatitudeDeg,
+                                       baseLongitudeDeg,
+                                       altitudeMeters,
+                                       layout.boundaryOffsetMeters,
+                                       northOffsetMeters,
+                                       "boundary"));
+    }
+
+    const std::vector<std::pair<double, double>> backgroundOffsets = {
+        {-layout.backgroundRadiusXMeters, layout.backgroundRadiusYMeters},
+        {0.0, layout.backgroundRadiusYMeters},
+        {layout.backgroundRadiusXMeters, layout.backgroundRadiusYMeters},
+        {-layout.backgroundRadiusXMeters, -layout.backgroundRadiusYMeters},
+        {0.0, -layout.backgroundRadiusYMeters},
+        {layout.backgroundRadiusXMeters, -layout.backgroundRadiusYMeters},
+    };
+    for (const auto& [eastOffsetMeters, northOffsetMeters] : backgroundOffsets)
+    {
+        out.push_back(BuildUePlacement(baseLatitudeDeg,
+                                       baseLongitudeDeg,
+                                       altitudeMeters,
+                                       eastOffsetMeters,
+                                       northOffsetMeters,
+                                       "background"));
+    }
+
+    return out;
+}
+
+inline std::vector<UePlacement>
+BuildUePlacements(double baseLatitudeDeg,
+                  double baseLongitudeDeg,
+                  double altitudeMeters,
+                  uint32_t ueNum,
+                  const UeLayoutConfig& layout)
+{
+    if (layout.layoutType == "hotspot-boundary")
+    {
+        return BuildHotspotBoundaryUePlacements(baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, layout);
+    }
+
+    return BuildLineUePlacements(
+        baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, ueNum, layout.lineSpacingMeters);
 }
 
 } // namespace ns3

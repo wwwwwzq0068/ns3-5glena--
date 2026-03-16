@@ -3,32 +3,31 @@
 ## 目录用途
 - 本目录存放当前毕设中使用的 LEO 切换仿真代码、辅助头文件和分析脚本。
 - 当前主要的仿真入口文件是 `scratch/leo-ntn-handover-baseline.cc`。
-- 当前研究仓库稳定节点定义为 `3.1.0`。
-- 这里的 `3.1.0` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`。
+- 当前研究仓库稳定节点定义为 `3.1.3`。
+- 这里的 `3.1.3` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`。
 
 ## 当前基础组目标
 - 当前阶段先稳定基础组，再在此基础上设计并验证切换策略。
-- 当前 `3.1.0` 节点优先保持双轨基础组稳定，并将其作为传统 A3 baseline 的缺陷暴露平台。
+- 当前 `3.1.3` 节点优先保持双轨基础组稳定，并将其作为传统 A3 baseline 的缺陷暴露平台。
 - 当前基础组目标为：
   - 8 颗 LEO 卫星
   - 2 个轨道面
-  - 6 个 UE
+  - 25 个 UE
 - 目前 `leo-ntn-handover-baseline.cc` 中已经确认的实现状态：
   - 卫星数量已经配置为 8
-  - UE 数量已经改为可配置，默认值为 6
+  - UE 数量已经改为可配置，默认值为 25
   - 已引入可配置的双轨道面参数
-  - UE 采用简单的地面间隔模型进行部署
+  - UE 已支持 `line`（线性）与 `hotspot-boundary`（热点增加 + 边界增强）两类部署
 - 当前阶段说明：
   - 文件拆分和代码结构整理已经完成当前阶段目标
   - 切换日志与最终汇总格式已经完成当前阶段整理
-  - 当前已完成从单轨局部过境到双轨起步场景的扩展
-  - 当前不再把继续扩星作为主任务，而是优先面向毕设任务书定义 baseline 与改进策略
-
-## 当前优先任务
 - 当前先不继续扩大星座规模，保持 `2x4` 双轨基础组。
 - 在保持 `2x4` 双轨规模不变的前提下，优先完成传统 A3 baseline 的定义、验证和对比口径收口。
 - 当前 baseline 定义草案见 `scratch/baseline-definition.md`，后续讨论优先以该文档为准收口。
 - 当前调参阶段默认优先使用中等时长仿真，并在终端中输出周期性进度信息。
+- 当前 `3.1.3` 默认先通过 `25 UE` 的二维热点区、边界条带和外围背景区来增强候选星竞争与负载不均衡暴露，但暂不拉长 `simTime`（仿真时长）。
+- 当前 `3.1.3` 将 `alignmentReferenceTimeSeconds`（对齐参考时刻）独立于 `simTime`（仿真时长），避免只为延长仿真观察窗口就隐式改变星座初始几何。
+- 当前 `3.1.3` 默认关闭 `SRS`（探测参考信号）调度，避免当前 baseline 在 `F`（全双工）时隙下触发与 handover 主线无关的 PHY fatal。
 - 当前重点关注：
   - 传统 A3 在双轨场景下的频繁切换和潜在 ping-pong
   - 切换成功率、执行时延和吞吐连续性
@@ -42,7 +41,7 @@
   - 服务卫星变化
   - 周期性仿真进度
   - 最终统计结果
-- 日常调试时尽量减少低价值噪声日志。
+- 默认不强调 `overpass`（过境参考时刻）相关 setup 输出和最终几何摘要；日常调试时尽量减少低价值噪声日志。
 
 ## 结果输出目录
 - 当前默认仿真输出统一写入 `scratch/results/`。
@@ -50,7 +49,7 @@
   - `hex_grid_cells.csv`
   - `sat_beam_trace.csv`
   - `sat_attenuation_per_time.csv`
-- 其中 `sat_beam_trace.csv` 和后续衰减分析文件不再默认生成，只有在显式开启相关选项时才输出，以减轻日常调参阶段的运行负担。
+- 当前代码默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true`（运行衰减后处理脚本）时继续生成 `sat_attenuation_per_time.csv`。
 - 该目录默认被 `.gitignore` 忽略，不直接进入版本库。
 - 需要长期保留的基线结果，后续应单独挑选后再纳管，而不是把全部临时输出直接提交。
 
@@ -137,3 +136,34 @@
   - 纳入 `loadScore`（负载评分）相关运行时字段和逐时刻 trace 导出
   - 将 `sat_attenuation_report.py` 收口为更适合当前分析使用的精简逐时刻输出
   - 保留周期性仿真进度输出，便于长时间运行时观察当前模拟时间推进情况
+- `3.1.1` baseline 暴露性增强第一步：
+  - 将当前研究仓库稳定节点提升为 `3.1.1`
+  - 当前已完成从单轨局部过境到双轨起步场景的扩展
+  - 当前不再把继续扩星作为主任务，而是优先面向毕设任务书定义 baseline 与改进策略
+- `3.1.2` UE 场景代表性增强：
+  - 默认 UE 部署从一维线性排布切换为 `25 UE` 的 `hotspot-boundary` 二维布局
+  - 场景按 `9` 个热点 UE、`10` 个边界 UE、`6` 个背景 UE 组织
+  - 保留 `line` 布局作为对照，但当前默认优先服务负载不均衡与 ping-pong 研究
+  - 默认将 `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）从 `8 deg` 继续下调到 `6 deg`
+  - 当前这一步只增强跨轨空间重叠，不改 `simTime`（仿真时长）、`hoTttMs`（切换触发时间）和 `hoHysteresisDb`（切换迟滞门限），优先观察第二轨其余卫星是否开始进入有效竞争
+- `3.1.3` 默认口径收口：
+  - 将当前研究仓库稳定节点提升为 `3.1.3`
+  - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局，并保持 `9` 个热点 UE、`10` 个边界 UE、`6` 个背景 UE 的组织方式
+  - 明确保留 `line`（线性）布局作为对照入口，但当前默认研究场景仍优先使用 `hotspot-boundary`
+  - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
+  - 明确当前默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true` 时继续生成 `sat_attenuation_per_time.csv`
+  - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()` 和 `UdpServer::HandleRead()` 的描述
+
+## 当前优先任务
+- 默认将 UE 主场景切换为 `ueLayoutType = hotspot-boundary`（热点增加 + 边界增强）
+- 热点区当前默认采用 `3x3` 团簇，`ueHotspotSpacingMeters = 8 km`
+- 边界区当前默认采用跨边界 `5x2` 条带，`ueBoundarySpacingMeters = 12 km`，`ueBoundaryOffsetMeters = 5 km`
+- 外围背景区当前默认采用 `6` 个稀疏 UE，`ueBackgroundRadiusX/Y = 40/30 km`
+- 默认将 `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）从 `12 deg` 下调到 `6 deg`
+- 默认将 `interPlaneTimeOffsetSeconds`（轨道面时间偏移）从 `2 s` 下调到 `1 s`
+- 保持 `simTime`（仿真时长）为 `40 s`，先验证更强候选星竞争是否已足够放大 baseline 问题
+- 将 `alignmentReferenceTimeSeconds`（对齐参考时刻）独立设为 `20 s`，保持原默认行为不变，但解除与 `simTime`（仿真时长）的隐式耦合
+- 去掉默认输出中的 `overpass`（过境参考时刻）相关 setup 显示和最终距离摘要，让日志更聚焦于切换与吞吐
+- 默认关闭 `EnableSrsInFSlots`（允许在 F 时隙发送 SRS）、`EnableSrsInUlSlots`（允许在 UL 时隙发送 SRS），并将 `SrsSymbols`（SRS 符号数）设为 `0`，避免出现 `Cannot RX SRS while TX.` 的非主线崩溃
+- 修正 `SN Status Transfer`（序列号状态转移）消息的 `erabId`（承载标识）、`HFN`（超帧号）和上行接收位图初始化，避免切换时因垃圾字段触发错误承载映射
+- 在 `NrPdcp::DoReceivePdu()`（PDCP 接收入口）增加对异常 `PDCP` 头部的丢弃保护，避免 `m_dcBit == DATA_PDU` 断言直接终止仿真
