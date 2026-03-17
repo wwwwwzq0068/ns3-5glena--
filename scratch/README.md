@@ -21,6 +21,7 @@
 - 当前阶段说明：
   - 文件拆分和代码结构整理已经完成当前阶段目标
   - 切换日志与最终汇总格式已经完成当前阶段整理
+  - 当前已将默认参数、命令行注册和参数合法性检查集中到 `leo-ntn-handover-config.h`，主脚本更聚焦于场景搭建与运行流程
 - 当前先不继续扩大星座规模，保持 `2x4` 双轨基础组。
 - 在保持 `2x4` 双轨规模不变的前提下，优先完成传统 A3 baseline 的定义、验证和对比口径收口。
 - 当前 baseline 定义草案见 `scratch/baseline-definition.md`，后续讨论优先以该文档为准收口。
@@ -153,6 +154,10 @@
   - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
   - 明确当前默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true` 时继续生成 `sat_attenuation_per_time.csv`
   - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()` 和 `UdpServer::HandleRead()` 的描述
+- `3.1.3` 配置入口收口：
+  - 新增 `leo-ntn-handover-config.h`
+  - 将默认参数、命令行参数注册、输出路径收口和参数合法性检查从 `leo-ntn-handover-baseline.cc` 抽离
+  - 本次调整不改变 `2x4` 双轨、`25 UE`、传统 A3 baseline 的场景口径
 
 ## 当前优先任务
 - 默认将 UE 主场景切换为 `ueLayoutType = hotspot-boundary`（热点增加 + 边界增强）
