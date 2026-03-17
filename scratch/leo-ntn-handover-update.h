@@ -59,10 +59,10 @@ inline UeObservationSnapshot
 BuildUeObservationSnapshot(const UeRuntime& ue,
                            uint32_t ueIdx,
                            double nowSeconds,
-                           double gmstAtEpochRad,
                            double carrierFrequencyHz,
                            double minElevationRad,
                            const BeamModelConfig& beamModelConfig,
+                           const std::vector<LeoOrbitCalculator::OrbitState>& satelliteStates,
                            const std::vector<SatelliteRuntime>& satellites,
                            const std::map<uint16_t, uint32_t>& cellToSatellite,
                            std::vector<BeamTraceRow>* pendingBeamTraceRows = nullptr)
@@ -80,12 +80,10 @@ BuildUeObservationSnapshot(const UeRuntime& ue,
 
     for (uint32_t satIdx = 0; satIdx < satellites.size(); ++satIdx)
     {
-        out.states[satIdx] = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                           satellites[satIdx].orbit,
-                                                           gmstAtEpochRad,
-                                                           ue.groundPoint,
-                                                           carrierFrequencyHz,
-                                                           minElevationRad);
+        out.states[satIdx] = LeoOrbitCalculator::CalculateObservation(satelliteStates[satIdx],
+                                                                      ue.groundPoint,
+                                                                      carrierFrequencyHz,
+                                                                      minElevationRad);
         out.beamBudgets[satIdx] = CalculateEarthFixedBeamBudget(out.states[satIdx].ecef,
                                                                 ueEcef,
                                                                 satellites[satIdx].cellAnchorEcef,
@@ -191,7 +189,7 @@ PrintMobilitySnapshot(const UeRuntime& ue,
     std::cout << oss.str() << std::endl;
 }
 
-inline bool
+inline void
 MaybePrintServingChangeAndKpi(UeRuntime& ue,
                               uint32_t ueIdx,
                               double nowSeconds,
@@ -241,7 +239,6 @@ MaybePrintServingChangeAndKpi(UeRuntime& ue,
 
     ue.lastServingCellForLog = observation.servingCellId;
     ue.prevDistances = observation.distancesMeters;
-    return servingChanged;
 }
 
 inline void

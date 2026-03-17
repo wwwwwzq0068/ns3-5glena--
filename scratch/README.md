@@ -1,174 +1,214 @@
 # Scratch 目录说明
 
 ## 目录用途
-- 本目录存放当前毕设中使用的 LEO 切换仿真代码、辅助头文件和分析脚本。
-- 当前主要的仿真入口文件是 `scratch/leo-ntn-handover-baseline.cc`。
-- 当前研究仓库稳定节点定义为 `3.1.3`。
-- 这里的 `3.1.3` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`。
+- 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
+- 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
+- 当前研究仓库稳定节点：`3.2.0`
+- 这里的 `3.2.0` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
-## 当前基础组目标
-- 当前阶段先稳定基础组，再在此基础上设计并验证切换策略。
-- 当前 `3.1.3` 节点优先保持双轨基础组稳定，并将其作为传统 A3 baseline 的缺陷暴露平台。
-- 当前基础组目标为：
-  - 8 颗 LEO 卫星
-  - 2 个轨道面
-  - 25 个 UE
-- 目前 `leo-ntn-handover-baseline.cc` 中已经确认的实现状态：
-  - 卫星数量已经配置为 8
-  - UE 数量已经改为可配置，默认值为 25
-  - 已引入可配置的双轨道面参数
-  - UE 已支持 `line`（线性）与 `hotspot-boundary`（热点增加 + 边界增强）两类部署
-- 当前阶段说明：
-  - 文件拆分和代码结构整理已经完成当前阶段目标
-  - 切换日志与最终汇总格式已经完成当前阶段整理
-  - 当前已将默认参数、命令行注册和参数合法性检查集中到 `leo-ntn-handover-config.h`，主脚本更聚焦于场景搭建与运行流程
-- 当前先不继续扩大星座规模，保持 `2x4` 双轨基础组。
-- 在保持 `2x4` 双轨规模不变的前提下，优先完成传统 A3 baseline 的定义、验证和对比口径收口。
-- 当前 baseline 定义草案见 `scratch/baseline-definition.md`，后续讨论优先以该文档为准收口。
-- 当前调参阶段默认优先使用中等时长仿真，并在终端中输出周期性进度信息。
-- 当前 `3.1.3` 默认先通过 `25 UE` 的二维热点区、边界条带和外围背景区来增强候选星竞争与负载不均衡暴露，但暂不拉长 `simTime`（仿真时长）。
-- 当前 `3.1.3` 将 `alignmentReferenceTimeSeconds`（对齐参考时刻）独立于 `simTime`（仿真时长），避免只为延长仿真观察窗口就隐式改变星座初始几何。
-- 当前 `3.1.3` 默认关闭 `SRS`（探测参考信号）调度，避免当前 baseline 在 `F`（全双工）时隙下触发与 handover 主线无关的 PHY fatal。
-- 当前重点关注：
-  - 传统 A3 在双轨场景下的频繁切换和潜在 ping-pong
-  - 切换成功率、执行时延和吞吐连续性
-  - 后续“信号质量 + 卫星负载”联合感知策略的实现入口
-- 增加适量中文注释，但不再把结构整理作为当前主任务。
+## 当前主线
+- 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
+- 当前 `3.2.0` 的默认研究场景是：`2x4` 双轨、`25 UE`、`hotspot-boundary` 二维部署
+- 当前默认目标不是继续扩星，而是把该场景作为传统 `A3 baseline` 的缺陷暴露平台
+- 当前改进方向是后续“信号质量 + 卫星负载”联合感知切换策略
 
-## 日志输出偏好
-- 默认更关注以下内容：
-  - 切换开始
-  - 切换成功或失败
-  - 服务卫星变化
-  - 周期性仿真进度
-  - 最终统计结果
-- 默认不强调 `overpass`（过境参考时刻）相关 setup 输出和最终几何摘要；日常调试时尽量减少低价值噪声日志。
+## 当前默认口径
+场景与参数：
+- 卫星数：`8`
+- 轨道面数：`2`
+- UE 数：`25`
+- UE 主布局：`hotspot-boundary`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`6 deg`
+- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20 s`
+- `simTime`（仿真时长）=`40 s`
+- `updateIntervalMs`（主循环更新周期）=`100`
+- `lambda`（业务流强度）=`1000 pkt/s/UE`
 
-## 结果输出目录
-- 当前默认仿真输出统一写入 `scratch/results/`。
-- 现阶段以下文件会优先落到该目录：
+切换口径：
+- 当前算法 baseline 为传统 `A3` 风格切换
+- 判决依据保持为 `RSRP + hysteresis + TTT + strict NRT guard`
+- 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
+
+## 文档分工
+- `docs/research-context.md`
+  - 研究范围、目标、评估指标和稳定上下文
+- `docs/current-task-memory.md`
+  - 当前稳定节点、默认口径、已确认实现和近期工作边界
+- `docs/research-workflow.md`
+  - 版本、分支、提交和结果管理规则
+- `scratch/baseline-definition.md`
+  - baseline 的正式定义、默认参数口径、验证清单和改进边界
+- `scratch/midterm-report/midterm-technical-summary.md`
+  - 面向中期汇报的技术总结
+- `scratch/midterm-report/midterm-handover-flowcharts.md`
+  - 中期汇报流程图与简要讲解提示
+
+## 当前代码组织
+- `leo-ntn-handover-baseline.cc`
+  - 场景搭建、主流程控制和仿真运行入口
+- `leo-ntn-handover-config.h`
+  - 默认参数、命令行参数注册、路径收口和参数合法性检查
+- `leo-ntn-handover-runtime.h`
+  - 卫星和 UE 运行时状态
+- `leo-ntn-handover-update.h`
+  - 周期更新、观测、邻区维护和切换驱动
+- `leo-ntn-handover-reporting.h`
+  - 最终统计与结果汇总输出
+- `leo-ntn-handover-utils.h`
+  - 通用辅助函数
+
+## 日志与结果
+日志偏好：
+- 默认保留切换开始、切换成功、服务星变化、周期性进度和最终统计
+- 默认不强调 `OVERPASS`、`GRID-ANCHOR` 等高噪声信息
+
+结果目录：
+- 当前默认仿真输出统一写入 `scratch/results/`
+- 常见结果包括：
   - `hex_grid_cells.csv`
   - `sat_beam_trace.csv`
   - `sat_attenuation_per_time.csv`
-- 当前代码默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true`（运行衰减后处理脚本）时继续生成 `sat_attenuation_per_time.csv`。
-- 该目录默认被 `.gitignore` 忽略，不直接进入版本库。
-- 需要长期保留的基线结果，后续应单独挑选后再纳管，而不是把全部临时输出直接提交。
 
-## 当前分析脚本
+分析脚本：
 - `sat_attenuation_report.py`
   - 默认读取 `scratch/results/sat_beam_trace.csv`
   - 默认生成 `scratch/results/sat_attenuation_per_time.csv`
 - `plot_hex_grid_svg.py`
-  - 读取六边形网格 CSV
-  - 生成对应的 SVG 可视化图
+  - 读取六边形网格 `CSV`
+  - 生成对应 `SVG`
+
+## 当前已完成的关键收口
+- 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
+- 切换相关实时日志与最终汇总格式已经完成一轮收敛
+- 当前已去掉单 UE `A3 gate` 兼容链，baseline 固定走多 UE `custom A3` 路径
+- 当前已将周期更新中的卫星公共轨道传播与 UE 派生观测彻底分开
+- 当前已将默认参数和合法性检查集中到 `leo-ntn-handover-config.h`
+- 当前已接入 `loadScore`（负载评分）相关运行时字段与逐时刻 trace 输出
 
 ## 维护规则
-- 每次对 `scratch/` 目录下的重要代码做出修改后，都同步更新本文件。
-- 记录内容保持简洁、明确，重点写清：
-  - 改了什么
-  - 为什么改
-  - 是否影响基础组行为
-- 当阶段目标发生切换时，优先覆写“当前基础组目标”和“当前优先任务”，不要只在变更记录中不断堆积新条目。
-- 当文档或讨论中提到关键参数时，优先使用“英文参数名（中文释义）”的写法，不要只写英文名。
-- 版本与分支、提交命名规则以 `docs/research-workflow.md` 为准。
+- 修改 `scratch/` 目录下的重要代码后，同步检查：
+  - `scratch/README.md`
+  - `scratch/baseline-definition.md`
+  - 相关 `midterm-report` 文档
+- 文档优先写清当前口径和决策，不堆叠过长历史说明
+- 当文档中提到关键参数时，优先采用“英文参数名（中文释义）”写法
+- 版本、分支和提交命名规则以 `docs/research-workflow.md` 为准
 
-## 变更记录
-- `2.5` 初始版本：
+## 版本演进记录
+本节保留研究过程中的主要版本收口信息。写法上不再逐条堆叠零散改动，而是按版本归档关键变化，便于后续回看“什么时候改了什么、为什么改”。
+
+### `2.5` 之前的基础工作
+- 三维物理建模底座
+  - 建立 `WGS84` 地理锚定，用经纬高描述地面 `UE` 位置
+  - 梳理 `ECI -> ECEF` 转换，把地球自转纳入卫星相对地面的几何计算
+  - 建立斜距、仰角、方位角、多普勒等关键星地几何量的计算框架
+- 轨道可控性设计
+  - 引入轨道对齐与过顶时序控制思路
+  - 为后续多星过境和切换事件提供可解释、可重复的几何组织
+- `Earth-fixed` 覆盖设计
+  - 明确“固定地面区域 + 运动卫星波束服务”的建模思路
+  - 梳理波束与小区的关系，使切换分析具有网络规划语义
+- 局部地面网格与锚点机制
+  - 建立基于 `WGS84` 的局部六边形网格思路
+  - 为后续地面锚点选择、覆盖映射和切换边界观察提供基础
+
+### `2.5`
+- 初始版本
   - 记录了毕设基础组的总体方向
-  - 记录了当时“目标是 3 个 UE，但代码仍是单 UE”的差异
-  - 记录了日志和维护规则
-- `2.5` 多 UE 基础组更新：
+  - 记录了当时“目标是 `3 UE`，但代码仍是单 UE”的差异
+  - 建立了日志与维护规则
+- 多 UE 基础组更新
   - 将 `leo-ntn-handover-baseline.cc` 从单 UE 路径改为可配置的多 UE 基线路径
-  - 将基础组默认配置设为 5 颗卫星、3 个 UE
-  - 默认关闭高噪声的 KPI、OVERPASS、GRID-ANCHOR 日志
+  - 将基础组默认配置设为 `5` 颗卫星、`3` 个 UE
+  - 默认关闭高噪声的 `KPI`、`OVERPASS`、`GRID-ANCHOR` 日志
   - 更新 `sat_attenuation_report.py`，使衰减导出结果保留 `ue` 维度
-- `2.5` 切换日志与汇总优化：
-  - 默认切换日志改为以 `ue` 序号作为主标识，不再强调原始 IMSI/RNTI
+- 切换日志与汇总优化
+  - 默认切换日志改为以 `ue` 序号作为主标识，不再强调原始 `IMSI/RNTI`
   - 切换完成日志增加执行时延显示
   - 最终切换汇总改为输出总切换次数、成功率和平均执行时延
-- `2.5` `leo-ntn-handover-baseline.cc` 结构整理：
+- 主脚本结构整理
   - 新增 `leo-ntn-handover-runtime.h`
   - 将运行时结构体和通用辅助函数移到外部头文件
   - 让主脚本更聚焦于仿真流程、场景搭建和结果输出
-- `2.5` 统计输出与头文件注释整理：
+- 统计输出与头文件注释整理
   - 新增 `leo-ntn-handover-reporting.h`
-  - 将最终吞吐、几何校验和切换汇总输出从 `leo-ntn-handover-baseline.cc` 抽到独立头文件
+  - 将最终吞吐、几何校验和切换汇总输出从主脚本抽到独立头文件
   - 为自定义头文件补充中文文件头说明、结构体注释和函数注释
-- `2.5` 结果目录整理：
-  - `leo-ntn-handover-baseline.cc` 默认将仿真输出写入 `scratch/results/`
+- 结果目录整理
+  - 默认将仿真输出写入 `scratch/results/`
   - 运行前自动创建结果目录，避免输出散落在仓库根目录
   - `sat_attenuation_report.py` 的默认输入输出路径同步迁移到 `scratch/results/`
-- `3.0` 研究版本规则建立：
-  - 当前研究仓库版本定义为 `3.0`
+
+### `3.0`
+- 研究版本规则建立
   - 明确区分研究版本 `3.0` 与 ns-3 框架版本 `3.46`
-  - 提交、分支和 tag 规则统一收敛到 `docs/research-workflow.md`
-- `3.0` 阶段重点切换：
-  - 明确当前阶段已完成文件整理和切换日志收敛
-  - 将后续主任务切换为扩大星座规模和验证大场景下的切换行为
-- `3.0` 双轨星座扩展起步：
-  - 将基础组默认配置提升为 8 颗卫星、2 个轨道面、6 个 UE
-  - 新增双轨道面相关参数，用于控制 RAAN 间隔和轨道面之间的过境时序偏移
-  - 保持多 UE 自定义 A3 切换基线不变，先观察更大场景下的切换行为
-- `3.0` 双轨切换事件整定：
+  - 提交、分支和 `tag` 规则统一收敛到 `docs/research-workflow.md`
+- 阶段重点切换
+  - 明确文件整理和切换日志收敛已完成当前阶段目标
+  - 将后续主任务切换为扩大星座规模和验证更大场景下的切换行为
+- 双轨星座扩展起步
+  - 将基础组默认配置提升为 `8` 颗卫星、`2` 个轨道面、`6` 个 UE
+  - 新增双轨道面参数，用于控制 `RAAN` 间隔和轨道面间过境时序偏移
+- 双轨切换事件整定
   - 保持 `2x4` 双轨规模不变，先不引入二维 UE 分布
-  - 通过减小轨道面 RAAN 间隔、减小轨间时序偏移、减小同轨过境间隔来增强候选星重叠
+  - 通过减小 `RAAN` 间隔、轨间时序偏移和同轨过境间隔增强候选星重叠
   - 通过拉长仿真时长提高观察到更多切换事件的概率
-- `3.0` 运行进度与性能优化起步：
-  - 当前保持 `2x4` 双轨基础组不变，暂停继续扩星
-  - 新增周期性仿真进度输出，便于长时间运行时观察当前已推进到的模拟时间
-  - 默认将 `updateIntervalMs` 调整为 `200ms`、`ThreeGppChannelModel` 更新周期调整为 `20ms`
-  - 默认将业务流强度从 `1000 pkt/s/UE` 下调为 `250 pkt/s/UE`
-  - 默认关闭波束跟踪 CSV 写出和衰减后处理脚本，降低调参阶段的运行开销
-- `3.0` 几何共享计算优化：
-  - 将 `UpdateConstellation()` 中“同一时刻对所有 UE 重复执行的卫星轨道传播”提取为共享公共状态
+- 运行进度与性能优化起步
+  - 新增周期性仿真进度输出
+  - 一度将 `updateIntervalMs` 调整为 `200 ms`、业务流强度从 `1000` 下调为 `250 pkt/s/UE`
+  - 默认关闭波束跟踪 `CSV` 写出和衰减后处理脚本，降低调参开销
+- 几何共享计算优化
+  - 将 `UpdateConstellation()` 中重复的轨道传播提取为共享公共状态
   - 在每个时间步先统一计算卫星 `ECEF/速度`，再按 UE 派生斜距、仰角、方位角和多普勒
-  - 当前优化目标是降低运行期重复几何计算成本，不改变切换策略和双轨场景设置
-- `3.0.1` 基线稳定性与性能收敛：
-  - 将当前稳定节点提升为 `3.0.1`
-  - 纳入 NR scheduler 侧陈旧 HARQ / CQI 反馈防御，解决切换后崩溃问题
-  - 纳入周期性仿真进度输出，改善长时间运行时的可观测性
-  - 纳入第一轮工程性能优化和几何共享计算优化，降低日常调参与验证成本
-- `3.0.1` 毕设主线收口：
-  - 明确当前 `2x4` 双轨场景的定位是传统 A3 baseline 缺陷暴露平台
+
+### `3.0.1`
+- 基线稳定性与性能收敛
+  - 纳入 `NR scheduler` 侧陈旧 `HARQ/CQI` 反馈防御，解决切换后崩溃问题
+  - 纳入周期性仿真进度输出与第一轮工程性能优化
+- 毕设主线收口
+  - 明确当前 `2x4` 双轨场景的定位是传统 `A3 baseline` 缺陷暴露平台
   - 明确后续主线从“继续扩星”切换为“baseline 验证 + 改进策略设计”
   - 明确后续改进算法需要对齐任务书中的“信号质量 + 卫星负载”要求
-- `3.1.0` baseline 观测与输出收口：
-  - 将当前研究仓库稳定节点提升为 `3.1.0`
-  - 纳入 `loadScore`（负载评分）相关运行时字段和逐时刻 trace 导出
+
+### `3.1.0`
+- baseline 观测与输出收口
+  - 纳入 `loadScore`（负载评分）相关运行时字段和逐时刻 `trace` 导出
   - 将 `sat_attenuation_report.py` 收口为更适合当前分析使用的精简逐时刻输出
-  - 保留周期性仿真进度输出，便于长时间运行时观察当前模拟时间推进情况
-- `3.1.1` baseline 暴露性增强第一步：
-  - 将当前研究仓库稳定节点提升为 `3.1.1`
-  - 当前已完成从单轨局部过境到双轨起步场景的扩展
-  - 当前不再把继续扩星作为主任务，而是优先面向毕设任务书定义 baseline 与改进策略
-- `3.1.2` UE 场景代表性增强：
+  - 保留周期性仿真进度输出，便于长时间运行时观察仿真推进情况
+
+### `3.1.1`
+- baseline 暴露性增强第一步
+  - 完成从单轨局部过境到双轨起步场景的扩展
+  - 明确当前不再把继续扩星作为主任务，而是优先面向毕设任务书定义 baseline 与改进策略
+
+### `3.1.2`
+- UE 场景代表性增强
   - 默认 UE 部署从一维线性排布切换为 `25 UE` 的 `hotspot-boundary` 二维布局
   - 场景按 `9` 个热点 UE、`10` 个边界 UE、`6` 个背景 UE 组织
-  - 保留 `line` 布局作为对照，但当前默认优先服务负载不均衡与 ping-pong 研究
-  - 默认将 `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）从 `8 deg` 继续下调到 `6 deg`
-  - 当前这一步只增强跨轨空间重叠，不改 `simTime`（仿真时长）、`hoTttMs`（切换触发时间）和 `hoHysteresisDb`（切换迟滞门限），优先观察第二轨其余卫星是否开始进入有效竞争
-- `3.1.3` 默认口径收口：
-  - 将当前研究仓库稳定节点提升为 `3.1.3`
-  - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局，并保持 `9` 个热点 UE、`10` 个边界 UE、`6` 个背景 UE 的组织方式
-  - 明确保留 `line`（线性）布局作为对照入口，但当前默认研究场景仍优先使用 `hotspot-boundary`
-  - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
-  - 明确当前默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true` 时继续生成 `sat_attenuation_per_time.csv`
-  - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()` 和 `UdpServer::HandleRead()` 的描述
-- `3.1.3` 配置入口收口：
-  - 新增 `leo-ntn-handover-config.h`
-  - 将默认参数、命令行参数注册、输出路径收口和参数合法性检查从 `leo-ntn-handover-baseline.cc` 抽离
-  - 本次调整不改变 `2x4` 双轨、`25 UE`、传统 A3 baseline 的场景口径
+  - 保留 `line` 布局作为对照，但默认优先服务负载不均衡与 `ping-pong` 研究
+  - 默认将 `interPlaneRaanSpacingDeg`（轨道面 `RAAN` 间隔）从 `8 deg` 下调到 `6 deg`
+  - 当前这一步只增强跨轨空间重叠，不改 `simTime`、`hoTttMs`、`hoHysteresisDb`
 
-## 当前优先任务
-- 默认将 UE 主场景切换为 `ueLayoutType = hotspot-boundary`（热点增加 + 边界增强）
-- 热点区当前默认采用 `3x3` 团簇，`ueHotspotSpacingMeters = 8 km`
-- 边界区当前默认采用跨边界 `5x2` 条带，`ueBoundarySpacingMeters = 12 km`，`ueBoundaryOffsetMeters = 5 km`
-- 外围背景区当前默认采用 `6` 个稀疏 UE，`ueBackgroundRadiusX/Y = 40/30 km`
-- 默认将 `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）从 `12 deg` 下调到 `6 deg`
-- 默认将 `interPlaneTimeOffsetSeconds`（轨道面时间偏移）从 `2 s` 下调到 `1 s`
-- 保持 `simTime`（仿真时长）为 `40 s`，先验证更强候选星竞争是否已足够放大 baseline 问题
-- 将 `alignmentReferenceTimeSeconds`（对齐参考时刻）独立设为 `20 s`，保持原默认行为不变，但解除与 `simTime`（仿真时长）的隐式耦合
-- 去掉默认输出中的 `overpass`（过境参考时刻）相关 setup 显示和最终距离摘要，让日志更聚焦于切换与吞吐
-- 默认关闭 `EnableSrsInFSlots`（允许在 F 时隙发送 SRS）、`EnableSrsInUlSlots`（允许在 UL 时隙发送 SRS），并将 `SrsSymbols`（SRS 符号数）设为 `0`，避免出现 `Cannot RX SRS while TX.` 的非主线崩溃
-- 修正 `SN Status Transfer`（序列号状态转移）消息的 `erabId`（承载标识）、`HFN`（超帧号）和上行接收位图初始化，避免切换时因垃圾字段触发错误承载映射
-- 在 `NrPdcp::DoReceivePdu()`（PDCP 接收入口）增加对异常 `PDCP` 头部的丢弃保护，避免 `m_dcBit == DATA_PDU` 断言直接终止仿真
+### `3.2.0`
+- 当前稳定节点收口
+  - 将当前研究仓库稳定节点提升为 `3.2.0`
+  - 收口 `docs/`、`scratch/` 和 `midterm-report/` 的版本与 baseline 口径
+  - 保留版本演进历史，同时重组 README 结构，减少文档冗余
+
+### `3.1.3`
+- 默认口径收口
+  - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局
+  - 明确保留 `line` 布局作为对照入口，但默认研究场景优先使用 `hotspot-boundary`
+  - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
+  - 明确默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true` 时继续生成 `sat_attenuation_per_time.csv`
+  - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()`、`UdpServer::HandleRead()` 的描述
+- 配置入口收口
+  - 新增 `leo-ntn-handover-config.h`
+  - 将默认参数、命令行参数注册、输出路径收口和参数合法性检查从主脚本抽离
+  - 本次调整不改变 `2x4` 双轨、`25 UE`、传统 `A3 baseline` 的场景口径
+- 减法式清理
+  - 去掉单 UE `A3 gate` 兼容链，明确当前 baseline 固定走多 UE `custom A3` 执行路径
+  - 删除若干只写不读状态，收紧运行时样板代码
+  - 将卫星公共轨道状态统一为一次计算，`UE` 侧观测改为基于公共 `ECEF/速度` 派生
+  - 将 `lockCellAnchorToUe` 和 `lockGridCenterToUe` 的派生逻辑收口到配置层
+  - `main()` 改为直接消费 `BaselineSimulationConfig`

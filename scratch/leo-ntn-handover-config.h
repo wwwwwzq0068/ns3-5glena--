@@ -240,7 +240,24 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
 }
 
 inline void
-ValidateBaselineSimulationConfig(BaselineSimulationConfig& config, bool useCustomA3Executor)
+ApplyBaselineDerivedLocationConfig(BaselineSimulationConfig& config)
+{
+    if (config.lockCellAnchorToUe)
+    {
+        config.cellLatitudeDeg = config.ueLatitudeDeg;
+        config.cellLongitudeDeg = config.ueLongitudeDeg;
+        config.cellAltitudeMeters = config.ueAltitudeMeters;
+    }
+
+    if (config.lockGridCenterToUe)
+    {
+        config.gridCenterLatitudeDeg = config.ueLatitudeDeg;
+        config.gridCenterLongitudeDeg = config.ueLongitudeDeg;
+    }
+}
+
+inline void
+ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
 {
     NS_ABORT_MSG_IF(config.gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
@@ -284,8 +301,6 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config, bool useCusto
     }
 
     NS_ABORT_MSG_IF(config.strictNrtMarginDb < 0.0, "strictNrtMarginDb must be >= 0");
-    NS_ABORT_MSG_IF(!useCustomA3Executor && config.ueNum > 1,
-                    "multi-UE baseline currently requires the custom A3 executor");
 }
 
 } // namespace ns3

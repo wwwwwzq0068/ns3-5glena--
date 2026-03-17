@@ -4,7 +4,6 @@
 #include "ns3/geocentric-constant-position-mobility-model.h"
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
-#include "ns3/nr-a3-rsrp-handover-algorithm.h"
 #include "ns3/nr-gnb-rrc.h"
 #include "ns3/nr-module.h"
 #include "ns3/nr-ue-rrc.h"
@@ -110,16 +109,7 @@ static double g_loadCongestionThreshold = 0.8;
 static bool g_strictNrtGuard = true;
 static double g_strictNrtMarginDb = 0.2;
 
-// 下面三个状态量主要用于切换存在性检测和 A3 门控状态管理。
-static bool g_seenAnyHandoverStart = false;
-static bool g_seenAnyHandoverEndOk = false;
-static bool g_handoverFrozen = false;
-static std::vector<Ptr<NrGnbRrc>> g_gnbRrcs;
-static std::vector<Ptr<NrA3RsrpHandoverAlgorithm>> g_hoAlgos;
-static uint32_t g_a3GateServingSat = std::numeric_limits<uint32_t>::max();
-
-// 多 UE 基线默认使用自定义 A3 执行器，而不是直接放开底层算法自行切换。
-static bool g_useCustomA3Executor = true;
+// 当前 baseline 固定使用自定义 A3 风格执行器。
 static double g_manualHoTttSeconds = 1.2;
 
 // 逐时刻卫星链路预算导出文件。
@@ -135,10 +125,6 @@ static std::ofstream g_satBeamTrace;
 static void
 ResetRuntimeState(uint32_t gNbNum)
 {
-    g_seenAnyHandoverStart = false;
-    g_seenAnyHandoverEndOk = false;
-    g_handoverFrozen = false;
-    g_a3GateServingSat = std::numeric_limits<uint32_t>::max();
     for (auto& ue : g_ues)
     {
         ResetUeRuntime(ue, gNbNum);
@@ -222,7 +208,6 @@ ReportStateTransition(std::string,
 static void
 ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, uint16_t targetCellId)
 {
-    g_seenAnyHandoverStart = true;
     std::ostringstream prefix;
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
@@ -253,7 +238,6 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
 static void
 ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
-    g_seenAnyHandoverEndOk = true;
     std::ostringstream prefix;
     double handoverDelayMs = -1.0;
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
@@ -275,16 +259,6 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
                 ue.lastHoStartTargetCell == expectedTargetCell && cellId == expectedTargetCell)
             {
                 ue.seenExpectedHandover = true;
-                if (!g_useCustomA3Executor && !g_handoverFrozen)
-                {
-                    for (const auto& rrc : g_gnbRrcs)
-                    {
-                        rrc->SetNrHandoverManagementSapProvider(nullptr);
-                    }
-                    g_handoverFrozen = true;
-                    g_a3GateServingSat = std::numeric_limits<uint32_t>::max();
-                    std::cout << "[HO] freeze automatic handover after predicted success" << std::endl;
-                }
             }
         }
         ue.hasPendingHoStart = false;
@@ -433,7 +407,6 @@ PrintDlThroughput(uint32_t packetSizeBytes, Time interval)
         const uint64_t currentRxPackets = ue.server->GetReceived();
         deltaPackets += currentRxPackets - ue.lastRxPackets;
         ue.lastRxPackets = currentRxPackets;
-        ue.lastThroughputTime = now;
     }
     const double dt = interval.GetSeconds();
     const double throughputMbps = (dt > 0.0) ? (deltaPackets * packetSizeBytes * 8.0) / dt / 1e6 : 0.0;
@@ -472,48 +445,6 @@ PrintSimulationProgress(Time interval)
 }
 
 /**
- * 控制底层 A3 provider 是否对指定服务卫星开放。
- *
- * 目前多 UE 场景主要走自定义 A3 执行器，这个函数更多用于保留单 UE 兼容路径。
- */
-static void
-ApplyA3Gate(uint32_t servingSatIdx, bool allowHandover)
-{
-    if (g_handoverFrozen || g_hoAlgos.size() != g_satellites.size())
-    {
-        return;
-    }
-
-    const uint32_t nextGateSat =
-        allowHandover ? servingSatIdx : std::numeric_limits<uint32_t>::max();
-    if (nextGateSat == g_a3GateServingSat)
-    {
-        return;
-    }
-
-    for (uint32_t i = 0; i < g_satellites.size(); ++i)
-    {
-        auto* provider = (nextGateSat == i && g_hoAlgos[i])
-                             ? g_hoAlgos[i]->GetNrHandoverManagementSapProvider()
-                             : nullptr;
-        g_satellites[i].rrc->SetNrHandoverManagementSapProvider(provider);
-    }
-    g_a3GateServingSat = nextGateSat;
-
-    if (!g_compactReport || g_printNrtEvents)
-    {
-        std::cout << "[A3-GATE] t=" << std::fixed << std::setprecision(3) << Simulator::Now().GetSeconds()
-                  << "s mode=" << (nextGateSat == std::numeric_limits<uint32_t>::max() ? "CLOSED" : "OPEN");
-        if (nextGateSat != std::numeric_limits<uint32_t>::max())
-        {
-            std::cout << " servingSat=sat" << nextGateSat
-                      << " cell=" << g_satellites[nextGateSat].dev->GetCellId();
-        }
-        std::cout << std::endl;
-    }
-}
-
-/**
  * 自定义 A3 风格切换执行器。
  *
  * 当目标邻星持续优于当前服务星达到 TTT 后，
@@ -527,7 +458,7 @@ ExecuteCustomA3Handover(UeRuntime& ue,
                         bool neighbourQualified,
                         double nowSeconds)
 {
-    if (!g_useCustomA3Executor || servingSatIdx >= g_satellites.size())
+    if (servingSatIdx >= g_satellites.size())
     {
         return;
     }
@@ -627,12 +558,8 @@ UpdateConstellation(Time interval, Time stopTime)
     pendingBeamTraceRows.reserve(g_ues.size() * g_satellites.size());
     for (uint32_t i = 0; i < g_satellites.size(); ++i)
     {
-        referenceStates[i] = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                            g_satellites[i].orbit,
-                                                            g_gmstAtEpochRad,
-                                                            g_ueGroundPoint,
-                                                            g_carrierFrequencyHz,
-                                                            g_minElevationRad);
+        referenceStates[i] = LeoOrbitCalculator::CalculateSatelliteState(
+            nowSeconds, g_satellites[i].orbit, g_gmstAtEpochRad);
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
         g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
         UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
@@ -645,10 +572,10 @@ UpdateConstellation(Time interval, Time stopTime)
         UeObservationSnapshot observation = BuildUeObservationSnapshot(ue,
                                                                        ueIdx,
                                                                        nowSeconds,
-                                                                       g_gmstAtEpochRad,
                                                                        g_carrierFrequencyHz,
                                                                        g_minElevationRad,
                                                                        g_beamModelConfig,
+                                                                       referenceStates,
                                                                        g_satellites,
                                                                        g_cellToSatellite,
                                                                        g_satBeamTrace.is_open()
@@ -676,21 +603,12 @@ UpdateConstellation(Time interval, Time stopTime)
                   observation.beamBudgets[observation.servingSatIdx].rsrpDbm + g_strictNrtMarginDb));
             if (g_strictNrtGuard)
             {
-                // 多 UE 路径优先使用自定义执行器；单 UE 时保留 A3 gate 兼容逻辑。
-                if (g_useCustomA3Executor)
-                {
-                    ExecuteCustomA3Handover(
-                        ue,
-                        ueIdx,
-                        observation.servingSatIdx,
-                        observation.bestNeighbourIdx,
-                        observation.neighbourQualified,
-                        nowSeconds);
-                }
-                else if (g_ues.size() == 1)
-                {
-                    ApplyA3Gate(observation.servingSatIdx, observation.neighbourQualified);
-                }
+                ExecuteCustomA3Handover(ue,
+                                        ueIdx,
+                                        observation.servingSatIdx,
+                                        observation.bestNeighbourIdx,
+                                        observation.neighbourQualified,
+                                        nowSeconds);
             }
 
             for (uint32_t j = 0; j < g_satellites.size(); ++j)
@@ -716,10 +634,6 @@ UpdateConstellation(Time interval, Time stopTime)
         }
         else if (g_strictNrtGuard)
         {
-            if (!g_useCustomA3Executor && g_ues.size() == 1)
-            {
-                ApplyA3Gate(std::numeric_limits<uint32_t>::max(), false);
-            }
             ue.manualHoServingIdx = std::numeric_limits<uint32_t>::max();
             ue.manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
             ue.manualHoCandidateSince = -1.0;
@@ -791,110 +705,40 @@ main(int argc, char* argv[])
     cmd.Parse(argc, argv);
 
     const BaselineOutputPaths outputPaths = ResolveBaselineOutputPaths(config);
-    ValidateBaselineSimulationConfig(config, g_useCustomA3Executor);
+    ValidateBaselineSimulationConfig(config);
+    ApplyBaselineDerivedLocationConfig(config);
 
-    auto& simTime = config.simTime;
-    auto& appStartTime = config.appStartTime;
-    auto& gNbNum = config.gNbNum;
-    auto& ueNum = config.ueNum;
-    auto& ueLayoutType = config.ueLayoutType;
-    auto& ueSpacingMeters = config.ueSpacingMeters;
-    auto& ueHotspotSpacingMeters = config.ueHotspotSpacingMeters;
-    auto& ueBoundarySpacingMeters = config.ueBoundarySpacingMeters;
-    auto& ueBoundaryOffsetMeters = config.ueBoundaryOffsetMeters;
-    auto& ueBackgroundRadiusXMeters = config.ueBackgroundRadiusXMeters;
-    auto& ueBackgroundRadiusYMeters = config.ueBackgroundRadiusYMeters;
-    auto& ueHotspotCenterOffsetXMeters = config.ueHotspotCenterOffsetXMeters;
-    auto& ueHotspotCenterOffsetYMeters = config.ueHotspotCenterOffsetYMeters;
-    auto& satAltitudeMeters = config.satAltitudeMeters;
-    auto& orbitEccentricity = config.orbitEccentricity;
-    auto& orbitInclinationDeg = config.orbitInclinationDeg;
-    auto& orbitRaanDeg = config.orbitRaanDeg;
-    auto& orbitArgPerigeeDeg = config.orbitArgPerigeeDeg;
-    auto& orbitPlaneCount = config.orbitPlaneCount;
-    auto& interPlaneRaanSpacingDeg = config.interPlaneRaanSpacingDeg;
-    auto& interPlaneTimeOffsetSeconds = config.interPlaneTimeOffsetSeconds;
-    auto& baseTrueAnomalyDeg = config.baseTrueAnomalyDeg;
-    auto& gmstAtEpochDeg = config.gmstAtEpochDeg;
-    auto& autoAlignToUe = config.autoAlignToUe;
-    auto& descendingPass = config.descendingPass;
-    auto& alignmentReferenceTimeSeconds = config.alignmentReferenceTimeSeconds;
-    auto& overpassGapSeconds = config.overpassGapSeconds;
-    auto& overpassTimeOffsetSeconds = config.overpassTimeOffsetSeconds;
-    auto& updateIntervalMs = config.updateIntervalMs;
-    auto& minElevationDeg = config.minElevationDeg;
-    auto& ueLatitudeDeg = config.ueLatitudeDeg;
-    auto& ueLongitudeDeg = config.ueLongitudeDeg;
-    auto& ueAltitudeMeters = config.ueAltitudeMeters;
-    auto& lockCellAnchorToUe = config.lockCellAnchorToUe;
-    auto& cellLatitudeDeg = config.cellLatitudeDeg;
-    auto& cellLongitudeDeg = config.cellLongitudeDeg;
-    auto& cellAltitudeMeters = config.cellAltitudeMeters;
-    auto& lockGridCenterToUe = config.lockGridCenterToUe;
-    auto& gridCenterLatitudeDeg = config.gridCenterLatitudeDeg;
-    auto& gridCenterLongitudeDeg = config.gridCenterLongitudeDeg;
-    auto& centralFrequency = config.centralFrequency;
-    auto& bandwidth = config.bandwidth;
-    auto& lambda = config.lambda;
-    auto& udpPacketSize = config.udpPacketSize;
-    auto& gnbTxPower = config.gnbTxPower;
-    auto& ueTxPower = config.ueTxPower;
-    auto& beamMaxGainDbi = config.beamMaxGainDbi;
-    auto& scanMaxDeg = config.scanMaxDeg;
-    auto& theta3dBDeg = config.theta3dBDeg;
-    auto& sideLobeAttenuationDb = config.sideLobeAttenuationDb;
-    auto& ueRxGainDbi = config.ueRxGainDbi;
-    auto& atmLossDb = config.atmLossDb;
-    auto& beamDropPenaltyDb = config.beamDropPenaltyDb;
-    auto& hoHysteresisDb = config.hoHysteresisDb;
-    auto& hoTttMs = config.hoTttMs;
-    auto& startupVerbose = config.startupVerbose;
-    auto& runAttenuationScript = config.runAttenuationScript;
-    auto& attenuationScriptPath = config.attenuationScriptPath;
-    auto& attenuationInputPath = config.attenuationInputPath;
-    auto& attenuationPerTimePath = config.attenuationPerTimePath;
-    auto& throughputReportIntervalSeconds = config.throughputReportIntervalSeconds;
-    auto& enableSrsInFSlots = config.enableSrsInFSlots;
-    auto& enableSrsInUlSlots = config.enableSrsInUlSlots;
-    auto& srsSymbols = config.srsSymbols;
+    const auto& cfg = config;
     const std::string& attenuationSummaryOutputPath = outputPaths.attenuationSummaryOutputPath;
     const std::string& attenuationTimeMatrixOutputPath =
         outputPaths.attenuationTimeMatrixOutputPath;
+    double orbitRaanDeg = cfg.orbitRaanDeg;
+    double baseTrueAnomalyDeg = cfg.baseTrueAnomalyDeg;
 
     // ------------------------------
     // 3. 几何场景与链路预算参数初始化
     // ------------------------------
-    g_ueGroundPoint = LeoOrbitCalculator::CreateGroundPoint(ueLatitudeDeg, ueLongitudeDeg, ueAltitudeMeters);
-    if (lockCellAnchorToUe)
-    {
-        cellLatitudeDeg = ueLatitudeDeg;
-        cellLongitudeDeg = ueLongitudeDeg;
-        cellAltitudeMeters = ueAltitudeMeters;
-    }
+    g_ueGroundPoint = LeoOrbitCalculator::CreateGroundPoint(
+        cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters);
     g_cellGroundPoint =
-        LeoOrbitCalculator::CreateGroundPoint(cellLatitudeDeg, cellLongitudeDeg, cellAltitudeMeters);
-    g_gmstAtEpochRad = LeoOrbitCalculator::DegToRad(gmstAtEpochDeg);
-    g_minElevationRad = LeoOrbitCalculator::DegToRad(minElevationDeg);
-    g_carrierFrequencyHz = centralFrequency;
-    g_beamModelConfig.carrierFrequencyHz = centralFrequency;
-    g_beamModelConfig.txPowerDbm = gnbTxPower;
-    g_beamModelConfig.gMax0Dbi = beamMaxGainDbi;
-    g_beamModelConfig.alphaMaxRad = LeoOrbitCalculator::DegToRad(scanMaxDeg);
-    g_beamModelConfig.theta3dBRad = LeoOrbitCalculator::DegToRad(theta3dBDeg);
-    g_beamModelConfig.slaVDb = sideLobeAttenuationDb;
-    g_beamModelConfig.rxGainDbi = ueRxGainDbi;
-    g_beamModelConfig.atmLossDb = atmLossDb;
-    g_beamModelConfig.beamDropPenaltyDb = beamDropPenaltyDb;
-    if (lockGridCenterToUe)
-    {
-        gridCenterLatitudeDeg = ueLatitudeDeg;
-        gridCenterLongitudeDeg = ueLongitudeDeg;
-    }
+        LeoOrbitCalculator::CreateGroundPoint(cfg.cellLatitudeDeg, cfg.cellLongitudeDeg, cfg.cellAltitudeMeters);
+    g_gmstAtEpochRad = LeoOrbitCalculator::DegToRad(cfg.gmstAtEpochDeg);
+    g_minElevationRad = LeoOrbitCalculator::DegToRad(cfg.minElevationDeg);
+    g_carrierFrequencyHz = cfg.centralFrequency;
+    g_beamModelConfig.carrierFrequencyHz = cfg.centralFrequency;
+    g_beamModelConfig.txPowerDbm = cfg.gnbTxPower;
+    g_beamModelConfig.gMax0Dbi = cfg.beamMaxGainDbi;
+    g_beamModelConfig.alphaMaxRad = LeoOrbitCalculator::DegToRad(cfg.scanMaxDeg);
+    g_beamModelConfig.theta3dBRad = LeoOrbitCalculator::DegToRad(cfg.theta3dBDeg);
+    g_beamModelConfig.slaVDb = cfg.sideLobeAttenuationDb;
+    g_beamModelConfig.rxGainDbi = cfg.ueRxGainDbi;
+    g_beamModelConfig.atmLossDb = cfg.atmLossDb;
+    g_beamModelConfig.beamDropPenaltyDb = cfg.beamDropPenaltyDb;
     ApplyGlobalMirrorConfig(config);
 
     const bool outputDirsReady = EnsureParentDirectoryForFile(g_gridCatalogPath) &&
-                                 EnsureParentDirectoryForFile(attenuationInputPath) &&
-                                 EnsureParentDirectoryForFile(attenuationPerTimePath) &&
+                                 EnsureParentDirectoryForFile(cfg.attenuationInputPath) &&
+                                 EnsureParentDirectoryForFile(cfg.attenuationPerTimePath) &&
                                  EnsureParentDirectoryForFile(attenuationSummaryOutputPath) &&
                                  EnsureParentDirectoryForFile(attenuationTimeMatrixOutputPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
@@ -909,7 +753,7 @@ main(int argc, char* argv[])
                                            g_hexCellRadiusKm * 1000.0);
         NS_ABORT_MSG_IF(g_hexGridCells.empty(), "hex-grid generation produced 0 cells");
 
-        if (startupVerbose)
+        if (cfg.startupVerbose)
         {
             std::cout << std::fixed << std::setprecision(3)
                       << "[Grid] WGS84 hex-grid enabled center=(" << g_gridCenterLatitudeDeg << "deg, "
@@ -929,7 +773,7 @@ main(int argc, char* argv[])
         if (g_printGridCatalog)
         {
             DumpHexGridCatalog(g_gridCatalogPath, g_hexGridCells);
-            if (startupVerbose)
+            if (cfg.startupVerbose)
             {
                 std::cout << "[Grid] catalog exported: " << g_gridCatalogPath << std::endl;
             }
@@ -943,54 +787,55 @@ main(int argc, char* argv[])
     // 输出当前基础组的关键物理和切换配置。
     std::cout << std::fixed << std::setprecision(3)
               << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
-              << " alphaMax=" << scanMaxDeg << "deg"
-              << " theta3dB=" << theta3dBDeg << "deg" << std::endl;
-    std::cout << "[Constellation] satellites=" << gNbNum
-              << " planes=" << orbitPlaneCount
-              << " ue=" << ueNum
-              << " raanSpacing=" << interPlaneRaanSpacingDeg << "deg"
-              << " planeTimeOffset=" << interPlaneTimeOffsetSeconds << "s" << std::endl;
-    std::cout << "[UE-Layout] type=" << ueLayoutType;
-    if (ueLayoutType == "hotspot-boundary")
+              << " alphaMax=" << cfg.scanMaxDeg << "deg"
+              << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
+    std::cout << "[Constellation] satellites=" << cfg.gNbNum
+              << " planes=" << cfg.orbitPlaneCount
+              << " ue=" << cfg.ueNum
+              << " raanSpacing=" << cfg.interPlaneRaanSpacingDeg << "deg"
+              << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s" << std::endl;
+    std::cout << "[UE-Layout] type=" << cfg.ueLayoutType;
+    if (cfg.ueLayoutType == "hotspot-boundary")
     {
         std::cout << " groups=hotspot(9)+boundary(10)+background(6)"
-                  << " hotspotSpacing=" << ueHotspotSpacingMeters / 1000.0 << "km"
-                  << " boundarySpacing=" << ueBoundarySpacingMeters / 1000.0 << "km"
-                  << " boundaryOffset=" << ueBoundaryOffsetMeters / 1000.0 << "km"
-                  << " hotspotCenter=(" << ueHotspotCenterOffsetXMeters / 1000.0 << "kmE,"
-                  << ueHotspotCenterOffsetYMeters / 1000.0 << "kmN)"
-                  << " backgroundRadius=(" << ueBackgroundRadiusXMeters / 1000.0 << "km,"
-                  << ueBackgroundRadiusYMeters / 1000.0 << "km)";
+                  << " hotspotSpacing=" << cfg.ueHotspotSpacingMeters / 1000.0 << "km"
+                  << " boundarySpacing=" << cfg.ueBoundarySpacingMeters / 1000.0 << "km"
+                  << " boundaryOffset=" << cfg.ueBoundaryOffsetMeters / 1000.0 << "km"
+                  << " hotspotCenter=(" << cfg.ueHotspotCenterOffsetXMeters / 1000.0 << "kmE,"
+                  << cfg.ueHotspotCenterOffsetYMeters / 1000.0 << "kmN)"
+                  << " backgroundRadius=(" << cfg.ueBackgroundRadiusXMeters / 1000.0 << "km,"
+                  << cfg.ueBackgroundRadiusYMeters / 1000.0 << "km)";
     }
     else
     {
-        std::cout << " spacing=" << ueSpacingMeters / 1000.0 << "km";
+        std::cout << " spacing=" << cfg.ueSpacingMeters / 1000.0 << "km";
     }
     std::cout << std::endl;
     std::cout << "[NRT] strict=" << (g_strictNrtGuard ? "ON" : "OFF")
               << " margin=" << g_strictNrtMarginDb << "dB";
-    if (g_strictNrtGuard && g_useCustomA3Executor)
+    if (g_strictNrtGuard)
     {
         std::cout << " a3=custom(ttt=" << g_manualHoTttSeconds << "s)";
     }
     std::cout << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
 
-    const double semiMajorAxisMeters = LeoOrbitCalculator::kWgs84SemiMajorAxisMeters + satAltitudeMeters;
+    const double semiMajorAxisMeters =
+        LeoOrbitCalculator::kWgs84SemiMajorAxisMeters + cfg.satAltitudeMeters;
     const double meanMotionRadPerSec =
         std::sqrt(LeoOrbitCalculator::kEarthGravitationalMu / std::pow(semiMajorAxisMeters, 3.0));
 
-    const double inclinationRad = LeoOrbitCalculator::DegToRad(orbitInclinationDeg);
+    const double inclinationRad = LeoOrbitCalculator::DegToRad(cfg.orbitInclinationDeg);
     double raanRad = LeoOrbitCalculator::DegToRad(orbitRaanDeg);
-    const double argPerigeeRad = LeoOrbitCalculator::DegToRad(orbitArgPerigeeDeg);
+    const double argPerigeeRad = LeoOrbitCalculator::DegToRad(cfg.orbitArgPerigeeDeg);
     double baseTrueAnomalyRad = LeoOrbitCalculator::DegToRad(baseTrueAnomalyDeg);
 
-    if (autoAlignToUe)
+    if (cfg.autoAlignToUe)
     {
-        const auto aligned = AutoAlignOrbitToUe(alignmentReferenceTimeSeconds,
-                                                descendingPass,
+        const auto aligned = AutoAlignOrbitToUe(cfg.alignmentReferenceTimeSeconds,
+                                                cfg.descendingPass,
                                                 semiMajorAxisMeters,
-                                                orbitEccentricity,
+                                                cfg.orbitEccentricity,
                                                 inclinationRad,
                                                 argPerigeeRad,
                                                 raanRad,
@@ -998,17 +843,18 @@ main(int argc, char* argv[])
                                                 meanMotionRadPerSec,
                                                 g_gmstAtEpochRad,
                                                 g_ueGroundPoint,
-                                                centralFrequency,
+                                                cfg.centralFrequency,
                                                 g_minElevationRad);
         raanRad = aligned.raanRad;
         baseTrueAnomalyRad = aligned.baseTrueAnomalyRad;
         orbitRaanDeg = LeoOrbitCalculator::RadToDeg(raanRad);
         baseTrueAnomalyDeg = LeoOrbitCalculator::RadToDeg(baseTrueAnomalyRad);
 
-        std::cout << "[Setup] autoAlign=ON branch=" << (descendingPass ? "descending" : "ascending")
+        std::cout << "[Setup] autoAlign=ON branch="
+                  << (cfg.descendingPass ? "descending" : "ascending")
                   << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad) << "deg" << std::endl;
     }
-    if (orbitPlaneCount > 1)
+    if (cfg.orbitPlaneCount > 1)
     {
         std::cout << "[Setup] multi-plane mode: plane0 keeps the aligned reference orbit, "
                   << "additional planes use RAAN/time offsets" << std::endl;
@@ -1027,7 +873,7 @@ main(int argc, char* argv[])
     }
     LeoOrbitCalculator::KeplerElements checkOrbit;
     checkOrbit.semiMajorAxisMeters = semiMajorAxisMeters;
-    checkOrbit.eccentricity = orbitEccentricity;
+    checkOrbit.eccentricity = cfg.orbitEccentricity;
     checkOrbit.inclinationRad = inclinationRad;
     checkOrbit.raanRad = raanRad;
     checkOrbit.argPerigeeRad = argPerigeeRad;
@@ -1039,7 +885,7 @@ main(int argc, char* argv[])
                                                          checkOrbit,
                                                          g_gmstAtEpochRad,
                                                          g_ueGroundPoint,
-                                                         centralFrequency,
+                                                         cfg.centralFrequency,
                                                          g_minElevationRad);
         if (g_printOrbitCheck)
         {
@@ -1058,28 +904,23 @@ main(int argc, char* argv[])
     nrEpcHelper->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(0)));
     nrHelper->SetEpcHelper(nrEpcHelper);
 
-    // 恢复 A3 切换算法配置
-    nrHelper->SetHandoverAlgorithmType("ns3::NrA3RsrpHandoverAlgorithm");
-    nrHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(hoHysteresisDb));
-    nrHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(hoTttMs)));
-
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
     channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
     channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
 
     CcBwpCreator ccBwpCreator;
-    CcBwpCreator::SimpleOperationBandConf bandConf(centralFrequency, bandwidth, 1);
+    CcBwpCreator::SimpleOperationBandConf bandConf(cfg.centralFrequency, cfg.bandwidth, 1);
     OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
     channelHelper->AssignChannelsToBands({band});
     BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({band});
 
-    nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(gnbTxPower));
-    nrHelper->SetUePhyAttribute("TxPower", DoubleValue(ueTxPower));
+    nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(cfg.gnbTxPower));
+    nrHelper->SetUePhyAttribute("TxPower", DoubleValue(cfg.ueTxPower));
 
     nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
-    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(enableSrsInFSlots));
-    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(enableSrsInUlSlots));
-    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(srsSymbols));
+    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
+    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
+    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(cfg.srsSymbols));
     nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(1));
     nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(2));
     nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
@@ -1095,9 +936,9 @@ main(int argc, char* argv[])
     // 5. 节点创建与初始位置部署
     // ------------------------------
     NodeContainer gNbNodes;
-    gNbNodes.Create(gNbNum);
+    gNbNodes.Create(cfg.gNbNum);
     NodeContainer ueNodes;
-    ueNodes.Create(ueNum);
+    ueNodes.Create(cfg.ueNum);
 
     MobilityHelper gnbMobility;
     gnbMobility.SetMobilityModel("ns3::GeocentricConstantPositionMobilityModel");
@@ -1108,18 +949,18 @@ main(int argc, char* argv[])
     ueMobility.Install(ueNodes);
 
     UeLayoutConfig ueLayout;
-    ueLayout.layoutType = ueLayoutType;
-    ueLayout.lineSpacingMeters = ueSpacingMeters;
-    ueLayout.hotspotSpacingMeters = ueHotspotSpacingMeters;
-    ueLayout.boundarySpacingMeters = ueBoundarySpacingMeters;
-    ueLayout.boundaryOffsetMeters = ueBoundaryOffsetMeters;
-    ueLayout.backgroundRadiusXMeters = ueBackgroundRadiusXMeters;
-    ueLayout.backgroundRadiusYMeters = ueBackgroundRadiusYMeters;
-    ueLayout.hotspotCenterOffsetXMeters = ueHotspotCenterOffsetXMeters;
-    ueLayout.hotspotCenterOffsetYMeters = ueHotspotCenterOffsetYMeters;
+    ueLayout.layoutType = cfg.ueLayoutType;
+    ueLayout.lineSpacingMeters = cfg.ueSpacingMeters;
+    ueLayout.hotspotSpacingMeters = cfg.ueHotspotSpacingMeters;
+    ueLayout.boundarySpacingMeters = cfg.ueBoundarySpacingMeters;
+    ueLayout.boundaryOffsetMeters = cfg.ueBoundaryOffsetMeters;
+    ueLayout.backgroundRadiusXMeters = cfg.ueBackgroundRadiusXMeters;
+    ueLayout.backgroundRadiusYMeters = cfg.ueBackgroundRadiusYMeters;
+    ueLayout.hotspotCenterOffsetXMeters = cfg.ueHotspotCenterOffsetXMeters;
+    ueLayout.hotspotCenterOffsetYMeters = cfg.ueHotspotCenterOffsetYMeters;
     const auto uePlacements =
-        BuildUePlacements(ueLatitudeDeg, ueLongitudeDeg, ueAltitudeMeters, ueNum, ueLayout);
-    NS_ABORT_MSG_IF(uePlacements.size() != ueNum, "UE placement count does not match ueNum");
+        BuildUePlacements(cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters, cfg.ueNum, ueLayout);
+    NS_ABORT_MSG_IF(uePlacements.size() != cfg.ueNum, "UE placement count does not match ueNum");
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
     {
         ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(uePlacements[i].groundPoint.ecef);
@@ -1143,24 +984,24 @@ main(int argc, char* argv[])
 
     g_satellites.clear();
     g_cellToSatellite.clear();
-    g_satellites.reserve(gNbNum);
-    std::vector<uint32_t> satellitesPerPlane(orbitPlaneCount, gNbNum / orbitPlaneCount);
-    for (uint32_t planeIdx = 0; planeIdx < (gNbNum % orbitPlaneCount); ++planeIdx)
+    g_satellites.reserve(cfg.gNbNum);
+    std::vector<uint32_t> satellitesPerPlane(cfg.orbitPlaneCount, cfg.gNbNum / cfg.orbitPlaneCount);
+    for (uint32_t planeIdx = 0; planeIdx < (cfg.gNbNum % cfg.orbitPlaneCount); ++planeIdx)
     {
         satellitesPerPlane[planeIdx]++;
     }
 
     // 为每颗卫星绑定轨道、初始位置和初始网格锚点。
     uint32_t globalSatIdx = 0;
-    for (uint32_t planeIdx = 0; planeIdx < orbitPlaneCount; ++planeIdx)
+    for (uint32_t planeIdx = 0; planeIdx < cfg.orbitPlaneCount; ++planeIdx)
     {
         const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
         const double planeCenterIndex = (static_cast<double>(satsInPlane) - 1.0) / 2.0;
         const double planeRaanRad =
             LeoOrbitCalculator::NormalizeAngle(raanRad +
-                                               LeoOrbitCalculator::DegToRad(interPlaneRaanSpacingDeg) * planeIdx);
+                                               LeoOrbitCalculator::DegToRad(cfg.interPlaneRaanSpacingDeg) * planeIdx);
         const double planeRaanDeg = LeoOrbitCalculator::RadToDeg(planeRaanRad);
-        const double planeTimeOffset = interPlaneTimeOffsetSeconds * planeIdx;
+        const double planeTimeOffset = cfg.interPlaneTimeOffsetSeconds * planeIdx;
 
         for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
         {
@@ -1168,12 +1009,12 @@ main(int argc, char* argv[])
             auto rrc = dev->GetRrc();
 
             const double overpassTime =
-                alignmentReferenceTimeSeconds +
-                (static_cast<double>(slotIdx) - planeCenterIndex) * overpassGapSeconds +
-                overpassTimeOffsetSeconds + planeTimeOffset;
+                cfg.alignmentReferenceTimeSeconds +
+                (static_cast<double>(slotIdx) - planeCenterIndex) * cfg.overpassGapSeconds +
+                cfg.overpassTimeOffsetSeconds + planeTimeOffset;
             LeoOrbitCalculator::KeplerElements orbit;
             orbit.semiMajorAxisMeters = semiMajorAxisMeters;
-            orbit.eccentricity = orbitEccentricity;
+            orbit.eccentricity = cfg.orbitEccentricity;
             orbit.inclinationRad = inclinationRad;
             orbit.raanRad = planeRaanRad;
             orbit.argPerigeeRad = argPerigeeRad;
@@ -1184,7 +1025,7 @@ main(int argc, char* argv[])
                                                                  orbit,
                                                                  g_gmstAtEpochRad,
                                                                  g_ueGroundPoint,
-                                                                 centralFrequency,
+                                                                 cfg.centralFrequency,
                                                                  g_minElevationRad);
             gNbNodes.Get(globalSatIdx)->GetObject<MobilityModel>()->SetPosition(initState.ecef);
 
@@ -1210,17 +1051,17 @@ main(int argc, char* argv[])
             g_cellToSatellite[dev->GetCellId()] = globalSatIdx;
             g_satellites.push_back(sat);
 
-            if (startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
+            if (cfg.startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
                 UpdateSatelliteAnchorFromGrid(globalSatIdx, initState.ecef, 0.0, true);
             }
 
             std::cout << "[Setup] sat" << globalSatIdx << " plane=" << planeIdx << " slot=" << slotIdx
                       << " cell=" << dev->GetCellId();
-            if (startupVerbose)
+            if (cfg.startupVerbose)
             {
                 std::cout << " nu0=" << LeoOrbitCalculator::RadToDeg(orbit.trueAnomalyAtEpochRad) << "deg"
-                          << " i=" << orbitInclinationDeg << "deg"
+                          << " i=" << cfg.orbitInclinationDeg << "deg"
                           << " RAAN=" << planeRaanDeg << "deg";
                 if (g_useWgs84HexGrid && g_satellites[globalSatIdx].currentAnchorGridId != 0)
                 {
@@ -1229,27 +1070,6 @@ main(int argc, char* argv[])
             }
             std::cout << std::endl;
         }
-    }
-
-    // ------------------------------
-    // 6. 切换算法与核心网初始化
-    // ------------------------------
-    // 手动将 A3 算法挂接到每个 gNB RRC
-    g_hoAlgos.clear();
-    g_hoAlgos.reserve(gNbNetDev.GetN());
-    for (uint32_t i = 0; i < gNbNetDev.GetN(); ++i)
-    {
-        auto gnbDev = DynamicCast<NrGnbNetDevice>(gNbNetDev.Get(i));
-        auto rrc = gnbDev->GetRrc();
-
-        Ptr<NrA3RsrpHandoverAlgorithm> ho = CreateObject<NrA3RsrpHandoverAlgorithm>();
-        ho->SetAttribute("Hysteresis", DoubleValue(hoHysteresisDb));
-        ho->SetAttribute("TimeToTrigger", TimeValue(MilliSeconds(hoTttMs)));
-
-        rrc->SetNrHandoverManagementSapProvider(ho->GetNrHandoverManagementSapProvider());
-        ho->SetNrHandoverManagementSapUser(rrc->GetNrHandoverManagementSapUser());
-        ho->Initialize();
-        g_hoAlgos.push_back(ho);
     }
 
     auto remoteHostWithAddr = nrEpcHelper->SetupRemoteHost("100Gb/s", 2500, Seconds(0.0));
@@ -1262,14 +1082,14 @@ main(int argc, char* argv[])
     Ipv4StaticRoutingHelper routingHelper;
 
     g_ues.clear();
-    g_ues.reserve(ueNum);
+    g_ues.reserve(cfg.ueNum);
     g_imsiToUe.clear();
 
     // ------------------------------
     // 7. UE 初始接入、业务安装与预测切换
     // ------------------------------
     // 为每个 UE 单独选择初始服务星、业务端口和预测切换目标。
-    for (uint32_t ueIdx = 0; ueIdx < ueNum; ++ueIdx)
+    for (uint32_t ueIdx = 0; ueIdx < cfg.ueNum; ++ueIdx)
     {
         UeRuntime ue;
         ue.node = ueNodes.Get(ueIdx);
@@ -1292,7 +1112,7 @@ main(int argc, char* argv[])
                                                              g_satellites[satIdx].orbit,
                                                              g_gmstAtEpochRad,
                                                              ue.groundPoint,
-                                                             centralFrequency,
+                                                             cfg.centralFrequency,
                                                              g_minElevationRad);
             const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
                                                               ue.groundPoint.ecef,
@@ -1339,13 +1159,13 @@ main(int argc, char* argv[])
         ue.expectedSourceIndex = initialAttachIdx;
         ue.expectedTargetIndex = initialAttachIdx;
         const double predictionStepSeconds =
-            std::max(0.01, std::min(0.1, static_cast<double>(updateIntervalMs) / 1000.0));
+            std::max(0.01, std::min(0.1, cfg.updateIntervalMs / 1000.0));
         // 用离线代理提前估计第一次切换时刻，便于与真实仿真结果对照。
         const auto predicted = PredictFirstHandoverA3Proxy(initialAttachIdx,
-                                                           simTime,
+                                                           cfg.simTime,
                                                            predictionStepSeconds,
-                                                           hoHysteresisDb,
-                                                           static_cast<double>(hoTttMs) / 1000.0,
+                                                           cfg.hoHysteresisDb,
+                                                           static_cast<double>(cfg.hoTttMs) / 1000.0,
                                                            ue.groundPoint);
         if (predicted.has_value())
         {
@@ -1366,9 +1186,9 @@ main(int argc, char* argv[])
         ApplicationContainer serverApps = ueUdpServer.Install(ueNodes.Get(ueIdx));
 
         UdpClientHelper dlClient(ueIpIface.GetAddress(ueIdx), dlPort);
-        dlClient.SetAttribute("PacketSize", UintegerValue(udpPacketSize));
+        dlClient.SetAttribute("PacketSize", UintegerValue(cfg.udpPacketSize));
         dlClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-        dlClient.SetAttribute("Interval", TimeValue(Seconds(1.0 / lambda)));
+        dlClient.SetAttribute("Interval", TimeValue(Seconds(1.0 / cfg.lambda)));
         ApplicationContainer clientApps = dlClient.Install(remoteHost);
 
         // 为每个 UE 建立独立的专用承载，确保业务流和切换统计可区分。
@@ -1380,10 +1200,10 @@ main(int argc, char* argv[])
         tft->Add(dlpf);
         nrHelper->ActivateDedicatedEpsBearer(ueNetDev.Get(ueIdx), bearer, tft);
 
-        serverApps.Start(Seconds(appStartTime));
-        clientApps.Start(Seconds(appStartTime));
-        serverApps.Stop(Seconds(simTime));
-        clientApps.Stop(Seconds(simTime));
+        serverApps.Start(Seconds(cfg.appStartTime));
+        clientApps.Start(Seconds(cfg.appStartTime));
+        serverApps.Stop(Seconds(cfg.simTime));
+        clientApps.Stop(Seconds(cfg.simTime));
 
         ue.server = serverApps.Get(0)->GetObject<UdpServer>();
         if (ue.dev)
@@ -1396,37 +1216,17 @@ main(int argc, char* argv[])
     // ------------------------------
     // 8. 运行时复位、回调注册与周期事件调度
     // ------------------------------
-    ResetRuntimeState(gNbNum);
+    ResetRuntimeState(cfg.gNbNum);
     if (g_satBeamTrace.is_open())
     {
         g_satBeamTrace.close();
     }
-    g_satBeamTrace.open(attenuationInputPath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(), "Failed to open beam trace CSV: " << attenuationInputPath);
+    g_satBeamTrace.open(cfg.attenuationInputPath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(),
+                    "Failed to open beam trace CSV: " << cfg.attenuationInputPath);
     g_satBeamTrace
         << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm,"
         << "attached_ue_count,offered_packet_rate,load_score,admission_allowed\n";
-
-    g_gnbRrcs.clear();
-    for (const auto& sat : g_satellites)
-    {
-        g_gnbRrcs.push_back(sat.rrc);
-    }
-    if (g_strictNrtGuard)
-    {
-        if (g_useCustomA3Executor)
-        {
-            for (const auto& rrc : g_gnbRrcs)
-            {
-                rrc->SetNrHandoverManagementSapProvider(nullptr);
-            }
-            g_a3GateServingSat = std::numeric_limits<uint32_t>::max();
-        }
-        else
-        {
-            ApplyA3Gate(std::numeric_limits<uint32_t>::max(), false);
-        }
-    }
 
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverStart",
                     MakeCallback(&ReportHandoverStart));
@@ -1439,14 +1239,13 @@ main(int argc, char* argv[])
     for (auto& ue : g_ues)
     {
         ue.lastRxPackets = 0;
-        ue.lastThroughputTime = Seconds(appStartTime);
     }
-    if (throughputReportIntervalSeconds > 0.0)
+    if (cfg.throughputReportIntervalSeconds > 0.0)
     {
-        Simulator::Schedule(Seconds(appStartTime + throughputReportIntervalSeconds),
+        Simulator::Schedule(Seconds(cfg.appStartTime + cfg.throughputReportIntervalSeconds),
                             &PrintDlThroughput,
-                            udpPacketSize,
-                            Seconds(throughputReportIntervalSeconds));
+                            cfg.udpPacketSize,
+                            Seconds(cfg.throughputReportIntervalSeconds));
     }
 
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
@@ -1473,11 +1272,11 @@ main(int argc, char* argv[])
     // `UpdateConstellation` 是整个场景的时变主循环。
     Simulator::Schedule(Seconds(0.0),
                         &UpdateConstellation,
-                        MilliSeconds(updateIntervalMs),
-                        Seconds(simTime));
+                        MilliSeconds(cfg.updateIntervalMs),
+                        Seconds(cfg.simTime));
     if (g_printSimulationProgress)
     {
-        Simulator::Schedule(Seconds(std::min(g_progressReportIntervalSeconds, simTime)),
+        Simulator::Schedule(Seconds(std::min(g_progressReportIntervalSeconds, cfg.simTime)),
                             &PrintSimulationProgress,
                             Seconds(g_progressReportIntervalSeconds));
     }
@@ -1485,11 +1284,11 @@ main(int argc, char* argv[])
     // ------------------------------
     // 9. 仿真运行与结果输出
     // ------------------------------
-    Simulator::Stop(Seconds(simTime));
+    Simulator::Stop(Seconds(cfg.simTime));
     Simulator::Run();
 
-    const double appDuration = std::max(0.0, simTime - appStartTime);
-    PrintDlTrafficSummary(g_ues, appDuration, udpPacketSize);
+    const double appDuration = std::max(0.0, cfg.simTime - cfg.appStartTime);
+    PrintDlTrafficSummary(g_ues, appDuration, cfg.udpPacketSize);
     PrintHandoverSummary(g_ues);
 
     if (g_satBeamTrace.is_open())
@@ -1497,15 +1296,15 @@ main(int argc, char* argv[])
         g_satBeamTrace.close();
     }
 
-    if (runAttenuationScript)
+    if (cfg.runAttenuationScript)
     {
         std::remove(attenuationSummaryOutputPath.c_str());
         std::remove(attenuationTimeMatrixOutputPath.c_str());
         // 交给外部 Python 脚本生成逐时刻衰减明细 CSV。
         std::ostringstream cmdline;
-        cmdline << "python3 \"" << attenuationScriptPath << "\""
-                << " --input \"" << attenuationInputPath << "\""
-                << " --per-time-out \"" << attenuationPerTimePath << "\"";
+        cmdline << "python3 \"" << cfg.attenuationScriptPath << "\""
+                << " --input \"" << cfg.attenuationInputPath << "\""
+                << " --per-time-out \"" << cfg.attenuationPerTimePath << "\"";
         const int scriptRc = std::system(cmdline.str().c_str());
         if (scriptRc == 0)
         {

@@ -141,9 +141,6 @@ struct UeRuntime
     /** 上一次吞吐统计时看到的累计收包数。 */
     uint64_t lastRxPackets = 0;
 
-    /** 上一次吞吐统计的时间戳。 */
-    Time lastThroughputTime = Seconds(0.0);
-
     /** 已观察到的切换开始次数。 */
     uint32_t handoverStartCount = 0;
 
@@ -223,7 +220,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastServingCellForLog = 0;
     ue.lastKpiReportTime = -1.0;
     ue.lastRxPackets = 0;
-    ue.lastThroughputTime = Seconds(0.0);
     ue.seenExpectedHandover = false;
     ue.hasPendingHoStart = false;
     ue.lastHoStartSourceCell = 0;
