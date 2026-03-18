@@ -28,12 +28,12 @@ struct BaselineSimulationConfig
     uint32_t ueNum = 25;
     std::string ueLayoutType = "hotspot-boundary";
     double ueSpacingMeters = 40000.0;
-    double ueHotspotSpacingMeters = 8000.0;
-    double ueBoundarySpacingMeters = 12000.0;
-    double ueBoundaryOffsetMeters = 5000.0;
-    double ueBackgroundRadiusXMeters = 40000.0;
-    double ueBackgroundRadiusYMeters = 30000.0;
-    double ueHotspotCenterOffsetXMeters = -12000.0;
+    double ueHotspotSpacingMeters = 5000.0;
+    double ueBoundarySpacingMeters = 8000.0;
+    double ueBoundaryOffsetMeters = 2500.0;
+    double ueBackgroundRadiusXMeters = 20000.0;
+    double ueBackgroundRadiusYMeters = 15000.0;
+    double ueHotspotCenterOffsetXMeters = -6000.0;
     double ueHotspotCenterOffsetYMeters = 0.0;
 
     double satAltitudeMeters = 600000.0;
@@ -42,14 +42,14 @@ struct BaselineSimulationConfig
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
     uint32_t orbitPlaneCount = 2;
-    double interPlaneRaanSpacingDeg = 6.0;
-    double interPlaneTimeOffsetSeconds = 1.0;
+    double interPlaneRaanSpacingDeg = 3.0;
+    double interPlaneTimeOffsetSeconds = 0.3;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
     double alignmentReferenceTimeSeconds = 20.0;
-    double overpassGapSeconds = 4.0;
+    double overpassGapSeconds = 2.0;
     double overpassTimeOffsetSeconds = 0.0;
     double updateIntervalMs = 100.0;
     double minElevationDeg = 10.0;
@@ -93,9 +93,9 @@ struct BaselineSimulationConfig
     double atmLossDb = 0.5;
     double beamDropPenaltyDb = 200.0;
 
-    double hoHysteresisDb = 0.2;
-    uint32_t hoTttMs = 1200;
-    bool strictNrtGuard = true;
+    double hoHysteresisDb = 0.3;
+    uint32_t hoTttMs = 100;
+    bool strictNrtGuard = false;
     double strictNrtMarginDb = -1.0;
     bool compactReport = true;
     bool printGridAnchorEvents = false;

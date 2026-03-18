@@ -52,7 +52,8 @@ struct UeObservationSnapshot
     uint32_t bestNeighbourIdx = std::numeric_limits<uint32_t>::max();
     double bestNeighbourRsrp = -std::numeric_limits<double>::infinity();
     bool servingUsable = false;
-    bool neighbourQualified = false;
+    bool a3Qualified = false;
+    bool strictNrtQualified = false;
 };
 
 inline UeObservationSnapshot

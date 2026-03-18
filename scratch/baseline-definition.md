@@ -10,7 +10,7 @@
 ## baseline 定义
 当前建议将 baseline 定义为：
 
-> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 `A3` 风格切换基线；UE 使用 `hotspot-boundary`（热点增加 + 边界增强）二维部署，决策仅依赖 `RSRP`、`hysteresis`、`TTT` 和邻区可达性约束，不引入负载感知、预测优化或学习型决策。
+> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 `A3` 风格切换基线；UE 使用 `hotspot-boundary`（热点增加 + 边界增强）二维部署，决策仅依赖 `RSRP`、`hysteresis`、`TTT` 以及基本的可见性/波束锁定约束，不引入严格邻区守卫、负载感知、预测优化或学习型决策。
 
 这一定义强调三件事：
 - 场景边界固定
@@ -23,19 +23,19 @@
 - `orbitPlaneCount = 2`
 - `ueNum = 25`
 - `ueLayoutType = hotspot-boundary`
-- `ueHotspotSpacingMeters = 8000`
-- `ueBoundarySpacingMeters = 12000`
-- `ueBoundaryOffsetMeters = 5000`
-- `ueHotspotCenterOffsetXMeters = -12000`
+- `ueHotspotSpacingMeters = 5000`
+- `ueBoundarySpacingMeters = 8000`
+- `ueBoundaryOffsetMeters = 2500`
+- `ueHotspotCenterOffsetXMeters = -6000`
 - `ueHotspotCenterOffsetYMeters = 0`
-- `ueBackgroundRadiusXMeters = 40000`
-- `ueBackgroundRadiusYMeters = 30000`
+- `ueBackgroundRadiusXMeters = 20000`
+- `ueBackgroundRadiusYMeters = 15000`
 - `satAltitudeMeters = 600000`
 - `orbitInclinationDeg = 53`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`6`
-- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`1`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`3`
+- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`0.3`
 - `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20`
-- `overpassGapSeconds`（同轨过境间隔）=`4`
+- `overpassGapSeconds`（同轨过境间隔）=`2`
 
 运行与切换：
 - `simTime`（仿真时长）=`40 s`
@@ -44,21 +44,25 @@
 - `minElevationDeg`（最小仰角）=`10`
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
 - `bandwidth = 40 MHz`
-- `hoHysteresisDb`（切换迟滞门限）=`0.2 dB`
-- `hoTttMs`（切换触发时间）=`1200 ms`
-- `strictNrtGuard = true`
+- `hoHysteresisDb`（切换迟滞门限）=`0.3 dB`
+- `hoTttMs`（切换触发时间）=`100 ms`
+- `strictNrtGuard = false`
 - `strictNrtMarginDb = hoHysteresisDb`
 - `useWgs84HexGrid = true`
 
 说明：
 - 这套参数代表当前 `3.2.0` 的默认 baseline 口径，不代表最优参数
-- 当前先不通过继续扩星来放大现象，而是优先利用二维热点区、边界条带和外围背景区增强竞争
+- 当前先不通过继续扩星来放大现象，而是优先通过更紧的双轨重叠和更密集的二维热点区、边界条带与背景区增强竞争
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
-- 判决主线为：`RSRP` 比较、`hysteresis`、`TTT`、严格邻区可达性约束
+- 判决主线为：`RSRP` 比较、`hysteresis`、`TTT`、基本可见性/波束锁定约束
 - 当前多 UE 场景使用自定义执行器来复现 `A3` 触发语义
 - 只要决策依据不包含负载权重，这条路径仍属于 baseline
+
+说明：
+- `strictNrtGuard`（严格邻区表守卫）继续保留在平台中，但不再作为 baseline 默认项
+- 后续若启用 `strictNrtGuard`，应将其视为对 baseline 的增强机制，而不是 baseline 本体
 
 ## baseline 验证清单
 建议把验证分成三层，而不是只看“能不能跑”。

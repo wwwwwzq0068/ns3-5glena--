@@ -12,7 +12,7 @@
 - 三维轨道更新与 `ECI -> ECEF`
 - `Earth-fixed` 地面六边形网格锚点
 - `25 UE` 的 `hotspot-boundary` 二维部署
-- `strict NRT guard`
+- 基本可见性与 `beam lock`
 - 自定义 `A3` 风格判决
 - `RRC TriggerHandover`
 - 切换统计与结果输出
@@ -43,7 +43,7 @@ sequenceDiagram
     rect rgb(250,250,235)
         Note over RT,SRC: 阶段 2：候选邻区筛选与 baseline 判决
         RT->>RT: 根据可见性与 beam lock 判定候选星
-        RT->>RT: strict NRT guard 过滤无效邻区
+        RT->>RT: 基于可见性与 beam lock 过滤无效邻区
         RT->>SRC: 动态维护 activeNeighbours
         alt 目标星优于服务星且满足 Hysteresis
             loop 持续满足 TTT
@@ -97,10 +97,12 @@ flowchart TD
     B --> C[Earth-fixed 网格锚点更新<br/>Hex Grid Anchor]
     C --> D[链路预算计算<br/>RSRP / Beam Lock / Visibility]
 
-    D --> E[候选星集合构建<br/>strict NRT guard]
+    D --> E[候选星集合构建<br/>Visibility + Beam Lock]
     E --> F[当前 baseline<br/>A3-style: RSRP + Hys + TTT]
+    E --> H0[可选增强<br/>strict NRT guard]
 
     D --> G[负载状态统计<br/>attachedUeCount / offeredPacketRate / loadScore]
+    H0 --> H
     G --> H[联合评估模块<br/>Signal + Load Utility]
 
     F --> I[当前切换执行器<br/>TriggerHandover]
@@ -123,7 +125,7 @@ flowchart TD
 
 讲图 1 时：
 - 强调这张图对应当前平台的真实实现，而不是照搬地面蜂窝流程
-- 突出三维轨道、`Earth-fixed` 网格、`strict NRT guard` 和自定义 `A3` 执行链
+- 突出三维轨道、`Earth-fixed` 网格、基础 `A3` 执行链，以及当前 baseline 与增强机制的边界
 
 讲图 2 时：
 - 强调这是下一阶段接入路径，不要讲成“已经完成”

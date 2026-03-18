@@ -104,13 +104,14 @@ static double g_progressStopTimeSeconds = 0.0;
 static double g_offeredPacketRatePerUe = 1000.0;
 static double g_maxSupportedUesPerSatellite = 3.0;
 static double g_loadCongestionThreshold = 0.8;
+static double g_hoHysteresisDb = 0.3;
 
 // 严格邻区守卫：只有满足可见、波束锁定和门限条件的邻区才会被激活。
-static bool g_strictNrtGuard = true;
-static double g_strictNrtMarginDb = 0.2;
+static bool g_strictNrtGuard = false;
+static double g_strictNrtMarginDb = 0.3;
 
 // 当前 baseline 固定使用自定义 A3 风格执行器。
-static double g_manualHoTttSeconds = 1.2;
+static double g_manualHoTttSeconds = 0.1;
 
 // 逐时刻卫星链路预算导出文件。
 static std::ofstream g_satBeamTrace;
@@ -455,7 +456,7 @@ ExecuteCustomA3Handover(UeRuntime& ue,
                         uint32_t ueIdx,
                         uint32_t servingSatIdx,
                         uint32_t bestNeighbourIdx,
-                        bool neighbourQualified,
+                        bool a3Qualified,
                         double nowSeconds)
 {
     if (servingSatIdx >= g_satellites.size())
@@ -470,7 +471,7 @@ ExecuteCustomA3Handover(UeRuntime& ue,
         ue.manualHoCandidateSince = -1.0;
     }
 
-    if (!neighbourQualified || bestNeighbourIdx == std::numeric_limits<uint32_t>::max())
+    if (!a3Qualified || bestNeighbourIdx == std::numeric_limits<uint32_t>::max())
     {
         ue.manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
         ue.manualHoCandidateSince = -1.0;
@@ -596,20 +597,22 @@ UpdateConstellation(Time interval, Time stopTime)
 
         if (observation.servingSatIdx != std::numeric_limits<uint32_t>::max())
         {
-            observation.neighbourQualified =
+            observation.a3Qualified =
+                (observation.bestNeighbourIdx != std::numeric_limits<uint32_t>::max()) &&
+                ((!observation.servingUsable) ||
+                 (observation.bestNeighbourRsrp >
+                  observation.beamBudgets[observation.servingSatIdx].rsrpDbm + g_hoHysteresisDb));
+            observation.strictNrtQualified =
                 (observation.bestNeighbourIdx != std::numeric_limits<uint32_t>::max()) &&
                 ((!observation.servingUsable) ||
                  (observation.bestNeighbourRsrp >
                   observation.beamBudgets[observation.servingSatIdx].rsrpDbm + g_strictNrtMarginDb));
-            if (g_strictNrtGuard)
-            {
-                ExecuteCustomA3Handover(ue,
-                                        ueIdx,
-                                        observation.servingSatIdx,
-                                        observation.bestNeighbourIdx,
-                                        observation.neighbourQualified,
-                                        nowSeconds);
-            }
+            ExecuteCustomA3Handover(ue,
+                                    ueIdx,
+                                    observation.servingSatIdx,
+                                    observation.bestNeighbourIdx,
+                                    observation.a3Qualified,
+                                    nowSeconds);
 
             for (uint32_t j = 0; j < g_satellites.size(); ++j)
             {
@@ -622,7 +625,7 @@ UpdateConstellation(Time interval, Time stopTime)
                     observation.states[j].visible && observation.beamBudgets[j].beamLocked;
                 if (g_strictNrtGuard)
                 {
-                    shouldBeActive = shouldBeActive && observation.neighbourQualified &&
+                    shouldBeActive = shouldBeActive && observation.strictNrtQualified &&
                                      (j == observation.bestNeighbourIdx);
                 }
                 if (shouldBeActive)
@@ -684,6 +687,7 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_offeredPacketRatePerUe = config.lambda;
     g_maxSupportedUesPerSatellite = config.maxSupportedUesPerSatellite;
     g_loadCongestionThreshold = config.loadCongestionThreshold;
+    g_hoHysteresisDb = config.hoHysteresisDb;
     g_strictNrtGuard = config.strictNrtGuard;
     g_strictNrtMarginDb = config.strictNrtMarginDb;
     g_manualHoTttSeconds = static_cast<double>(config.hoTttMs) / 1000.0;
@@ -811,12 +815,11 @@ main(int argc, char* argv[])
         std::cout << " spacing=" << cfg.ueSpacingMeters / 1000.0 << "km";
     }
     std::cout << std::endl;
-    std::cout << "[NRT] strict=" << (g_strictNrtGuard ? "ON" : "OFF")
-              << " margin=" << g_strictNrtMarginDb << "dB";
-    if (g_strictNrtGuard)
-    {
-        std::cout << " a3=custom(ttt=" << g_manualHoTttSeconds << "s)";
-    }
+    std::cout << "[Handover] a3=custom"
+              << " hysteresis=" << g_hoHysteresisDb << "dB"
+              << " ttt=" << g_manualHoTttSeconds << "s"
+              << " strictNrtGuard=" << (g_strictNrtGuard ? "ON" : "OFF")
+              << " strictNrtMargin=" << g_strictNrtMarginDb << "dB";
     std::cout << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
 

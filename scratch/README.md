@@ -10,6 +10,7 @@
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
 - 当前 `3.2.0` 的默认研究场景是：`2x4` 双轨、`25 UE`、`hotspot-boundary` 二维部署
 - 当前默认目标不是继续扩星，而是把该场景作为传统 `A3 baseline` 的缺陷暴露平台
+- `strictNrtGuard`（严格邻区表守卫）不再计入 baseline 默认定义，转入后续增强策略侧
 - 当前改进方向是后续“信号质量 + 卫星负载”联合感知切换策略
 
 ## 当前默认口径
@@ -18,7 +19,7 @@
 - 轨道面数：`2`
 - UE 数：`25`
 - UE 主布局：`hotspot-boundary`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`6 deg`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`3 deg`
 - `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20 s`
 - `simTime`（仿真时长）=`40 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
@@ -26,14 +27,25 @@
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
-- 判决依据保持为 `RSRP + hysteresis + TTT + strict NRT guard`
+- 判决依据保持为 `RSRP + hysteresis + TTT + 基本可见性/beam lock`
+- `strictNrtGuard`（严格邻区表守卫）保留为可选增强开关，不作为 baseline 默认条件
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
+
+当前默认 UE 紧凑度：
+- `ueHotspotSpacingMeters`（热点间距）=`5000`
+- `ueBoundarySpacingMeters`（边界条带间距）=`8000`
+- `ueBoundaryOffsetMeters`（跨边界横向偏移）=`2500`
+- `ueHotspotCenterOffsetXMeters`（热点中心 X 偏移）=`-6000`
+- `ueBackgroundRadiusXMeters`（背景区 X 半径）=`20000`
+- `ueBackgroundRadiusYMeters`（背景区 Y 半径）=`15000`
 
 ## 文档分工
 - `docs/research-context.md`
   - 研究范围、目标、评估指标和稳定上下文
 - `docs/current-task-memory.md`
   - 当前稳定节点、默认口径、已确认实现和近期工作边界
+- `docs/joint-handover-strategy.md`
+  - 后续“信号质量 + 卫星负载”联合策略的设计说明、变量映射与数学表达
 - `docs/research-workflow.md`
   - 版本、分支、提交和结果管理规则
 - `scratch/baseline-definition.md`
@@ -189,12 +201,6 @@
   - 默认将 `interPlaneRaanSpacingDeg`（轨道面 `RAAN` 间隔）从 `8 deg` 下调到 `6 deg`
   - 当前这一步只增强跨轨空间重叠，不改 `simTime`、`hoTttMs`、`hoHysteresisDb`
 
-### `3.2.0`
-- 当前稳定节点收口
-  - 将当前研究仓库稳定节点提升为 `3.2.0`
-  - 收口 `docs/`、`scratch/` 和 `midterm-report/` 的版本与 baseline 口径
-  - 保留版本演进历史，同时重组 README 结构，减少文档冗余
-
 ### `3.1.3`
 - 默认口径收口
   - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局
@@ -212,3 +218,17 @@
   - 将卫星公共轨道状态统一为一次计算，`UE` 侧观测改为基于公共 `ECEF/速度` 派生
   - 将 `lockCellAnchorToUe` 和 `lockGridCenterToUe` 的派生逻辑收口到配置层
   - `main()` 改为直接消费 `BaselineSimulationConfig`
+
+### `3.2.0`
+- 当前稳定节点收口
+  - 将当前研究仓库稳定节点提升为 `3.2.0`
+  - 收口 `docs/`、`scratch/` 和 `midterm-report/` 的版本与 baseline 口径
+  - 保留版本演进历史，同时重组 README 结构，减少文档冗余
+
+### `3.2.1`
+- 候选场景调优
+  - 在不改变 `simTime`（仿真时长）的前提下，将 `interPlaneRaanSpacingDeg` 下调到 `3 deg`
+  - 将 `interPlaneTimeOffsetSeconds` 下调到 `0.3 s`
+  - 将 `overpassGapSeconds` 下调到 `2 s`
+  - 将 `hotspot-boundary` 布局整体压紧，使更多 UE 落在竞争边界附近
+  - 当前这一步优先增强几何交叉与边界竞争，不引入新的决策逻辑
