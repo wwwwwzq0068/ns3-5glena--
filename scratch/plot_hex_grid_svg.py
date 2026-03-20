@@ -13,7 +13,7 @@ import csv
 import math
 from pathlib import Path
 from statistics import median
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def _parse_bool(value: str) -> bool:
@@ -46,6 +46,26 @@ def load_cells(csv_path: Path) -> List[Dict[str, float]]:
     if not cells:
         raise ValueError("CSV has no rows")
     return cells
+
+
+def load_ues(csv_path: Path) -> List[Dict[str, float | str | int]]:
+    ues: List[Dict[str, float | str | int]] = []
+    with csv_path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        required = {"ue_id", "role", "east_m", "north_m"}
+        missing = required.difference(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"missing required UE columns: {sorted(missing)}")
+        for row in reader:
+            ues.append(
+                {
+                    "ue_id": int(row["ue_id"]),
+                    "role": row["role"].strip(),
+                    "east_m": float(row["east_m"]),
+                    "north_m": float(row["north_m"]),
+                }
+            )
+    return ues
 
 
 def infer_hex_radius_m(cells: List[Dict[str, float]]) -> float:
@@ -90,6 +110,10 @@ def render_svg(
     label_step: int,
     show_centers: bool,
     title: str,
+    ue_points: Optional[List[Dict[str, float | str | int]]] = None,
+    ue_label_prefix: str = "UE",
+    ue_show_labels: bool = True,
+    subtitle: str = "",
 ) -> None:
     east_vals = [c["east_m"] for c in cells]
     north_vals = [c["north_m"] for c in cells]
@@ -125,6 +149,11 @@ def render_svg(
         f'<text x="{margin}" y="{margin - 12}" font-size="16" fill="#111111" '
         f'font-family="monospace">{title}</text>'
     )
+    if subtitle:
+        lines.append(
+            f'<text x="{margin}" y="{margin + 10}" font-size="12" fill="#444444" '
+            f'font-family="monospace">{subtitle}</text>'
+        )
 
     for i, c in enumerate(cells):
         poly = hex_vertices(c["east_m"], c["north_m"], radius_m)
@@ -139,6 +168,41 @@ def render_svg(
                 f'<text x="{cx + 3:.2f}" y="{cy - 3:.2f}" font-size="9" fill="#0a1f44" '
                 f'font-family="monospace">{int(c["id"])}</text>'
             )
+
+    if ue_points:
+        role_colors = {
+            "center": "#d94841",
+            "ring": "#2b8a3e",
+            "hotspot": "#d94841",
+            "boundary": "#f59f00",
+            "background": "#2b8a3e",
+            "line": "#5f3dc4",
+        }
+        legend_x = width - margin - 154
+        legend_y = margin + 22
+        seen_roles: List[str] = []
+        for ue in ue_points:
+            role = str(ue["role"])
+            fill = role_colors.get(role, "#c2255c")
+            cx, cy = map_xy(float(ue["east_m"]), float(ue["north_m"]))
+            lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="4.8" fill="{fill}" stroke="#111" stroke-width="0.7"/>')
+            if ue_show_labels:
+                lines.append(
+                    f'<text x="{cx + 6:.2f}" y="{cy - 6:.2f}" font-size="10" fill="#111" '
+                    f'font-family="monospace">{ue_label_prefix}{int(ue["ue_id"])}</text>'
+                )
+            if role not in seen_roles:
+                seen_roles.append(role)
+
+        if seen_roles:
+            for idx, role in enumerate(seen_roles):
+                fill = role_colors.get(role, "#c2255c")
+                ly = legend_y + idx * 22
+                lines.append(f'<circle cx="{legend_x:.2f}" cy="{ly:.2f}" r="4.8" fill="{fill}" stroke="#111" stroke-width="0.7"/>')
+                lines.append(
+                    f'<text x="{legend_x + 14:.2f}" y="{ly + 4:.2f}" font-size="11" fill="#111" '
+                    f'font-family="monospace">{role}</text>'
+                )
 
     lines.append("</svg>")
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -155,10 +219,15 @@ def main() -> None:
     p.add_argument("--label-step", type=int, default=1, help="Show one label every N cells")
     p.add_argument("--show-centers", type=_parse_bool, default=True)
     p.add_argument("--title", default="WGS84 Hex Grid")
+    p.add_argument("--subtitle", default="")
+    p.add_argument("--ue-csv", type=Path, help="Optional UE layout CSV to overlay")
+    p.add_argument("--ue-show-labels", type=_parse_bool, default=True)
+    p.add_argument("--ue-label-prefix", default="UE")
     args = p.parse_args()
 
     out = args.out if args.out else args.csv.with_suffix(".svg")
     cells = load_cells(args.csv)
+    ues = load_ues(args.ue_csv) if args.ue_csv else None
     render_svg(
         cells=cells,
         out_path=out,
@@ -169,9 +238,15 @@ def main() -> None:
         label_step=max(1, args.label_step),
         show_centers=args.show_centers,
         title=args.title,
+        ue_points=ues,
+        ue_label_prefix=args.ue_label_prefix,
+        ue_show_labels=args.ue_show_labels,
+        subtitle=args.subtitle,
     )
     print(f"[OK] wrote: {out}")
     print(f"[INFO] cells: {len(cells)}")
+    if ues is not None:
+        print(f"[INFO] UEs: {len(ues)}")
 
 
 if __name__ == "__main__":

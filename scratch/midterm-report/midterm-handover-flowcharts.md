@@ -11,7 +11,8 @@
 图 1 对应当前平台的真实实现，突出以下内容：
 - 三维轨道更新与 `ECI -> ECEF`
 - `Earth-fixed` 地面六边形网格锚点
-- `25 UE` 的 `hotspot-boundary` 二维部署
+- `25 UE` 的 `seven-cell` 二维部署
+- `UE` 局部偏移模板到 `WGS84/ECEF` 的统一位置生成
 - 基本可见性与 `beam lock`
 - 自定义 `A3` 风格判决
 - `RRC TriggerHandover`
@@ -35,6 +36,7 @@ sequenceDiagram
         RT->>RT: ECI -> ECEF 转换，引入地球自转
         RT->>SRC: 更新服务卫星位置
         RT->>TGT: 更新候选卫星位置
+        RT->>RT: 根据 UE 偏移模板生成地面位置
         RT->>RT: 计算 slant range / elevation / azimuth / Doppler
         RT->>RT: 更新 Earth-fixed 六边形网格锚点
         RT->>RT: 计算每颗卫星对 UE 的 beam budget / RSRP

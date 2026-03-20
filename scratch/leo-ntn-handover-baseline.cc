@@ -799,16 +799,12 @@ main(int argc, char* argv[])
               << " raanSpacing=" << cfg.interPlaneRaanSpacingDeg << "deg"
               << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s" << std::endl;
     std::cout << "[UE-Layout] type=" << cfg.ueLayoutType;
-    if (cfg.ueLayoutType == "hotspot-boundary")
+    if (cfg.ueLayoutType == "seven-cell")
     {
-        std::cout << " groups=hotspot(9)+boundary(10)+background(6)"
-                  << " hotspotSpacing=" << cfg.ueHotspotSpacingMeters / 1000.0 << "km"
-                  << " boundarySpacing=" << cfg.ueBoundarySpacingMeters / 1000.0 << "km"
-                  << " boundaryOffset=" << cfg.ueBoundaryOffsetMeters / 1000.0 << "km"
-                  << " hotspotCenter=(" << cfg.ueHotspotCenterOffsetXMeters / 1000.0 << "kmE,"
-                  << cfg.ueHotspotCenterOffsetYMeters / 1000.0 << "kmN)"
-                  << " backgroundRadius=(" << cfg.ueBackgroundRadiusXMeters / 1000.0 << "km,"
-                  << cfg.ueBackgroundRadiusYMeters / 1000.0 << "km)";
+        std::cout << " groups=center(9)+ring(16 across 6 cells)"
+                  << " hexRadius=" << cfg.hexCellRadiusKm << "km"
+                  << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
+                  << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km";
     }
     else
     {
@@ -954,13 +950,9 @@ main(int argc, char* argv[])
     UeLayoutConfig ueLayout;
     ueLayout.layoutType = cfg.ueLayoutType;
     ueLayout.lineSpacingMeters = cfg.ueSpacingMeters;
-    ueLayout.hotspotSpacingMeters = cfg.ueHotspotSpacingMeters;
-    ueLayout.boundarySpacingMeters = cfg.ueBoundarySpacingMeters;
-    ueLayout.boundaryOffsetMeters = cfg.ueBoundaryOffsetMeters;
-    ueLayout.backgroundRadiusXMeters = cfg.ueBackgroundRadiusXMeters;
-    ueLayout.backgroundRadiusYMeters = cfg.ueBackgroundRadiusYMeters;
-    ueLayout.hotspotCenterOffsetXMeters = cfg.ueHotspotCenterOffsetXMeters;
-    ueLayout.hotspotCenterOffsetYMeters = cfg.ueHotspotCenterOffsetYMeters;
+    ueLayout.hexCellRadiusMeters = cfg.hexCellRadiusKm * 1000.0;
+    ueLayout.centerSpacingMeters = cfg.ueCenterSpacingMeters;
+    ueLayout.ringPointOffsetMeters = cfg.ueRingPointOffsetMeters;
     const auto uePlacements =
         BuildUePlacements(cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters, cfg.ueNum, ueLayout);
     NS_ABORT_MSG_IF(uePlacements.size() != cfg.ueNum, "UE placement count does not match ueNum");

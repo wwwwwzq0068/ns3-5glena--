@@ -8,17 +8,17 @@
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
-- 当前 `3.2.0` 的默认研究场景是：`2x4` 双轨、`25 UE`、`hotspot-boundary` 二维部署
-- 当前默认目标不是继续扩星，而是把该场景作为传统 `A3 baseline` 的缺陷暴露平台
+- 当前 `3.2.0` 的默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
+- 当前默认目标不是继续扩星，而是把该七小区场景作为传统 `A3 baseline` 的缺陷暴露平台
 - `strictNrtGuard`（严格邻区表守卫）不再计入 baseline 默认定义，转入后续增强策略侧
-- 当前改进方向是后续“信号质量 + 卫星负载”联合感知切换策略
+- 当前改进方向先是 `shadowing / Rician` 扰动如何接入自定义 `beam budget/A3` 判决链，之后才是“信号质量 + 卫星负载”联合感知切换策略
 
 ## 当前默认口径
 场景与参数：
 - 卫星数：`8`
 - 轨道面数：`2`
 - UE 数：`25`
-- UE 主布局：`hotspot-boundary`
+- UE 主布局：`seven-cell`
 - `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`3 deg`
 - `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20 s`
 - `simTime`（仿真时长）=`40 s`
@@ -30,14 +30,18 @@
 - 判决依据保持为 `RSRP + hysteresis + TTT + 基本可见性/beam lock`
 - `strictNrtGuard`（严格邻区表守卫）保留为可选增强开关，不作为 baseline 默认条件
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
+- 当前 PHY 信道已开启 `ShadowingEnabled`，但默认 `A3` 判决仍看几何 `beam budget/rsrpDbm`
 
 当前默认 UE 紧凑度：
-- `ueHotspotSpacingMeters`（热点间距）=`5000`
-- `ueBoundarySpacingMeters`（边界条带间距）=`8000`
-- `ueBoundaryOffsetMeters`（跨边界横向偏移）=`2500`
-- `ueHotspotCenterOffsetXMeters`（热点中心 X 偏移）=`-6000`
-- `ueBackgroundRadiusXMeters`（背景区 X 半径）=`20000`
-- `ueBackgroundRadiusYMeters`（背景区 Y 半径）=`15000`
+- `hexCellRadiusKm`（小区 hex 半径）=`20`
+- `ueCenterSpacingMeters`（中心 `3x3` 间距）=`6000`
+- `ueRingPointOffsetMeters`（外围 `6` 小区内局部散点偏移）=`5000`
+
+当前默认 UE 生成实现：
+- 先在局部东-北平面生成 `seven-cell` 偏移模板
+- 中心小区放置 `3x3` 密集簇，共 `9 UE`
+- 六个相邻小区共放置 `16 UE`，按 `3/3/3/3/2/2` 分配并在各自小区中心附近散开
+- 再统一将偏移模板转换为 `WGS84` 地理点和 `ECEF` 位置
 
 ## 文档分工
 - `docs/research-context.md`
@@ -61,7 +65,7 @@
 - `leo-ntn-handover-config.h`
   - 默认参数、命令行参数注册、路径收口和参数合法性检查
 - `leo-ntn-handover-runtime.h`
-  - 卫星和 UE 运行时状态
+  - 卫星和 UE 运行时状态，以及 UE 布局偏移模板到地理坐标的生成逻辑
 - `leo-ntn-handover-update.h`
   - 周期更新、观测、邻区维护和切换驱动
 - `leo-ntn-handover-reporting.h`
@@ -88,6 +92,10 @@
 - `plot_hex_grid_svg.py`
   - 读取六边形网格 `CSV`
   - 生成对应 `SVG`
+  - 当前支持叠加 `UE` 布局 `CSV`，用于导出 `grid + UE` 视图
+- `export_ue_layout.py`
+  - 按当前 `UE` 布局规则导出 `UE` 位置 `CSV`
+  - 当前可直接复现 `line` 和 `seven-cell` 两类布局
 
 ## 当前已完成的关键收口
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
@@ -96,6 +104,12 @@
 - 当前已将周期更新中的卫星公共轨道传播与 UE 派生观测彻底分开
 - 当前已将默认参数和合法性检查集中到 `leo-ntn-handover-config.h`
 - 当前已接入 `loadScore`（负载评分）相关运行时字段与逐时刻 trace 输出
+- 当前已将默认 `UE` 布局切换为 `seven-cell`，并补齐导出 `CSV/SVG` 的脚本链
+
+## 接下来
+- 先用当前默认参数完成一轮 `seven-cell baseline` 几何与切换现象验证
+- 再单独评估 `shadowing / Rician` 扰动若接入自定义 `beam budget/A3` 判决链，会如何影响边界竞争与 `ping-pong`
+- 最后在不改 baseline 场景定义的前提下，推进“信号质量 + 卫星负载”联合目标选择
 
 ## 维护规则
 - 修改 `scratch/` 目录下的重要代码后，同步检查：
@@ -232,3 +246,8 @@
   - 将 `overpassGapSeconds` 下调到 `2 s`
   - 将 `hotspot-boundary` 布局整体压紧，使更多 UE 落在竞争边界附近
   - 当前这一步优先增强几何交叉与边界竞争，不引入新的决策逻辑
+- UE 生成逻辑收口
+  - 将 `UE` 部署实现重构为“局部偏移模板生成 + 统一地理坐标转换”两阶段
+  - 保持 `hotspot-boundary` 的布局类型与 `25 UE` 研究口径不变
+  - 默认参数改为更外扩的 `hex-aware` 分布，让边界与背景 `UE` 更明确地压向周围小区
+  - 为后续增加 `7` 小区或其他布局类型预留更清晰的扩展入口

@@ -4,9 +4,10 @@
 - 本文档用于定义后续 improved 策略，不改变当前 baseline 的正式定义
 - 本文档服务于算法设计、变量命名、数学表达和后续代码接入
 - baseline 的正式边界仍以 `scratch/baseline-definition.md` 为准
+- 当前建议先完成 `shadowing / Rician` 与自定义 `beam budget` 判决链关系的澄清，再正式推进本策略
 
 ## 1. 算法定义
-- 后续 improved 策略保持当前 baseline 场景口径不变，仍在 `2x4`、`25 UE`、`hotspot-boundary` 条件下做对照
+- 后续 improved 策略保持当前 baseline 场景口径不变，仍在 `2x4`、`25 UE`、`seven-cell` 条件下做对照
 - baseline 继续保持“`RSRP + hysteresis + TTT + 基本可见性/beam lock`”语义，不把负载项回写到 baseline
 - improved 策略的核心思路是：先筛掉明显无效候选星，再对剩余候选星计算“信号质量 + 剩余可见时间 + 负载”的联合效用，选择综合得分最高的目标星
 - improved 策略仍复用当前自定义切换执行路径，不优先改成 `NrHandoverAlgorithm` 子类；当前更合适的接入点仍是 `UpdateConstellation()` 周期观测链

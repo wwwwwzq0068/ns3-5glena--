@@ -93,7 +93,7 @@ struct UeRuntime
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
 
-    /** UE 在场景中的部署角色，例如线性、热点、边界或背景。 */
+    /** UE 在场景中的部署角色，例如线性、中心簇或外围簇。 */
     std::string placementRole = "line";
 
     /** UE 相对参考中心的东西向偏移，单位米。 */
@@ -168,32 +168,20 @@ struct UeRuntime
 
 struct UeLayoutConfig
 {
-    /** UE 部署类型：`line` 或 `hotspot-boundary`。 */
-    std::string layoutType = "line";
+    /** UE 部署类型：`line` 或 `seven-cell`。 */
+    std::string layoutType = "seven-cell";
 
     /** 线性部署时相邻 UE 的东西向间距。 */
     double lineSpacingMeters = 0.0;
 
-    /** 热点中心相对场景中心的东西向偏移。 */
-    double hotspotCenterOffsetXMeters = -12000.0;
+    /** 中心小区与六个外围小区共用的 hex 半径。 */
+    double hexCellRadiusMeters = 20000.0;
 
-    /** 热点中心相对场景中心的南北向偏移。 */
-    double hotspotCenterOffsetYMeters = 0.0;
+    /** 中心小区内 3x3 密集簇的格点间距。 */
+    double centerSpacingMeters = 6000.0;
 
-    /** 热点 3x3 团簇内部的格点间距。 */
-    double hotspotSpacingMeters = 8000.0;
-
-    /** 边界增强条带沿边界方向的采样间距。 */
-    double boundarySpacingMeters = 12000.0;
-
-    /** 边界增强条带跨边界两侧的横向偏移。 */
-    double boundaryOffsetMeters = 5000.0;
-
-    /** 外围背景 UE 的东西向外圈尺度。 */
-    double backgroundRadiusXMeters = 40000.0;
-
-    /** 外围背景 UE 的南北向外圈尺度。 */
-    double backgroundRadiusYMeters = 30000.0;
+    /** 外围 6 个小区内局部散点相对各自小区中心的偏移尺度。 */
+    double ringPointOffsetMeters = 5000.0;
 };
 
 struct UePlacement
@@ -253,122 +241,157 @@ ResolveUeIndexFromImsi(const std::map<uint64_t, uint32_t>& imsiToUe, uint64_t im
 }
 
 /**
- * 使用简单局部平面近似，为多 UE 基线场景生成地面点。
- *
- * 当前支持：
- * - `line`：沿东西方向等间距拉开；
- * - `hotspot-boundary`：热点增加 + 边界增强 + 背景补充。
+ * 单个 UE 在局部平面中的偏移描述。
  */
-inline UePlacement
-BuildUePlacement(double baseLatitudeDeg,
-                 double baseLongitudeDeg,
-                 double altitudeMeters,
-                 double eastOffsetMeters,
-                 double northOffsetMeters,
-                 const std::string& role)
+struct UePlacementOffsetSpec
 {
-    const double earthRadiusMeters = LeoOrbitCalculator::kWgs84SemiMajorAxisMeters;
-    const double baseLatRad = LeoOrbitCalculator::DegToRad(baseLatitudeDeg);
-    const double lonScale = std::max(0.1, std::cos(baseLatRad));
-    const double deltaLatRad = northOffsetMeters / earthRadiusMeters;
-    const double deltaLonRad = eastOffsetMeters / (earthRadiusMeters * lonScale);
+    double eastOffsetMeters = 0.0;
+    double northOffsetMeters = 0.0;
+    std::string role = "line";
+};
 
-    UePlacement placement;
-    placement.groundPoint =
-        LeoOrbitCalculator::CreateGroundPoint(baseLatitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLatRad),
-                                              baseLongitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLonRad),
-                                              altitudeMeters);
-    placement.role = role;
-    placement.eastOffsetMeters = eastOffsetMeters;
-    placement.northOffsetMeters = northOffsetMeters;
-    return placement;
+inline void
+AppendUeOffsetSpec(std::vector<UePlacementOffsetSpec>& specs,
+                   double eastOffsetMeters,
+                   double northOffsetMeters,
+                   const std::string& role)
+{
+    UePlacementOffsetSpec spec;
+    spec.eastOffsetMeters = eastOffsetMeters;
+    spec.northOffsetMeters = northOffsetMeters;
+    spec.role = role;
+    specs.push_back(spec);
 }
 
-inline std::vector<UePlacement>
-BuildLineUePlacements(double baseLatitudeDeg,
-                      double baseLongitudeDeg,
-                      double altitudeMeters,
-                      uint32_t ueNum,
-                      double ueSpacingMeters)
+inline void
+AppendRectGridOffsetSpecs(std::vector<UePlacementOffsetSpec>& specs,
+                          double centerEastMeters,
+                          double centerNorthMeters,
+                          int rowMin,
+                          int rowMax,
+                          int colMin,
+                          int colMax,
+                          double spacingMeters,
+                          const std::string& role)
 {
-    std::vector<UePlacement> out;
-    out.reserve(ueNum);
+    for (int row = rowMin; row <= rowMax; ++row)
+    {
+        for (int col = colMin; col <= colMax; ++col)
+        {
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters + static_cast<double>(col) * spacingMeters,
+                               centerNorthMeters + static_cast<double>(row) * spacingMeters,
+                               role);
+        }
+    }
+}
+
+inline std::vector<UePlacementOffsetSpec>
+BuildLineUeOffsetSpecs(uint32_t ueNum, double ueSpacingMeters)
+{
+    std::vector<UePlacementOffsetSpec> specs;
+    specs.reserve(ueNum);
     const double center = (static_cast<double>(ueNum) - 1.0) / 2.0;
     for (uint32_t i = 0; i < ueNum; ++i)
     {
-        const double eastOffsetMeters = (static_cast<double>(i) - center) * ueSpacingMeters;
-        out.push_back(BuildUePlacement(baseLatitudeDeg,
-                                       baseLongitudeDeg,
-                                       altitudeMeters,
-                                       eastOffsetMeters,
-                                       0.0,
-                                       "line"));
+        AppendUeOffsetSpec(specs, (static_cast<double>(i) - center) * ueSpacingMeters, 0.0, "line");
     }
-    return out;
+    return specs;
 }
 
-inline std::vector<UePlacement>
-BuildHotspotBoundaryUePlacements(double baseLatitudeDeg,
-                                 double baseLongitudeDeg,
-                                 double altitudeMeters,
-                                 const UeLayoutConfig& layout)
+inline std::vector<UePlacementOffsetSpec>
+BuildSevenCellUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
 {
-    std::vector<UePlacement> out;
-    out.reserve(25);
+    std::vector<UePlacementOffsetSpec> specs;
+    NS_ABORT_MSG_IF(ueNum != 25, "seven-cell layout currently requires ueNum == 25");
+    specs.reserve(ueNum);
 
-    for (int row = -1; row <= 1; ++row)
+    AppendRectGridOffsetSpecs(
+        specs, 0.0, 0.0, -1, 1, -1, 1, layout.centerSpacingMeters, "center");
+
+    const double dx = std::sqrt(3.0) * layout.hexCellRadiusMeters;
+    const double dy = 1.5 * layout.hexCellRadiusMeters;
+    const std::vector<std::pair<double, double>> ringCellCenters = {
+        {-dx, 0.0},
+        {-0.5 * dx, dy},
+        {0.5 * dx, dy},
+        {dx, 0.0},
+        {0.5 * dx, -dy},
+        {-0.5 * dx, -dy},
+    };
+    const std::vector<uint32_t> ringUeCounts = {3, 3, 3, 3, 2, 2};
+
+    for (uint32_t cellIdx = 0; cellIdx < ringCellCenters.size(); ++cellIdx)
     {
-        for (int col = -1; col <= 1; ++col)
+        const auto& [centerEastMeters, centerNorthMeters] = ringCellCenters[cellIdx];
+        const uint32_t count = ringUeCounts[cellIdx];
+        const double norm = std::hypot(centerEastMeters, centerNorthMeters);
+        const double dirEast = centerEastMeters / norm;
+        const double dirNorth = centerNorthMeters / norm;
+        const double tangentEast = -dirNorth;
+        const double tangentNorth = dirEast;
+
+        if (count == 3)
         {
-            const double eastOffsetMeters =
-                layout.hotspotCenterOffsetXMeters + static_cast<double>(col) * layout.hotspotSpacingMeters;
-            const double northOffsetMeters =
-                layout.hotspotCenterOffsetYMeters + static_cast<double>(row) * layout.hotspotSpacingMeters;
-            out.push_back(BuildUePlacement(baseLatitudeDeg,
-                                           baseLongitudeDeg,
-                                           altitudeMeters,
-                                           eastOffsetMeters,
-                                           northOffsetMeters,
-                                           "hotspot"));
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters - layout.ringPointOffsetMeters * dirEast,
+                               centerNorthMeters - layout.ringPointOffsetMeters * dirNorth,
+                               "ring");
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters + layout.ringPointOffsetMeters * tangentEast,
+                               centerNorthMeters + layout.ringPointOffsetMeters * tangentNorth,
+                               "ring");
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters - layout.ringPointOffsetMeters * tangentEast,
+                               centerNorthMeters - layout.ringPointOffsetMeters * tangentNorth,
+                               "ring");
+        }
+        else
+        {
+            const double tangentialOffsetMeters = 0.75 * layout.ringPointOffsetMeters;
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters + tangentialOffsetMeters * tangentEast,
+                               centerNorthMeters + tangentialOffsetMeters * tangentNorth,
+                               "ring");
+            AppendUeOffsetSpec(specs,
+                               centerEastMeters - tangentialOffsetMeters * tangentEast,
+                               centerNorthMeters - tangentialOffsetMeters * tangentNorth,
+                               "ring");
         }
     }
 
-    for (int row = -2; row <= 2; ++row)
+    return specs;
+}
+
+inline std::vector<UePlacement>
+BuildUePlacementsFromOffsetSpecs(double baseLatitudeDeg,
+                                 double baseLongitudeDeg,
+                                 double altitudeMeters,
+                                 const std::vector<UePlacementOffsetSpec>& offsetSpecs)
+{
+    std::vector<UePlacement> placements;
+    placements.reserve(offsetSpecs.size());
+
+    const double earthRadiusMeters = LeoOrbitCalculator::kWgs84SemiMajorAxisMeters;
+    const double baseLatRad = LeoOrbitCalculator::DegToRad(baseLatitudeDeg);
+    const double lonScale = std::max(0.1, std::cos(baseLatRad));
+    for (const auto& spec : offsetSpecs)
     {
-        const double northOffsetMeters = static_cast<double>(row) * layout.boundarySpacingMeters;
-        out.push_back(BuildUePlacement(baseLatitudeDeg,
-                                       baseLongitudeDeg,
-                                       altitudeMeters,
-                                       -layout.boundaryOffsetMeters,
-                                       northOffsetMeters,
-                                       "boundary"));
-        out.push_back(BuildUePlacement(baseLatitudeDeg,
-                                       baseLongitudeDeg,
-                                       altitudeMeters,
-                                       layout.boundaryOffsetMeters,
-                                       northOffsetMeters,
-                                       "boundary"));
+        const double deltaLatRad = spec.northOffsetMeters / earthRadiusMeters;
+        const double deltaLonRad = spec.eastOffsetMeters / (earthRadiusMeters * lonScale);
+
+        UePlacement placement;
+        placement.groundPoint =
+            LeoOrbitCalculator::CreateGroundPoint(baseLatitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLatRad),
+                                                  baseLongitudeDeg + LeoOrbitCalculator::RadToDeg(deltaLonRad),
+                                                  altitudeMeters);
+        placement.role = spec.role;
+        placement.eastOffsetMeters = spec.eastOffsetMeters;
+        placement.northOffsetMeters = spec.northOffsetMeters;
+        placements.push_back(placement);
     }
 
-    const std::vector<std::pair<double, double>> backgroundOffsets = {
-        {-layout.backgroundRadiusXMeters, layout.backgroundRadiusYMeters},
-        {0.0, layout.backgroundRadiusYMeters},
-        {layout.backgroundRadiusXMeters, layout.backgroundRadiusYMeters},
-        {-layout.backgroundRadiusXMeters, -layout.backgroundRadiusYMeters},
-        {0.0, -layout.backgroundRadiusYMeters},
-        {layout.backgroundRadiusXMeters, -layout.backgroundRadiusYMeters},
-    };
-    for (const auto& [eastOffsetMeters, northOffsetMeters] : backgroundOffsets)
-    {
-        out.push_back(BuildUePlacement(baseLatitudeDeg,
-                                       baseLongitudeDeg,
-                                       altitudeMeters,
-                                       eastOffsetMeters,
-                                       northOffsetMeters,
-                                       "background"));
-    }
-
-    return out;
+    return placements;
 }
 
 inline std::vector<UePlacement>
@@ -378,13 +401,18 @@ BuildUePlacements(double baseLatitudeDeg,
                   uint32_t ueNum,
                   const UeLayoutConfig& layout)
 {
-    if (layout.layoutType == "hotspot-boundary")
+    std::vector<UePlacementOffsetSpec> offsetSpecs;
+    if (layout.layoutType == "seven-cell")
     {
-        return BuildHotspotBoundaryUePlacements(baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, layout);
+        offsetSpecs = BuildSevenCellUeOffsetSpecs(ueNum, layout);
+    }
+    else
+    {
+        offsetSpecs = BuildLineUeOffsetSpecs(ueNum, layout.lineSpacingMeters);
     }
 
-    return BuildLineUePlacements(
-        baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, ueNum, layout.lineSpacingMeters);
+    return BuildUePlacementsFromOffsetSpecs(
+        baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, offsetSpecs);
 }
 
 } // namespace ns3

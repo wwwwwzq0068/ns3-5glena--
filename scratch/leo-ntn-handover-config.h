@@ -26,15 +26,10 @@ struct BaselineSimulationConfig
 
     uint16_t gNbNum = 8;
     uint32_t ueNum = 25;
-    std::string ueLayoutType = "hotspot-boundary";
+    std::string ueLayoutType = "seven-cell";
     double ueSpacingMeters = 40000.0;
-    double ueHotspotSpacingMeters = 5000.0;
-    double ueBoundarySpacingMeters = 8000.0;
-    double ueBoundaryOffsetMeters = 2500.0;
-    double ueBackgroundRadiusXMeters = 20000.0;
-    double ueBackgroundRadiusYMeters = 15000.0;
-    double ueHotspotCenterOffsetXMeters = -6000.0;
-    double ueHotspotCenterOffsetYMeters = 0.0;
+    double ueCenterSpacingMeters = 6000.0;
+    double ueRingPointOffsetMeters = 5000.0;
 
     double satAltitudeMeters = 600000.0;
     double orbitEccentricity = 0.0;
@@ -133,13 +128,8 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("ueNum", config.ueNum);
     addArg("ueLayoutType", config.ueLayoutType);
     addArg("ueSpacingMeters", config.ueSpacingMeters);
-    addArg("ueHotspotSpacingMeters", config.ueHotspotSpacingMeters);
-    addArg("ueBoundarySpacingMeters", config.ueBoundarySpacingMeters);
-    addArg("ueBoundaryOffsetMeters", config.ueBoundaryOffsetMeters);
-    addArg("ueBackgroundRadiusXMeters", config.ueBackgroundRadiusXMeters);
-    addArg("ueBackgroundRadiusYMeters", config.ueBackgroundRadiusYMeters);
-    addArg("ueHotspotCenterOffsetXMeters", config.ueHotspotCenterOffsetXMeters);
-    addArg("ueHotspotCenterOffsetYMeters", config.ueHotspotCenterOffsetYMeters);
+    addArg("ueCenterSpacingMeters", config.ueCenterSpacingMeters);
+    addArg("ueRingPointOffsetMeters", config.ueRingPointOffsetMeters);
     addArg("satAltitudeMeters", config.satAltitudeMeters);
     addArg("orbitEccentricity", config.orbitEccentricity);
     addArg("orbitInclinationDeg", config.orbitInclinationDeg);
@@ -261,16 +251,14 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
 {
     NS_ABORT_MSG_IF(config.gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
-    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "hotspot-boundary",
-                    "ueLayoutType must be either 'line' or 'hotspot-boundary'");
+    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell",
+                    "ueLayoutType must be either 'line' or 'seven-cell'");
     NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueHotspotSpacingMeters <= 0.0, "ueHotspotSpacingMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueBoundarySpacingMeters <= 0.0, "ueBoundarySpacingMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueBoundaryOffsetMeters <= 0.0, "ueBoundaryOffsetMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueBackgroundRadiusXMeters <= 0.0, "ueBackgroundRadiusXMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueBackgroundRadiusYMeters <= 0.0, "ueBackgroundRadiusYMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "hotspot-boundary" && config.ueNum != 25,
-                    "hotspot-boundary layout currently requires ueNum == 25");
+    NS_ABORT_MSG_IF(config.ueCenterSpacingMeters <= 0.0, "ueCenterSpacingMeters must be > 0");
+    NS_ABORT_MSG_IF(config.ueRingPointOffsetMeters <= 0.0,
+                    "ueRingPointOffsetMeters must be > 0");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "seven-cell" && config.ueNum != 25,
+                    "seven-cell layout currently requires ueNum == 25");
     NS_ABORT_MSG_IF(config.orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(config.orbitEccentricity < 0.0 || config.orbitEccentricity >= 1.0,

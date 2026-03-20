@@ -10,7 +10,7 @@
 ## baseline 定义
 当前建议将 baseline 定义为：
 
-> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 `A3` 风格切换基线；UE 使用 `hotspot-boundary`（热点增加 + 边界增强）二维部署，决策仅依赖 `RSRP`、`hysteresis`、`TTT` 以及基本的可见性/波束锁定约束，不引入严格邻区守卫、负载感知、预测优化或学习型决策。
+> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 `A3` 风格切换基线；UE 使用 `seven-cell`（中心 1 小区 + 周围 6 小区）二维部署，决策仅依赖 `RSRP`、`hysteresis`、`TTT` 以及基本的可见性/波束锁定约束，不引入严格邻区守卫、负载感知、预测优化或学习型决策。
 
 这一定义强调三件事：
 - 场景边界固定
@@ -22,14 +22,10 @@
 - `gNbNum = 8`
 - `orbitPlaneCount = 2`
 - `ueNum = 25`
-- `ueLayoutType = hotspot-boundary`
-- `ueHotspotSpacingMeters = 5000`
-- `ueBoundarySpacingMeters = 8000`
-- `ueBoundaryOffsetMeters = 2500`
-- `ueHotspotCenterOffsetXMeters = -6000`
-- `ueHotspotCenterOffsetYMeters = 0`
-- `ueBackgroundRadiusXMeters = 20000`
-- `ueBackgroundRadiusYMeters = 15000`
+- `ueLayoutType = seven-cell`
+- `hexCellRadiusKm = 20`
+- `ueCenterSpacingMeters = 6000`
+- `ueRingPointOffsetMeters = 5000`
 - `satAltitudeMeters = 600000`
 - `orbitInclinationDeg = 53`
 - `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`3`
@@ -52,7 +48,10 @@
 
 说明：
 - 这套参数代表当前 `3.2.0` 的默认 baseline 口径，不代表最优参数
-- 当前先不通过继续扩星来放大现象，而是优先通过更紧的双轨重叠和更密集的二维热点区、边界条带与背景区增强竞争
+- 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
+- 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
+- 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
+- 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，但 baseline 判决仍以自定义几何 `beam budget/rsrpDbm` 为准
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
@@ -83,14 +82,14 @@
 - 是否出现非零切换，而不是全程无切换
 - 切换流程是否可正常闭环，成功率和执行时延是否可统计
 - 切换附近是否能观察吞吐扰动
-- 边界 UE 是否出现频繁切换或潜在 `ping-pong`
+- 外围小区 UE 是否出现频繁切换或潜在 `ping-pong`
 - 星间 `attachedUeCount`、`offeredPacketRate`、`loadScore` 是否出现可观察的不均衡
 
 ### 3. 对照价值验证
 目标：确认它是否能作为后续联合策略的可信对照组。
 
 最终判定标准：
-- 场景边界不变：仍是 `2x4` 双轨、`25 UE`、`hotspot-boundary`
+- 场景边界不变：仍是 `2x4` 双轨、`25 UE`、`seven-cell`
 - 决策边界不变：baseline 不使用 `loadScore`
 - 现象边界清楚：能回答频繁切换、`ping-pong`、吞吐连续性和负载失衡是否存在
 
@@ -118,6 +117,6 @@
 4. 下一步才是在改进算法中把 `RSRP` 与 `loadScore` 组合
 
 ## 下一步
-- 用当前默认参数完成一轮 baseline 验证
-- 保持 `A3` 触发语义不变，优先设计联合目标选择策略
-- 保持 baseline 与改进算法的对比边界清楚，避免同时改动场景口径和决策逻辑
+- 用当前默认参数完成一轮 `seven-cell baseline` 验证
+- 保持 `A3` 触发语义不变，先独立评估 `shadowing / Rician` 扰动是否以及如何接入自定义判决链
+- 保持 baseline 与改进算法的对比边界清楚，避免同时改动场景口径、随机信道扰动和决策逻辑
