@@ -52,6 +52,24 @@ struct BeamModelConfig
 
     /** 当前版本预留的波束失锁惩罚项，单位 dB。 */
     double beamDropPenaltyDb = 200.0;
+
+    /** 是否将阴影衰落注入自定义 A3 观测链。 */
+    bool enableCustomA3Shadowing = false;
+
+    /** 自定义 A3 阴影衰落标准差，单位 dB。 */
+    double customA3ShadowingSigmaDb = 1.0;
+
+    /** 自定义 A3 阴影衰落时间相关尺度，单位秒。 */
+    double customA3ShadowingCorrelationSeconds = 4.0;
+
+    /** 是否将莱斯快衰落注入自定义 A3 观测链。 */
+    bool enableCustomA3RicianFading = false;
+
+    /** 自定义 A3 莱斯衰落的 K 因子，单位 dB。 */
+    double customA3RicianKDb = 15.0;
+
+    /** 自定义 A3 莱斯衰落时间相关尺度，单位秒。 */
+    double customA3RicianCorrelationSeconds = 1.0;
 };
 
 struct BeamLinkBudget
@@ -76,6 +94,15 @@ struct BeamLinkBudget
 
     /** 计算得到的接收功率近似值，单位 dBm。 */
     double rsrpDbm = -std::numeric_limits<double>::infinity();
+
+    /** 叠加随机扰动前的几何 RSRP，单位 dBm。 */
+    double geometryRsrpDbm = -std::numeric_limits<double>::infinity();
+
+    /** 注入到自定义 A3 观测链中的阴影衰落量，单位 dB。 */
+    double customA3ShadowingDb = 0.0;
+
+    /** 注入到自定义 A3 观测链中的莱斯快衰落量，单位 dB。 */
+    double customA3RicianFadingDb = 0.0;
 
     /** 当前波束是否仍处于可锁定范围内。 */
     bool beamLocked = false;
@@ -168,8 +195,9 @@ CalculateEarthFixedBeamBudget(const Vector& satEcef,
 
     if (budget.beamLocked && std::isfinite(budget.txGainDbi))
     {
-        budget.rsrpDbm =
+        budget.geometryRsrpDbm =
             cfg.txPowerDbm + budget.txGainDbi + cfg.rxGainDbi - budget.fsplDb - cfg.atmLossDb;
+        budget.rsrpDbm = budget.geometryRsrpDbm;
     }
 
     return budget;

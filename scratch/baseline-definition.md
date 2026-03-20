@@ -40,18 +40,27 @@
 - `minElevationDeg`（最小仰角）=`10`
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
 - `bandwidth = 40 MHz`
-- `hoHysteresisDb`（切换迟滞门限）=`0.3 dB`
-- `hoTttMs`（切换触发时间）=`100 ms`
+- `hoHysteresisDb`（切换迟滞门限）=`3.0 dB`
+- `hoTttMs`（切换触发时间）=`300 ms`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`15 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`1.0 s`
 - `strictNrtGuard = false`
 - `strictNrtMarginDb = hoHysteresisDb`
 - `useWgs84HexGrid = true`
+- `forceRlcAmForEpc = false`
+- `disableUeIpv4Forwarding = true`
 
 说明：
-- 这套参数代表当前 `3.2.0` 的默认 baseline 口径，不代表最优参数
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v3.2.1`
 - 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，但 baseline 判决仍以自定义几何 `beam budget/rsrpDbm` 为准
+- 当前平台已支持将 `shadowing / Rician` 作为可选扰动注入 custom `beam budget/A3` 观测链，且当前 baseline 默认开启；但判决仍不是直接读取 PHY 测量
+- 当前默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 重新走上行 `NAS/TFT` 分类路径
+- 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 选择
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
@@ -84,6 +93,7 @@
 - 切换附近是否能观察吞吐扰动
 - 外围小区 UE 是否出现频繁切换或潜在 `ping-pong`
 - 星间 `attachedUeCount`、`offeredPacketRate`、`loadScore` 是否出现可观察的不均衡
+- 若启用轨迹可视化，`sat_anchor_trace.csv` 是否能正确反映两轨波束锚点的小区变化路径
 
 ### 3. 对照价值验证
 目标：确认它是否能作为后续联合策略的可信对照组。
@@ -118,5 +128,5 @@
 
 ## 下一步
 - 用当前默认参数完成一轮 `seven-cell baseline` 验证
-- 保持 `A3` 触发语义不变，先独立评估 `shadowing / Rician` 扰动是否以及如何接入自定义判决链
+- 保持 `A3` 触发语义不变，继续评估当前默认开启的 `shadowing / Rician` 扰动如何影响自定义判决链
 - 保持 baseline 与改进算法的对比边界清楚，避免同时改动场景口径、随机信道扰动和决策逻辑

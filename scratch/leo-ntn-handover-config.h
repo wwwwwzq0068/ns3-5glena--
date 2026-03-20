@@ -73,6 +73,7 @@ struct BaselineSimulationConfig
         std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_attenuation_report.py";
     std::string attenuationInputPath = JoinOutputPath(outputDir, "sat_beam_trace.csv");
     std::string attenuationPerTimePath = JoinOutputPath(outputDir, "sat_attenuation_per_time.csv");
+    std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -87,9 +88,17 @@ struct BaselineSimulationConfig
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
     double beamDropPenaltyDb = 200.0;
+    bool customA3UseShadowing = true;
+    double customA3ShadowingSigmaDb = 1.0;
+    double customA3ShadowingCorrelationSeconds = 4.0;
+    bool customA3UseRician = true;
+    double customA3RicianKDb = 15.0;
+    double customA3RicianCorrelationSeconds = 1.0;
 
-    double hoHysteresisDb = 0.3;
-    uint32_t hoTttMs = 100;
+    double hoHysteresisDb = 3.0;
+    uint32_t hoTttMs = 300;
+    bool forceRlcAmForEpc = false;
+    bool disableUeIpv4Forwarding = true;
     bool strictNrtGuard = false;
     double strictNrtMarginDb = -1.0;
     bool compactReport = true;
@@ -172,8 +181,16 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
     addArg("beamDropPenaltyDb", config.beamDropPenaltyDb);
+    addArg("customA3UseShadowing", config.customA3UseShadowing);
+    addArg("customA3ShadowingSigmaDb", config.customA3ShadowingSigmaDb);
+    addArg("customA3ShadowingCorrelationSeconds", config.customA3ShadowingCorrelationSeconds);
+    addArg("customA3UseRician", config.customA3UseRician);
+    addArg("customA3RicianKDb", config.customA3RicianKDb);
+    addArg("customA3RicianCorrelationSeconds", config.customA3RicianCorrelationSeconds);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
+    addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
+    addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
     addArg("strictNrtGuard", config.strictNrtGuard);
     addArg("strictNrtMarginDb", config.strictNrtMarginDb);
     addArg("compactReport", config.compactReport);
@@ -190,6 +207,7 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("attenuationScriptPath", config.attenuationScriptPath);
     addArg("attenuationInputPath", config.attenuationInputPath);
     addArg("attenuationPerTimePath", config.attenuationPerTimePath);
+    addArg("satAnchorTracePath", config.satAnchorTracePath);
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
     addArg("loadCongestionThreshold", config.loadCongestionThreshold);
@@ -207,6 +225,8 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "sat_beam_trace.csv");
     const std::string defaultAttenuationPerTimePath =
         JoinOutputPath(defaultOutputDir, "sat_attenuation_per_time.csv");
+    const std::string defaultSatAnchorTracePath =
+        JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
@@ -220,6 +240,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         config.outputDir != defaultOutputDir)
     {
         config.attenuationPerTimePath = JoinOutputPath(config.outputDir, "sat_attenuation_per_time.csv");
+    }
+    if (config.satAnchorTracePath == defaultSatAnchorTracePath && config.outputDir != defaultOutputDir)
+    {
+        config.satAnchorTracePath = JoinOutputPath(config.outputDir, "sat_anchor_trace.csv");
     }
 
     BaselineOutputPaths paths;
@@ -270,6 +294,12 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
+    NS_ABORT_MSG_IF(config.customA3ShadowingSigmaDb < 0.0, "customA3ShadowingSigmaDb must be >= 0");
+    NS_ABORT_MSG_IF(config.customA3ShadowingCorrelationSeconds <= 0.0,
+                    "customA3ShadowingCorrelationSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.customA3RicianKDb < 0.0, "customA3RicianKDb must be >= 0");
+    NS_ABORT_MSG_IF(config.customA3RicianCorrelationSeconds <= 0.0,
+                    "customA3RicianCorrelationSeconds must be > 0");
     NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");

@@ -68,6 +68,43 @@ def load_ues(csv_path: Path) -> List[Dict[str, float | str | int]]:
     return ues
 
 
+def load_sat_anchor_trace(csv_path: Path) -> List[Dict[str, float | int]]:
+    rows: List[Dict[str, float | int]] = []
+    with csv_path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        required = {
+            "time_s",
+            "sat",
+            "plane",
+            "slot",
+            "cell",
+            "anchor_grid_id",
+            "anchor_east_m",
+            "anchor_north_m",
+        }
+        missing = required.difference(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"missing required satellite anchor columns: {sorted(missing)}")
+        for row in reader:
+            anchor_east_m = float(row["anchor_east_m"])
+            anchor_north_m = float(row["anchor_north_m"])
+            if not math.isfinite(anchor_east_m) or not math.isfinite(anchor_north_m):
+                continue
+            rows.append(
+                {
+                    "time_s": float(row["time_s"]),
+                    "sat": int(row["sat"]),
+                    "plane": int(row["plane"]),
+                    "slot": int(row["slot"]),
+                    "cell": int(row["cell"]),
+                    "anchor_grid_id": int(row["anchor_grid_id"]),
+                    "anchor_east_m": anchor_east_m,
+                    "anchor_north_m": anchor_north_m,
+                }
+            )
+    return rows
+
+
 def infer_hex_radius_m(cells: List[Dict[str, float]]) -> float:
     # For pointy-top hex grid, same-row center spacing is dx = sqrt(3) * r.
     row_to_east: Dict[float, List[float]] = {}
@@ -100,6 +137,14 @@ def hex_vertices(east: float, north: float, radius: float) -> List[Tuple[float, 
     return pts
 
 
+def _dedupe_track_points(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    deduped: List[Tuple[float, float]] = []
+    for point in points:
+        if not deduped or point != deduped[-1]:
+            deduped.append(point)
+    return deduped
+
+
 def render_svg(
     cells: List[Dict[str, float]],
     out_path: Path,
@@ -111,12 +156,16 @@ def render_svg(
     show_centers: bool,
     title: str,
     ue_points: Optional[List[Dict[str, float | str | int]]] = None,
+    sat_anchor_points: Optional[List[Dict[str, float | int]]] = None,
     ue_label_prefix: str = "UE",
     ue_show_labels: bool = True,
     subtitle: str = "",
 ) -> None:
     east_vals = [c["east_m"] for c in cells]
     north_vals = [c["north_m"] for c in cells]
+    if sat_anchor_points:
+        east_vals.extend(float(p["anchor_east_m"]) for p in sat_anchor_points)
+        north_vals.extend(float(p["anchor_north_m"]) for p in sat_anchor_points)
     min_e, max_e = min(east_vals), max(east_vals)
     min_n, max_n = min(north_vals), max(north_vals)
     span_e = max(max_e - min_e, 1.0)
@@ -169,6 +218,77 @@ def render_svg(
                 f'font-family="monospace">{int(c["id"])}</text>'
             )
 
+    if sat_anchor_points:
+        plane_colors = {
+            0: "#d9480f",
+            1: "#1c7ed6",
+        }
+        by_plane: Dict[int, Dict[int, List[Dict[str, float | int]]]] = {}
+        by_sat: Dict[int, List[Dict[str, float | int]]] = {}
+        sat_to_plane: Dict[int, int] = {}
+        for row in sat_anchor_points:
+            plane = int(row["plane"])
+            sat = int(row["sat"])
+            by_plane.setdefault(plane, {}).setdefault(sat, []).append(row)
+            by_sat.setdefault(sat, []).append(row)
+            sat_to_plane[sat] = plane
+
+        for sat_rows in by_sat.values():
+            sat_rows.sort(key=lambda item: float(item["time_s"]))
+        for plane_rows in by_plane.values():
+            for sat_rows in plane_rows.values():
+                sat_rows.sort(key=lambda item: float(item["time_s"]))
+
+        # 同轨卫星主要是时间错位，这里用每个轨道面 slot 最小的卫星作为连续主线代表。
+        for plane, sat_rows_map in sorted(by_plane.items()):
+            representative_sat = min(
+                sat_rows_map,
+                key=lambda sat: (int(sat_rows_map[sat][0]["slot"]), sat),
+            )
+            rep_rows = sat_rows_map[representative_sat]
+            rep_points = _dedupe_track_points(
+                [
+                    (float(row["anchor_east_m"]), float(row["anchor_north_m"]))
+                    for row in rep_rows
+                ]
+            )
+            if len(rep_points) >= 2:
+                mapped_points = " ".join(
+                    f"{x:.2f},{y:.2f}" for x, y in (map_xy(east, north) for east, north in rep_points)
+                )
+                lines.append(
+                    f'<polyline points="{mapped_points}" fill="none" '
+                    f'stroke="{plane_colors.get(plane, "#495057")}" stroke-width="3.0" '
+                    f'stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>'
+                )
+
+        for sat, sat_rows in sorted(by_sat.items()):
+            if not sat_rows:
+                continue
+            plane = sat_to_plane[sat]
+            color = plane_colors.get(plane, "#495057")
+            start = sat_rows[0]
+            end = sat_rows[-1]
+            start_x, start_y = map_xy(float(start["anchor_east_m"]), float(start["anchor_north_m"]))
+            end_x, end_y = map_xy(float(end["anchor_east_m"]), float(end["anchor_north_m"]))
+
+            lines.append(
+                f'<circle cx="{start_x:.2f}" cy="{start_y:.2f}" r="5.8" fill="#ffffff" '
+                f'stroke="{color}" stroke-width="2.0"/>'
+            )
+            lines.append(
+                f'<rect x="{end_x - 4.8:.2f}" y="{end_y - 4.8:.2f}" width="9.6" height="9.6" '
+                f'fill="{color}" stroke="#111111" stroke-width="0.8"/>'
+            )
+            lines.append(
+                f'<text x="{start_x + 7:.2f}" y="{start_y - 7:.2f}" font-size="9" fill="{color}" '
+                f'font-family="monospace">sat{sat} S</text>'
+            )
+            lines.append(
+                f'<text x="{end_x + 7:.2f}" y="{end_y + 12:.2f}" font-size="9" fill="{color}" '
+                f'font-family="monospace">sat{sat} E</text>'
+            )
+
     if ue_points:
         role_colors = {
             "center": "#d94841",
@@ -204,6 +324,42 @@ def render_svg(
                     f'font-family="monospace">{role}</text>'
                 )
 
+    if sat_anchor_points:
+        plane_colors = {
+            0: "#d9480f",
+            1: "#1c7ed6",
+        }
+        legend_x = margin
+        legend_y = height - margin + 10
+        for idx, plane in enumerate(sorted({int(p["plane"]) for p in sat_anchor_points})):
+            ly = legend_y + idx * 22
+            color = plane_colors.get(plane, "#495057")
+            lines.append(
+                f'<line x1="{legend_x:.2f}" y1="{ly:.2f}" x2="{legend_x + 24:.2f}" y2="{ly:.2f}" '
+                f'stroke="{color}" stroke-width="3.0" stroke-linecap="round"/>'
+            )
+            lines.append(
+                f'<text x="{legend_x + 32:.2f}" y="{ly + 4:.2f}" font-size="11" fill="#111" '
+                f'font-family="monospace">plane{plane} mainline</text>'
+            )
+        marker_y = legend_y + max(1, len({int(p["plane"]) for p in sat_anchor_points})) * 22
+        lines.append(
+            f'<circle cx="{legend_x + 5:.2f}" cy="{marker_y:.2f}" r="5.8" fill="#ffffff" '
+            f'stroke="#111111" stroke-width="1.5"/>'
+        )
+        lines.append(
+            f'<text x="{legend_x + 18:.2f}" y="{marker_y + 4:.2f}" font-size="11" fill="#111" '
+            f'font-family="monospace">sat start</text>'
+        )
+        lines.append(
+            f'<rect x="{legend_x + 108:.2f}" y="{marker_y - 4.8:.2f}" width="9.6" height="9.6" '
+            f'fill="#111111" stroke="#111111" stroke-width="0.8"/>'
+        )
+        lines.append(
+            f'<text x="{legend_x + 124:.2f}" y="{marker_y + 4:.2f}" font-size="11" fill="#111" '
+            f'font-family="monospace">sat end</text>'
+        )
+
     lines.append("</svg>")
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -221,6 +377,7 @@ def main() -> None:
     p.add_argument("--title", default="WGS84 Hex Grid")
     p.add_argument("--subtitle", default="")
     p.add_argument("--ue-csv", type=Path, help="Optional UE layout CSV to overlay")
+    p.add_argument("--sat-anchor-csv", type=Path, help="Optional satellite anchor trace CSV to overlay")
     p.add_argument("--ue-show-labels", type=_parse_bool, default=True)
     p.add_argument("--ue-label-prefix", default="UE")
     args = p.parse_args()
@@ -228,6 +385,7 @@ def main() -> None:
     out = args.out if args.out else args.csv.with_suffix(".svg")
     cells = load_cells(args.csv)
     ues = load_ues(args.ue_csv) if args.ue_csv else None
+    sat_anchor_points = load_sat_anchor_trace(args.sat_anchor_csv) if args.sat_anchor_csv else None
     render_svg(
         cells=cells,
         out_path=out,
@@ -239,6 +397,7 @@ def main() -> None:
         show_centers=args.show_centers,
         title=args.title,
         ue_points=ues,
+        sat_anchor_points=sat_anchor_points,
         ue_label_prefix=args.ue_label_prefix,
         ue_show_labels=args.ue_show_labels,
         subtitle=args.subtitle,
@@ -247,6 +406,8 @@ def main() -> None:
     print(f"[INFO] cells: {len(cells)}")
     if ues is not None:
         print(f"[INFO] UEs: {len(ues)}")
+    if sat_anchor_points is not None:
+        print(f"[INFO] anchor rows: {len(sat_anchor_points)}")
 
 
 if __name__ == "__main__":

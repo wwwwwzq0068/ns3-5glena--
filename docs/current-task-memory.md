@@ -1,8 +1,9 @@
 # 当前任务记忆
 
-## 当前稳定节点
-- 当前研究仓库稳定节点：`3.2.0`
-- 这里的 `3.2.0` 指研究工作版本，不是 ns-3 框架版本
+## 当前版本状态
+- 最近已发布稳定节点：`3.2.1`（Git tag：`research-v3.2.1`）
+- 当前工作区仍位于 `3.2` 主阶段内；`seven-cell` baseline 及其后续整理属于 `research-v3.2.1` 之后的未发布状态
+- 这里的 `3.2.x` 指研究工作版本，不是 ns-3 框架版本
 - ns-3 框架版本保持为 `3.46`
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
@@ -10,7 +11,7 @@
 - 当前场景 baseline：`2x4` 双轨、`25 UE`、`seven-cell`（中心 1 小区 + 周围 6 小区）二维部署
 - 当前算法 baseline：传统 `A3` 风格切换，判决主线为 `RSRP + hysteresis + TTT + 基本可见性/beam lock` 
 - `strictNrtGuard`（严格邻区表守卫）不再作为 baseline 默认项，转入后续增强策略方向
-- 当前改进方向：先独立评估 `shadowing / Rician` 扰动对自定义 `beam budget/A3` 判决链的影响，再进入“信号质量 + 卫星负载”联合感知策略
+- 当前改进方向：当前默认已打开 `shadowing / Rician` 扰动并注入自定义 `beam budget/A3` 判决链，后续再进入“信号质量 + 卫星负载”联合感知策略
 
 当前默认关键参数：
 - `gNbNum = 8`
@@ -26,8 +27,14 @@
 - `overpassGapSeconds`（同轨过境间隔）=`2 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
-- `hoHysteresisDb`（切换迟滞门限）=`0.3 dB`
-- `hoTttMs`（切换触发时间）=`100 ms`
+- `hoHysteresisDb`（切换迟滞门限）=`3.0 dB`
+- `hoTttMs`（切换触发时间）=`300 ms`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`15 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`1.0 s`
+- `forceRlcAmForEpc`（可选将 `EPC` 用户面承载映射为 `RLC AM`）=`false`
+- `disableUeIpv4Forwarding`（默认关闭 `UE IPv4 forwarding`）=`true`
 
 ## 当前已确认实现
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
@@ -37,7 +44,9 @@
 - 外围 `16 UE` 按 `3/3/3/3/2/2` 分配到六个相邻 hex，并在各自小区中心附近做局部散点
 - 当前默认启用六边形网格和自定义 `A3` 风格切换执行路径
 - 当前 `NrChannelHelper` 已配置 `NTN-Rural + LOS + ThreeGpp`，并开启 `ShadowingEnabled`
-- 但当前 `A3` 判决仍使用自定义几何 `beam budget/rsrpDbm`，尚未直接消费 PHY 层随机衰落结果
+- 但当前 `A3` 判决仍使用自定义 `beam budget/rsrpDbm` 观测链，尚未直接消费 PHY 层真实测量结果
+- 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被误送回 `NrEpcUeNas::Send()` 重新分类
+- 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 映射
 - 当前默认关闭 `strictNrtGuard`（严格邻区表守卫），保留其作为后续增强策略开关
 - 当前默认关闭高噪声的 `KPI`、`OVERPASS`、`GRID-ANCHOR` 输出，保留切换和最终汇总日志
 - 当前新增周期性 `[Progress]` 日志，用于观察仿真推进
@@ -82,7 +91,7 @@
 - 明确 `sat_beam_trace.csv` 当前记录的是理想化 `beam budget`（波束预算）/几何 `RSRP` 代理，而不是完整真实测量值，避免把极小 `delta`（前两强功率差）直接解释成真实物理世界下的边界强弱关系
 - 评估当前外围 `6` 个小区中的 `UE` 分布是否足够均衡，是否已经形成可观察的跨小区竞争
 - 评估中心 `3x3` 密集簇与外围 `6` 小区占位的组合，对“baseline 缺陷暴露”和“场景代表性”的影响边界
-- 规划独立 `shadowing / Rician` 扰动实验分支，在不改变 baseline 默认定义的前提下，验证为自定义 `beam budget`/A3 判决链引入可开关测量扰动后，边界竞争、`delta` 分布和 `ping-pong` 暴露性会如何变化
+- 继续评估当前默认开启的 `shadowing / Rician` 扰动对自定义 `beam budget`/A3 判决链的影响，重点观察边界竞争、`delta` 分布和 `ping-pong` 暴露性如何变化
 - 将毕设任务书中的“信号质量 + 卫星负载”要求转化为后续改进算法的明确设计目标
 - 在保持当前场景口径不变的前提下，为后续联合策略提供可解释的对照组
 
@@ -99,5 +108,27 @@
 ## 当前优先方向
 - 稳住 `2x4` 双轨、`25 UE`、`seven-cell` baseline 场景
 - 用统一口径完成一轮七小区几何与切换现象验证
-- 先澄清当前 `sat_beam_trace` 和自定义 `beam budget` 判决链能回答什么、不能回答什么，再进入 `shadowing / Rician` 扰动分支
+- 先澄清当前 `sat_beam_trace` 和自定义 `beam budget` 判决链在默认开启 `shadowing / Rician` 后还能回答什么、不能回答什么，再进入后续联合策略
 - 在不改变 baseline 定位的前提下，最后再推进“信号质量 + 卫星负载”联合感知算法
+
+## 待发布收口建议
+- 若准备冻结当前工作区，下一稳定节点更适合命名为 `research-v3.2.2`，不建议直接升到 `3.3.0`
+- 原因：当前变化仍属于 `3.2` 主阶段内的 baseline 场景收紧、观测链增强与可视化补充，不是新的研究主阶段切换
+
+建议纳入下一 tag 的改动包：
+- baseline 场景口径切到 `seven-cell`，并将 `UE` 生成逻辑重构为“局部偏移模板 + 统一地理坐标转换”
+- custom `A3` 观测链支持注入 `shadowing / Rician` 扰动，并补充 `geometryRsrpDbm` 等 trace 字段
+- 新增 `sat_anchor_trace.csv` 及 `plot_hex_grid_svg.py` 的轨迹叠加能力
+- 新增 `forceRlcAmForEpc`、`disableUeIpv4Forwarding` 等稳定性控制项
+- `NrEpcTftClassifier` 增加 malformed `IPv4/IPv6 UDP/TCP` 包防御
+- 文档统一改为“`research-v3.2.1` 是最近已发布稳定节点，当前为 `post-v3.2.1` 未发布状态”
+
+发布前最少检查：
+- 跑通一轮默认 `seven-cell baseline`
+- 确认 `sat_beam_trace.csv`、`sat_anchor_trace.csv`、`sat_attenuation_per_time.csv` 输出链完整
+- 确认文档中的默认参数与代码默认值一致
+- 确认 `scratch/README.md`、`scratch/baseline-definition.md`、`scratch/midterm-report/midterm-technical-summary.md` 口径一致
+
+建议提交/tag 写法：
+- 收口提交：`chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
+- Git tag：`research-v3.2.2`

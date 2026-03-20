@@ -164,6 +164,15 @@ struct UeRuntime
 
     /** 上一拍记录的各卫星距离，用于判定最近卫星变化。 */
     std::vector<double> prevDistances;
+
+    /** 每条 UE-卫星观测链当前持有的阴影衰落样本，单位 dB。 */
+    std::vector<double> customA3ShadowingDb;
+
+    /** 每条 UE-卫星观测链当前持有的莱斯功率增益样本，线性值。 */
+    std::vector<double> customA3RicianPowerLinear;
+
+    /** 上一次更新自定义 A3 扰动的时刻，单位秒。 */
+    double customA3LastUpdateTimeSeconds = -1.0;
 };
 
 struct UeLayoutConfig
@@ -221,6 +230,9 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.manualHoCandidateSince = -1.0;
     ue.manualHoLastTriggerTime = -1.0;
     ue.prevDistances.assign(gNbNum, -1.0);
+    ue.customA3ShadowingDb.assign(gNbNum, std::numeric_limits<double>::quiet_NaN());
+    ue.customA3RicianPowerLinear.assign(gNbNum, std::numeric_limits<double>::quiet_NaN());
+    ue.customA3LastUpdateTimeSeconds = -1.0;
 }
 
 /**

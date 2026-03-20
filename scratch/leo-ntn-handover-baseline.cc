@@ -115,6 +115,10 @@ static double g_manualHoTttSeconds = 0.1;
 
 // 逐时刻卫星链路预算导出文件。
 static std::ofstream g_satBeamTrace;
+// 逐时刻卫星波束锚点导出文件。
+static std::ofstream g_satAnchorTrace;
+// 自定义 A3 观测链使用的高斯随机变量。
+static Ptr<NormalRandomVariable> g_customA3NormalRv;
 
 // ============================================================================
 // 运行时复位与事件回调
@@ -129,6 +133,42 @@ ResetRuntimeState(uint32_t gNbNum)
     for (auto& ue : g_ues)
     {
         ResetUeRuntime(ue, gNbNum);
+    }
+}
+
+/**
+ * 导出当前时刻每颗卫星的地面波束锚点位置。
+ */
+static void
+FlushSatelliteAnchorTraceRows(double nowSeconds)
+{
+    if (!g_satAnchorTrace.is_open())
+    {
+        return;
+    }
+
+    for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+    {
+        const auto& sat = g_satellites[satIdx];
+        double anchorLatDeg = std::numeric_limits<double>::quiet_NaN();
+        double anchorLonDeg = std::numeric_limits<double>::quiet_NaN();
+        double anchorEastMeters = std::numeric_limits<double>::quiet_NaN();
+        double anchorNorthMeters = std::numeric_limits<double>::quiet_NaN();
+
+        if (const auto* anchorCell = FindHexGridCellById(g_hexGridCells, sat.currentAnchorGridId))
+        {
+            anchorLatDeg = anchorCell->latitudeDeg;
+            anchorLonDeg = anchorCell->longitudeDeg;
+            anchorEastMeters = anchorCell->eastMeters;
+            anchorNorthMeters = anchorCell->northMeters;
+        }
+
+        g_satAnchorTrace << std::fixed << std::setprecision(3) << nowSeconds << "," << satIdx << ","
+                         << sat.orbitPlaneIndex << "," << sat.orbitSlotIndex << ","
+                         << sat.dev->GetCellId() << "," << sat.currentAnchorGridId << ",";
+        g_satAnchorTrace << std::setprecision(8) << anchorLatDeg << "," << anchorLonDeg << ",";
+        g_satAnchorTrace << std::setprecision(3) << anchorEastMeters << "," << anchorNorthMeters
+                         << "\n";
     }
 }
 
@@ -565,6 +605,7 @@ UpdateConstellation(Time interval, Time stopTime)
         g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
         UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
     }
+    FlushSatelliteAnchorTraceRows(nowSeconds);
 
     std::map<uint32_t, std::set<uint16_t>> desiredActiveNeighbours;
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
@@ -575,6 +616,7 @@ UpdateConstellation(Time interval, Time stopTime)
                                                                        nowSeconds,
                                                                        g_carrierFrequencyHz,
                                                                        g_minElevationRad,
+                                                                       g_customA3NormalRv,
                                                                        g_beamModelConfig,
                                                                        referenceStates,
                                                                        g_satellites,
@@ -738,6 +780,14 @@ main(int argc, char* argv[])
     g_beamModelConfig.rxGainDbi = cfg.ueRxGainDbi;
     g_beamModelConfig.atmLossDb = cfg.atmLossDb;
     g_beamModelConfig.beamDropPenaltyDb = cfg.beamDropPenaltyDb;
+    g_beamModelConfig.enableCustomA3Shadowing = cfg.customA3UseShadowing;
+    g_beamModelConfig.customA3ShadowingSigmaDb = cfg.customA3ShadowingSigmaDb;
+    g_beamModelConfig.customA3ShadowingCorrelationSeconds =
+        cfg.customA3ShadowingCorrelationSeconds;
+    g_beamModelConfig.enableCustomA3RicianFading = cfg.customA3UseRician;
+    g_beamModelConfig.customA3RicianKDb = cfg.customA3RicianKDb;
+    g_beamModelConfig.customA3RicianCorrelationSeconds =
+        cfg.customA3RicianCorrelationSeconds;
     ApplyGlobalMirrorConfig(config);
 
     const bool outputDirsReady = EnsureParentDirectoryForFile(g_gridCatalogPath) &&
@@ -793,6 +843,12 @@ main(int argc, char* argv[])
               << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
               << " alphaMax=" << cfg.scanMaxDeg << "deg"
               << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
+    std::cout << "[A3-Measure] shadowing=" << (cfg.customA3UseShadowing ? "ON" : "OFF")
+              << " sigma=" << cfg.customA3ShadowingSigmaDb << "dB"
+              << " corr=" << cfg.customA3ShadowingCorrelationSeconds << "s"
+              << " rician=" << (cfg.customA3UseRician ? "ON" : "OFF")
+              << " K=" << cfg.customA3RicianKDb << "dB"
+              << " corr=" << cfg.customA3RicianCorrelationSeconds << "s" << std::endl;
     std::cout << "[Constellation] satellites=" << cfg.gNbNum
               << " planes=" << cfg.orbitPlaneCount
               << " ue=" << cfg.ueNum
@@ -817,6 +873,10 @@ main(int argc, char* argv[])
               << " strictNrtGuard=" << (g_strictNrtGuard ? "ON" : "OFF")
               << " strictNrtMargin=" << g_strictNrtMarginDb << "dB";
     std::cout << std::endl;
+    std::cout << "[UserPlane] rlc="
+              << (cfg.forceRlcAmForEpc ? "AM(default override)" : "helper default")
+              << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
+              << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
 
     const double semiMajorAxisMeters =
@@ -865,6 +925,11 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(10)));
     Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod", TimeValue(MilliSeconds(50)));
     Config::SetDefault("ns3::NrAnr::Threshold", UintegerValue(0));
+    if (cfg.forceRlcAmForEpc)
+    {
+        Config::SetDefault("ns3::NrGnbRrc::EpsBearerToRlcMapping",
+                           EnumValue(NrGnbRrc::RLC_AM_ALWAYS));
+    }
 
     if (g_printOrbitCheck)
     {
@@ -967,6 +1032,11 @@ main(int argc, char* argv[])
     int64_t randomStream = 1;
     randomStream += nrHelper->AssignStreams(gNbNetDev, randomStream);
     randomStream += nrHelper->AssignStreams(ueNetDev, randomStream);
+    g_customA3NormalRv = CreateObject<NormalRandomVariable>();
+    g_customA3NormalRv->SetAttribute("Mean", DoubleValue(0.0));
+    g_customA3NormalRv->SetAttribute("Variance", DoubleValue(1.0));
+    g_customA3NormalRv->SetStream(randomStream);
+    randomStream += 1;
 
     // 先一次性建立完整 X2 网格；后续由动态 NRT（可见+可锁定）决定邻区是否处于激活态。
     for (uint32_t i = 0; i < gNbNodes.GetN(); ++i)
@@ -1075,6 +1145,21 @@ main(int argc, char* argv[])
 
     Ipv4InterfaceContainer ueIpIface = nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
     Ipv4StaticRoutingHelper routingHelper;
+    if (cfg.disableUeIpv4Forwarding)
+    {
+        for (uint32_t ueIdx = 0; ueIdx < ueNodes.GetN(); ++ueIdx)
+        {
+            Ptr<Ipv4> ueIpv4 = ueNodes.Get(ueIdx)->GetObject<Ipv4>();
+            if (!ueIpv4)
+            {
+                continue;
+            }
+            for (uint32_t ifIdx = 0; ifIdx < ueIpv4->GetNInterfaces(); ++ifIdx)
+            {
+                ueIpv4->SetForwarding(ifIdx, false);
+            }
+        }
+    }
 
     g_ues.clear();
     g_ues.reserve(cfg.ueNum);
@@ -1093,6 +1178,7 @@ main(int argc, char* argv[])
         ue.placementRole = uePlacements[ueIdx].role;
         ue.eastOffsetMeters = uePlacements[ueIdx].eastOffsetMeters;
         ue.northOffsetMeters = uePlacements[ueIdx].northOffsetMeters;
+        ResetUeRuntime(ue, cfg.gNbNum);
 
         uint32_t initialAttachIdx = 0;
         uint32_t bestVisibleIdx = 0;
@@ -1153,21 +1239,25 @@ main(int argc, char* argv[])
         ue.initialAttachIdx = initialAttachIdx;
         ue.expectedSourceIndex = initialAttachIdx;
         ue.expectedTargetIndex = initialAttachIdx;
-        const double predictionStepSeconds =
-            std::max(0.01, std::min(0.1, cfg.updateIntervalMs / 1000.0));
-        // 用离线代理提前估计第一次切换时刻，便于与真实仿真结果对照。
-        const auto predicted = PredictFirstHandoverA3Proxy(initialAttachIdx,
-                                                           cfg.simTime,
-                                                           predictionStepSeconds,
-                                                           cfg.hoHysteresisDb,
-                                                           static_cast<double>(cfg.hoTttMs) / 1000.0,
-                                                           ue.groundPoint);
-        if (predicted.has_value())
+        const bool customA3PerturbationEnabled = cfg.customA3UseShadowing || cfg.customA3UseRician;
+        if (!customA3PerturbationEnabled)
         {
-            ue.hasPredictedHandover = true;
-            ue.expectedSourceIndex = predicted->sourceIdx;
-            ue.expectedTargetIndex = predicted->targetIdx;
-            ue.predictedHandoverTimeSeconds = predicted->triggerTimeSeconds;
+            const double predictionStepSeconds =
+                std::max(0.01, std::min(0.1, cfg.updateIntervalMs / 1000.0));
+            // 用离线代理提前估计第一次切换时刻，便于与真实仿真结果对照。
+            const auto predicted = PredictFirstHandoverA3Proxy(initialAttachIdx,
+                                                               cfg.simTime,
+                                                               predictionStepSeconds,
+                                                               cfg.hoHysteresisDb,
+                                                               static_cast<double>(cfg.hoTttMs) / 1000.0,
+                                                               ue.groundPoint);
+            if (predicted.has_value())
+            {
+                ue.hasPredictedHandover = true;
+                ue.expectedSourceIndex = predicted->sourceIdx;
+                ue.expectedTargetIndex = predicted->targetIdx;
+                ue.predictedHandoverTimeSeconds = predicted->triggerTimeSeconds;
+            }
         }
 
         nrHelper->AttachToGnb(ueNetDev.Get(ueIdx), gNbNetDev.Get(initialAttachIdx));
@@ -1216,12 +1306,23 @@ main(int argc, char* argv[])
     {
         g_satBeamTrace.close();
     }
+    if (g_satAnchorTrace.is_open())
+    {
+        g_satAnchorTrace.close();
+    }
     g_satBeamTrace.open(cfg.attenuationInputPath, std::ios::out | std::ios::trunc);
     NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(),
                     "Failed to open beam trace CSV: " << cfg.attenuationInputPath);
     g_satBeamTrace
         << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm,"
+        << "geometry_rsrp_dbm,custom_a3_shadowing_db,custom_a3_rician_fading_db,"
         << "attached_ue_count,offered_packet_rate,load_score,admission_allowed\n";
+    g_satAnchorTrace.open(cfg.satAnchorTracePath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!g_satAnchorTrace.is_open(),
+                    "Failed to open satellite anchor trace CSV: " << cfg.satAnchorTracePath);
+    g_satAnchorTrace
+        << "time_s,sat,plane,slot,cell,anchor_grid_id,anchor_latitude_deg,anchor_longitude_deg,"
+        << "anchor_east_m,anchor_north_m\n";
 
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverStart",
                     MakeCallback(&ReportHandoverStart));
@@ -1257,6 +1358,10 @@ main(int argc, char* argv[])
                       << "->sat" << ue.expectedTargetIndex
                       << "@" << ue.predictedHandoverTimeSeconds << "s";
         }
+        else if (cfg.customA3UseShadowing || cfg.customA3UseRician)
+        {
+            std::cout << " predicted=disabled(custom-a3-perturbation)";
+        }
         else
         {
             std::cout << " predicted=none";
@@ -1289,6 +1394,10 @@ main(int argc, char* argv[])
     if (g_satBeamTrace.is_open())
     {
         g_satBeamTrace.close();
+    }
+    if (g_satAnchorTrace.is_open())
+    {
+        g_satAnchorTrace.close();
     }
 
     if (cfg.runAttenuationScript)

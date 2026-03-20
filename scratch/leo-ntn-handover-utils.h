@@ -238,6 +238,22 @@ JoinOutputPath(const std::string& directory, const std::string& filename)
 }
 
 /**
+ * 根据网格编号反查六边形网格单元。
+ */
+inline const Wgs84HexGridCell*
+FindHexGridCellById(const std::vector<Wgs84HexGridCell>& cells, uint32_t id)
+{
+    for (const auto& cell : cells)
+    {
+        if (cell.id == id)
+        {
+            return &cell;
+        }
+    }
+    return nullptr;
+}
+
+/**
  * 为输出文件创建父目录。
  *
  * 返回 `false` 表示目录创建失败，调用方应终止仿真并提示路径问题。

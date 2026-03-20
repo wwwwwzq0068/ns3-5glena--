@@ -38,6 +38,9 @@ struct BeamTraceRow
     double fsplDb = 0.0;
     double atmLossDb = 0.0;
     double rsrpDbm = 0.0;
+    double geometryRsrpDbm = 0.0;
+    double customA3ShadowingDb = 0.0;
+    double customA3RicianFadingDb = 0.0;
 };
 
 struct UeObservationSnapshot
@@ -56,12 +59,88 @@ struct UeObservationSnapshot
     bool strictNrtQualified = false;
 };
 
+inline void
+ApplyCustomA3MeasurementPerturbation(UeRuntime& ue,
+                                     uint32_t satIdx,
+                                     double nowSeconds,
+                                     Ptr<NormalRandomVariable> normalRv,
+                                     const BeamModelConfig& beamModelConfig,
+                                     BeamLinkBudget& budget)
+{
+    budget.customA3ShadowingDb = 0.0;
+    budget.customA3RicianFadingDb = 0.0;
+
+    if (!std::isfinite(budget.rsrpDbm) || !budget.beamLocked || normalRv == nullptr)
+    {
+        return;
+    }
+
+    if (beamModelConfig.enableCustomA3Shadowing && satIdx < ue.customA3ShadowingDb.size())
+    {
+        const double sigmaDb = std::max(0.0, beamModelConfig.customA3ShadowingSigmaDb);
+        if (sigmaDb > 0.0)
+        {
+            double shadowingDb = ue.customA3ShadowingDb[satIdx];
+            if (!std::isfinite(shadowingDb))
+            {
+                shadowingDb = sigmaDb * normalRv->GetValue();
+            }
+            else
+            {
+                const double dtSeconds =
+                    (ue.customA3LastUpdateTimeSeconds >= 0.0)
+                        ? std::max(0.0, nowSeconds - ue.customA3LastUpdateTimeSeconds)
+                        : 0.0;
+                const double corrSeconds =
+                    std::max(1e-9, beamModelConfig.customA3ShadowingCorrelationSeconds);
+                const double rho = std::exp(-dtSeconds / corrSeconds);
+                const double innovationScale =
+                    sigmaDb * std::sqrt(std::max(0.0, 1.0 - rho * rho));
+                shadowingDb = rho * shadowingDb + innovationScale * normalRv->GetValue();
+            }
+            ue.customA3ShadowingDb[satIdx] = shadowingDb;
+            budget.customA3ShadowingDb = shadowingDb;
+            budget.rsrpDbm += shadowingDb;
+        }
+    }
+
+    if (beamModelConfig.enableCustomA3RicianFading)
+    {
+        const double dtSeconds =
+            (ue.customA3LastUpdateTimeSeconds >= 0.0)
+                ? std::max(0.0, nowSeconds - ue.customA3LastUpdateTimeSeconds)
+                : 0.0;
+        const double kLinear = std::pow(10.0, beamModelConfig.customA3RicianKDb / 10.0);
+        const double sigma = std::sqrt(1.0 / (2.0 * (kLinear + 1.0)));
+        const double specular = std::sqrt(kLinear / (kLinear + 1.0));
+        const double inPhase = specular + sigma * normalRv->GetValue();
+        const double quadrature = sigma * normalRv->GetValue();
+        const double rawPowerGain = std::max(1e-9, inPhase * inPhase + quadrature * quadrature);
+        double filteredPowerGain = rawPowerGain;
+        if (satIdx < ue.customA3RicianPowerLinear.size())
+        {
+            const double previousPowerGain = ue.customA3RicianPowerLinear[satIdx];
+            if (std::isfinite(previousPowerGain))
+            {
+                const double corrSeconds =
+                    std::max(1e-9, beamModelConfig.customA3RicianCorrelationSeconds);
+                const double rho = std::exp(-dtSeconds / corrSeconds);
+                filteredPowerGain = rho * previousPowerGain + (1.0 - rho) * rawPowerGain;
+            }
+            ue.customA3RicianPowerLinear[satIdx] = filteredPowerGain;
+        }
+        budget.customA3RicianFadingDb = 10.0 * std::log10(std::max(1e-9, filteredPowerGain));
+        budget.rsrpDbm += budget.customA3RicianFadingDb;
+    }
+}
+
 inline UeObservationSnapshot
-BuildUeObservationSnapshot(const UeRuntime& ue,
+BuildUeObservationSnapshot(UeRuntime& ue,
                            uint32_t ueIdx,
                            double nowSeconds,
                            double carrierFrequencyHz,
                            double minElevationRad,
+                           Ptr<NormalRandomVariable> normalRv,
                            const BeamModelConfig& beamModelConfig,
                            const std::vector<LeoOrbitCalculator::OrbitState>& satelliteStates,
                            const std::vector<SatelliteRuntime>& satellites,
@@ -89,6 +168,8 @@ BuildUeObservationSnapshot(const UeRuntime& ue,
                                                                 ueEcef,
                                                                 satellites[satIdx].cellAnchorEcef,
                                                                 beamModelConfig);
+        ApplyCustomA3MeasurementPerturbation(
+            ue, satIdx, nowSeconds, normalRv, beamModelConfig, out.beamBudgets[satIdx]);
         out.distancesMeters[satIdx] = out.states[satIdx].slantRangeMeters;
 
         if (pendingBeamTraceRows != nullptr)
@@ -102,9 +183,14 @@ BuildUeObservationSnapshot(const UeRuntime& ue,
                                              out.beamBudgets[satIdx].patternLossDb,
                                              out.beamBudgets[satIdx].fsplDb,
                                              beamModelConfig.atmLossDb,
-                                             out.beamBudgets[satIdx].rsrpDbm});
+                                             out.beamBudgets[satIdx].rsrpDbm,
+                                             out.beamBudgets[satIdx].geometryRsrpDbm,
+                                             out.beamBudgets[satIdx].customA3ShadowingDb,
+                                             out.beamBudgets[satIdx].customA3RicianFadingDb});
         }
     }
+
+    ue.customA3LastUpdateTimeSeconds = nowSeconds;
 
     if (ue.dev && ue.dev->GetRrc())
     {
@@ -281,6 +367,9 @@ FlushBeamTraceRows(std::ofstream& satBeamTrace,
                      << row.fsplDb << ","
                      << row.atmLossDb << ","
                      << row.rsrpDbm << ","
+                     << row.geometryRsrpDbm << ","
+                     << row.customA3ShadowingDb << ","
+                     << row.customA3RicianFadingDb << ","
                      << sat.attachedUeCount << ","
                      << sat.offeredPacketRate << ","
                      << sat.loadScore << ","

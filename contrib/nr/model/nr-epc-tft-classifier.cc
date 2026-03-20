@@ -109,6 +109,12 @@ NrEpcTftClassifier::Classify(Ptr<Packet> p, NrEpcTft::Direction direction, uint1
         {
             if (protocol == UdpL4Protocol::PROT_NUMBER && payloadSize >= 8)
             {
+                if (pCopy->GetSize() < 8)
+                {
+                    NS_LOG_WARN("Dropping malformed IPv4/UDP packet in TFT classifier: actual payload "
+                                << pCopy->GetSize() << "B, IPv4 payload " << payloadSize << "B");
+                    return 0;
+                }
                 UdpHeader udpHeader;
                 pCopy->RemoveHeader(udpHeader);
                 if (direction == NrEpcTft::UPLINK)
@@ -134,6 +140,12 @@ NrEpcTftClassifier::Classify(Ptr<Packet> p, NrEpcTft::Direction direction, uint1
             }
             else if (protocol == TcpL4Protocol::PROT_NUMBER && payloadSize >= 20)
             {
+                if (pCopy->GetSize() < 20)
+                {
+                    NS_LOG_WARN("Dropping malformed IPv4/TCP packet in TFT classifier: actual payload "
+                                << pCopy->GetSize() << "B, IPv4 payload " << payloadSize << "B");
+                    return 0;
+                }
                 TcpHeader tcpHeader;
                 pCopy->RemoveHeader(tcpHeader);
                 if (direction == NrEpcTft::UPLINK)
@@ -211,6 +223,12 @@ NrEpcTftClassifier::Classify(Ptr<Packet> p, NrEpcTft::Direction direction, uint1
 
         if (protocol == UdpL4Protocol::PROT_NUMBER)
         {
+            if (pCopy->GetSize() < 8)
+            {
+                NS_LOG_WARN("Dropping malformed IPv6/UDP packet in TFT classifier: actual payload "
+                            << pCopy->GetSize() << "B");
+                return 0;
+            }
             UdpHeader udpHeader;
             pCopy->RemoveHeader(udpHeader);
 
@@ -227,6 +245,12 @@ NrEpcTftClassifier::Classify(Ptr<Packet> p, NrEpcTft::Direction direction, uint1
         }
         else if (protocol == TcpL4Protocol::PROT_NUMBER)
         {
+            if (pCopy->GetSize() < 20)
+            {
+                NS_LOG_WARN("Dropping malformed IPv6/TCP packet in TFT classifier: actual payload "
+                            << pCopy->GetSize() << "B");
+                return 0;
+            }
             TcpHeader tcpHeader;
             pCopy->RemoveHeader(tcpHeader);
             if (direction == NrEpcTft::UPLINK)

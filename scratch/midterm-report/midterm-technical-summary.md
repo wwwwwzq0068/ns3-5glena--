@@ -23,7 +23,7 @@
 - 后续如何引入“信号质量 + 卫星负载”的联合决策
 
 ### 2.2 当前阶段定位
-当前研究仓库稳定节点为 `3.2.0`。这里的 `3.2.0` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。
+当前研究仓库最近已发布稳定节点为 `3.2.1`（Git tag：`research-v3.2.1`）。这里的 `3.2.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区仍在 `3.2` 主阶段内继续整理 `seven-cell baseline`，但尚未单独提升新的稳定节点。
 
 当前阶段的重点已经从“先把基础物理场景构建出来”推进到“将其整理为可用于后续毕设实验的 baseline 平台”。这意味着：
 - 不再把继续扩星作为默认主线
@@ -149,8 +149,12 @@
 - 邻区可达性约束
 
 当前默认切换参数：
-- `hoHysteresisDb = 0.3 dB`
-- `hoTttMs = 100 ms`
+- `hoHysteresisDb = 3.0 dB`
+- `hoTttMs = 300 ms`
+- `customA3ShadowingSigmaDb = 1.0 dB`
+- `customA3ShadowingCorrelationSeconds = 4.0 s`
+- `customA3RicianKDb = 15 dB`
+- `customA3RicianCorrelationSeconds = 1.0 s`
 
 此外，当前平台保留 `strictNrtGuard`（严格邻区表守卫）这一增强开关，但当前 baseline 默认不启用；baseline 只保留基本的可见性与 `beam lock` 约束，用于更真实地暴露传统 `A3` 的局限。
 
@@ -210,12 +214,15 @@
 需要说明的一点是：
 - 当前 `PHY` 信道已保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`
 - 但 baseline 的 `A3` 判决主线仍使用自定义几何 `beam budget/rsrpDbm`，还没有把随机衰落直接接进判决链
+- 当前平台已经补上一个可开关实验入口：可将 `shadowing / Rician` 扰动注入 custom `beam budget/A3` 观测链；当前默认已开启，但判决仍不是直接读取 PHY 测量
 
 ### 6.4 稳定性与性能处理
 已完成的非算法性关键工作包括：
 - 周期性进度输出
 - 几何共享计算优化，减少重复轨道传播
 - 多处切换后协议异常防御
+- 默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 二次转发回 `NAS/TFT` 分类链
+- 保留 `forceRlcAmForEpc` 作为可选稳定性开关，用于单独比较 `RLC AM/UM` 在切换附近的表现
 - 关闭与当前 handover 主线无关的高噪声输出
 - 默认关闭容易触发无关 `PHY fatal` 的部分 `SRS` 项
 

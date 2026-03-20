@@ -3,15 +3,21 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 当前研究仓库稳定节点：`3.2.0`
-- 这里的 `3.2.0` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
+- 最近已发布稳定节点：`3.2.1`（Git tag：`research-v3.2.1`）
+- 当前工作区仍在 `3.2` 主阶段内继续整理；若看到 `seven-cell` baseline 与相关新参数/日志改动，应视为 `3.2.1` 之后的未发布状态
+- 这里的 `3.2.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
-- 当前 `3.2.0` 的默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
+- 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
 - 当前默认目标不是继续扩星，而是把该七小区场景作为传统 `A3 baseline` 的缺陷暴露平台
 - `strictNrtGuard`（严格邻区表守卫）不再计入 baseline 默认定义，转入后续增强策略侧
-- 当前改进方向先是 `shadowing / Rician` 扰动如何接入自定义 `beam budget/A3` 判决链，之后才是“信号质量 + 卫星负载”联合感知切换策略
+- 当前改进方向先是继续评估默认已开启的 `shadowing / Rician` 扰动如何影响自定义 `beam budget/A3` 判决链，之后才是“信号质量 + 卫星负载”联合感知切换策略
+
+## 当前版本判断
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v3.2.x` tag
+- 目前最近已发布稳定节点仍是 `research-v3.2.1`
+- 当前工作区中与 `seven-cell` baseline、`sat_anchor_trace.csv`、custom `A3` 扰动链相关的变化，默认按“未发布工作区改动”理解，除非后续再打新 tag
 
 ## 当前默认口径
 场景与参数：
@@ -24,6 +30,12 @@
 - `simTime`（仿真时长）=`40 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
+- `hoHysteresisDb`（切换迟滞门限）=`3.0 dB`
+- `hoTttMs`（切换触发时间）=`300 ms`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`15 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`1.0 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
@@ -31,6 +43,9 @@
 - `strictNrtGuard`（严格邻区表守卫）保留为可选增强开关，不作为 baseline 默认条件
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
 - 当前 PHY 信道已开启 `ShadowingEnabled`，但默认 `A3` 判决仍看几何 `beam budget/rsrpDbm`
+- 当前平台已支持把 `shadowing / Rician` 扰动可开关地注入 custom `beam budget/A3` 观测链，且当前默认开启；但判决仍不是直接读取 PHY 测量
+- 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
+- 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不覆盖 helper 的 `RLC` 映射
 
 当前默认 UE 紧凑度：
 - `hexCellRadiusKm`（小区 hex 半径）=`20`
@@ -83,6 +98,7 @@
 - 常见结果包括：
   - `hex_grid_cells.csv`
   - `sat_beam_trace.csv`
+  - `sat_anchor_trace.csv`
   - `sat_attenuation_per_time.csv`
 
 分析脚本：
@@ -93,6 +109,7 @@
   - 读取六边形网格 `CSV`
   - 生成对应 `SVG`
   - 当前支持叠加 `UE` 布局 `CSV`，用于导出 `grid + UE` 视图
+  - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“两轨波束锚点主线 + 各卫星起终点”视图
 - `export_ue_layout.py`
   - 按当前 `UE` 布局规则导出 `UE` 位置 `CSV`
   - 当前可直接复现 `line` 和 `seven-cell` 两类布局
@@ -108,7 +125,7 @@
 
 ## 接下来
 - 先用当前默认参数完成一轮 `seven-cell baseline` 几何与切换现象验证
-- 再单独评估 `shadowing / Rician` 扰动若接入自定义 `beam budget/A3` 判决链，会如何影响边界竞争与 `ping-pong`
+- 继续评估当前默认开启的 `shadowing / Rician` 扰动如何影响自定义 `beam budget/A3` 判决链中的边界竞争与 `ping-pong`
 - 最后在不改 baseline 场景定义的前提下，推进“信号质量 + 卫星负载”联合目标选择
 
 ## 维护规则
@@ -234,20 +251,40 @@
   - `main()` 改为直接消费 `BaselineSimulationConfig`
 
 ### `3.2.0`
-- 当前稳定节点收口
+- 首次稳定节点收口
   - 将当前研究仓库稳定节点提升为 `3.2.0`
   - 收口 `docs/`、`scratch/` 和 `midterm-report/` 的版本与 baseline 口径
   - 保留版本演进历史，同时重组 README 结构，减少文档冗余
 
 ### `3.2.1`
-- 候选场景调优
-  - 在不改变 `simTime`（仿真时长）的前提下，将 `interPlaneRaanSpacingDeg` 下调到 `3 deg`
-  - 将 `interPlaneTimeOffsetSeconds` 下调到 `0.3 s`
-  - 将 `overpassGapSeconds` 下调到 `2 s`
-  - 将 `hotspot-boundary` 布局整体压紧，使更多 UE 落在竞争边界附近
-  - 当前这一步优先增强几何交叉与边界竞争，不引入新的决策逻辑
-- UE 生成逻辑收口
-  - 将 `UE` 部署实现重构为“局部偏移模板生成 + 统一地理坐标转换”两阶段
-  - 保持 `hotspot-boundary` 的布局类型与 `25 UE` 研究口径不变
-  - 默认参数改为更外扩的 `hex-aware` 分布，让边界与背景 `UE` 更明确地压向周围小区
-  - 为后续增加 `7` 小区或其他布局类型预留更清晰的扩展入口
+- 最近已发布稳定节点
+  - 对应 tag：`research-v3.2.1`
+  - 对应提交：`c692e68 chore(v3.2.1): snapshot tightened baseline and joint strategy docs`
+  - 重点是收紧 baseline 与联合策略文档口径，而不是再定义一个新的场景版本
+
+### `post-v3.2.1`
+- 当前未发布工作区主线
+  - `b50d5cc Refactor UE layout to seven-cell baseline` 已将 `UE` 主布局重构到 `seven-cell`
+  - 当前工作区继续围绕 `seven-cell baseline` 整理参数、观测链与可视化输出
+  - 若没有新的 `research-v3.2.x` tag，这些改动都应视为“下一稳定节点之前的未发布工作”
+
+## 建议发布包
+- 建议下一稳定节点使用 `research-v3.2.2`
+- 当前这批改动更像 `3.2` 主阶段内的 baseline 收紧，而不是新的主阶段升级
+
+建议纳入 `v3.2.2` 的内容：
+- `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
+- custom `A3` 观测链的 `shadowing / Rician` 扰动注入
+- `sat_beam_trace.csv` 新字段：`geometry_rsrp_dbm`、`custom_a3_shadowing_db`、`custom_a3_rician_fading_db`
+- `sat_anchor_trace.csv` 输出，以及 `plot_hex_grid_svg.py` 对卫星锚点轨迹的叠加绘图
+- `forceRlcAmForEpc`、`disableUeIpv4Forwarding` 等稳定性开关
+- `NrEpcTftClassifier` 的 malformed packet 防御
+- 当前版本文档口径收口
+
+建议发布前检查：
+- 默认参数下跑通一轮 `seven-cell baseline`
+- 确认 `scratch/results/` 输出链完整
+- 确认 baseline 文档、README 与中期汇报技术总结的参数口径一致
+
+建议收口提交：
+- `chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
