@@ -3,6 +3,7 @@ import argparse
 import csv
 import math
 import os
+import sys
 
 OUTPUT_COLUMNS = [
     ("time_s", "时间_秒"),
@@ -16,6 +17,21 @@ OUTPUT_COLUMNS = [
     ("load_score", "负载评分"),
     ("admission_allowed", "是否允许接纳切入"),
 ]
+
+
+def _set_csv_field_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 2
+
+
+def _clean_csv_lines(handle):
+    for line in handle:
+        yield line.replace("\0", "")
 
 
 def safe_float(value: str) -> float:
@@ -35,7 +51,7 @@ def safe_int(value: str, default: int = 0) -> int:
 def parse_trace(path: str):
     records = []
     with open(path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(_clean_csv_lines(f))
         if not reader.fieldnames:
             raise RuntimeError(f"empty or invalid csv: {path}")
 
@@ -88,17 +104,18 @@ def write_per_time(path: str, records):
 
 
 def main():
+    _set_csv_field_limit()
     parser = argparse.ArgumentParser(description="Export compact per-time beam and load report")
     parser.add_argument("--input", default="scratch/results/sat_beam_trace.csv", help="Input CSV path")
     parser.add_argument(
-        "--per-time-out",
-        default="scratch/results/sat_attenuation_per_time.csv",
-        help="Per-time compact CSV output path",
+        "--report-out",
+        default="scratch/results/sat_beam_report.csv",
+        help="Compact CSV output path",
     )
     args = parser.parse_args()
 
     records = parse_trace(args.input)
-    write_per_time(args.per_time_out, records)
+    write_per_time(args.report_out, records)
 
     t_min = min(r["time_s"] for r in records)
     t_max = max(r["time_s"] for r in records)
@@ -109,7 +126,7 @@ def main():
     print(f"[Report] sat count: {len(sats)} (sat ids={sats})")
     print(f"[Report] time range: {t_min:.3f}s -> {t_max:.3f}s")
     print(f"[Report] rows: {len(records)}")
-    print(f"[Report] per-time exported: {args.per_time_out}")
+    print(f"[Report] exported: {args.report_out}")
 
 
 if __name__ == "__main__":

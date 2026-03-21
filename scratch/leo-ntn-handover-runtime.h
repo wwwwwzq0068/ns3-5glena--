@@ -23,6 +23,8 @@
 #include "leo-orbit-calculator.h"
 #include <cmath>
 #include <cstdint>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
@@ -150,6 +152,18 @@ struct UeRuntime
     /** 成功切换执行时延累加值，单位秒。 */
     double totalHandoverExecutionDelaySeconds = 0.0;
 
+    /** 已识别到的短时回切（A->B->A）次数。 */
+    uint32_t pingPongCount = 0;
+
+    /** 最近一次成功切换的源小区 ID。 */
+    uint16_t lastSuccessfulHoSourceCell = 0;
+
+    /** 最近一次成功切换的目标小区 ID。 */
+    uint16_t lastSuccessfulHoTargetCell = 0;
+
+    /** 最近一次成功切换完成时刻，单位秒。 */
+    double lastSuccessfulHoTimeSeconds = -1.0;
+
     /** 自定义切换逻辑当前认为的服务卫星索引。 */
     uint32_t manualHoServingIdx = std::numeric_limits<uint32_t>::max();
 
@@ -225,6 +239,10 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverStartCount = 0;
     ue.handoverEndOkCount = 0;
     ue.totalHandoverExecutionDelaySeconds = 0.0;
+    ue.pingPongCount = 0;
+    ue.lastSuccessfulHoSourceCell = 0;
+    ue.lastSuccessfulHoTargetCell = 0;
+    ue.lastSuccessfulHoTimeSeconds = -1.0;
     ue.manualHoServingIdx = std::numeric_limits<uint32_t>::max();
     ue.manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
     ue.manualHoCandidateSince = -1.0;
@@ -425,6 +443,26 @@ BuildUePlacements(double baseLatitudeDeg,
 
     return BuildUePlacementsFromOffsetSpecs(
         baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, offsetSpecs);
+}
+
+inline void
+DumpUeLayoutCsv(const std::string& path, const std::vector<UePlacement>& placements)
+{
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!out.is_open(), "Failed to open UE layout CSV: " << path);
+
+    out << "ue_id,role,east_m,north_m,latitude_deg,longitude_deg,altitude_m\n";
+    for (uint32_t ueIdx = 0; ueIdx < placements.size(); ++ueIdx)
+    {
+        const auto& placement = placements[ueIdx];
+        out << ueIdx << "," << placement.role << ",";
+        out << std::fixed << std::setprecision(3) << placement.eastOffsetMeters << ","
+            << placement.northOffsetMeters << ",";
+        out << std::setprecision(8)
+            << LeoOrbitCalculator::RadToDeg(placement.groundPoint.latitudeRad) << ","
+            << LeoOrbitCalculator::RadToDeg(placement.groundPoint.longitudeRad) << ",";
+        out << std::setprecision(3) << placement.groundPoint.altitudeMeters << "\n";
+    }
 }
 
 } // namespace ns3

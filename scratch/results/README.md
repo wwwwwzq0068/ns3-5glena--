@@ -8,8 +8,10 @@ large-scale runs in this directory and only promote selected baseline outputs.
 
 Current default files include:
 - `hex_grid_cells.csv`
+- `hex_grid_cells.svg`
+- `ue_layout.csv`
 - `sat_beam_trace.csv`
 - `sat_anchor_trace.csv`
-- `sat_attenuation_per_time.csv`
+- `sat_beam_report.csv`
 
 This directory is ignored by Git on purpose. Keep routine runs here, and only promote selected baseline results into version control when they are worth preserving.

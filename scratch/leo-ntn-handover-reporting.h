@@ -71,6 +71,9 @@ struct HandoverAggregate
 
     /** 全部成功切换的平均执行时延，单位毫秒。 */
     double averageDelayMs = 0.0;
+
+    /** 全部 UE 识别到的短时回切总数。 */
+    uint32_t totalPingPongCount = 0;
 };
 
 /**
@@ -116,6 +119,7 @@ BuildHandoverAggregate(const std::vector<UeRuntime>& ues)
         out.totalHoStart += ue.handoverStartCount;
         out.totalHoEndOk += ue.handoverEndOkCount;
         out.totalHoDelaySeconds += ue.totalHandoverExecutionDelaySeconds;
+        out.totalPingPongCount += ue.pingPongCount;
     }
     if (out.totalHoStart > 0)
     {
@@ -156,7 +160,7 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
  * 打印整体与分 UE 的切换汇总。
  */
 inline void
-PrintHandoverSummary(const std::vector<UeRuntime>& ues)
+PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSeconds)
 {
     std::cout << "=== Handover summary ===" << std::endl;
     const HandoverAggregate aggregate = BuildHandoverAggregate(ues);
@@ -166,6 +170,9 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues)
               << aggregate.overallSuccessRate << "%" << std::endl;
     std::cout << "Average HO execution delay: " << std::fixed << std::setprecision(3)
               << aggregate.averageDelayMs << " ms" << std::endl;
+    std::cout << "Total ping-pong events: " << aggregate.totalPingPongCount
+              << " (window=" << std::fixed << std::setprecision(3) << pingPongWindowSeconds
+              << "s)" << std::endl;
 
     for (uint32_t ueIdx = 0; ueIdx < ues.size(); ++ueIdx)
     {
@@ -181,7 +188,8 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues)
 
         std::cout << "UE" << ueIdx << ": ho=" << ue.handoverEndOkCount << "/" << ue.handoverStartCount
                   << " successRate=" << std::fixed << std::setprecision(1) << ueSuccessRate << "%"
-                  << " avgDelay=" << std::fixed << std::setprecision(3) << ueAvgDelayMs << " ms";
+                  << " avgDelay=" << std::fixed << std::setprecision(3) << ueAvgDelayMs << " ms"
+                  << " pingPong=" << ue.pingPongCount;
         if (ue.hasPredictedHandover)
         {
             std::cout << " predicted sat" << ue.expectedSourceIndex << "->sat" << ue.expectedTargetIndex

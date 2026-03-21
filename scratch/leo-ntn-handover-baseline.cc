@@ -17,7 +17,6 @@
 #include "wgs84-hex-grid.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -105,6 +104,8 @@ static double g_offeredPacketRatePerUe = 1000.0;
 static double g_maxSupportedUesPerSatellite = 3.0;
 static double g_loadCongestionThreshold = 0.8;
 static double g_hoHysteresisDb = 0.3;
+// 将 A->B->A 识别为 ping-pong 的时间窗口。
+static double g_pingPongWindowSeconds = 1.0;
 
 // 严格邻区守卫：只有满足可见、波束锁定和门限条件的邻区才会被激活。
 static bool g_strictNrtGuard = false;
@@ -281,15 +282,34 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
     std::ostringstream prefix;
     double handoverDelayMs = -1.0;
+    bool pingPongDetected = false;
+    double pingPongGapSeconds = -1.0;
+    uint16_t previousSourceCell = 0;
+    uint16_t previousTargetCell = 0;
+    uint16_t currentSourceCell = 0;
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
         auto& ue = g_ues[*ueIdx];
         ue.handoverEndOkCount++;
+        const double nowSeconds = Simulator::Now().GetSeconds();
+        previousSourceCell = ue.lastSuccessfulHoSourceCell;
+        previousTargetCell = ue.lastSuccessfulHoTargetCell;
+        currentSourceCell = ue.lastHoStartSourceCell;
         if (ue.lastHoStartTimeSeconds >= 0.0)
         {
-            const double delaySeconds = Simulator::Now().GetSeconds() - ue.lastHoStartTimeSeconds;
+            const double delaySeconds = nowSeconds - ue.lastHoStartTimeSeconds;
             ue.totalHandoverExecutionDelaySeconds += delaySeconds;
             handoverDelayMs = delaySeconds * 1000.0;
+        }
+        if (ue.hasPendingHoStart && ue.lastSuccessfulHoTimeSeconds >= 0.0 &&
+            previousSourceCell == cellId && previousTargetCell == currentSourceCell)
+        {
+            pingPongGapSeconds = nowSeconds - ue.lastSuccessfulHoTimeSeconds;
+            if (pingPongGapSeconds <= g_pingPongWindowSeconds)
+            {
+                ue.pingPongCount++;
+                pingPongDetected = true;
+            }
         }
         if (ue.hasPredictedHandover && g_satellites.size() > ue.expectedSourceIndex &&
             g_satellites.size() > ue.expectedTargetIndex)
@@ -301,6 +321,12 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
             {
                 ue.seenExpectedHandover = true;
             }
+        }
+        if (ue.hasPendingHoStart)
+        {
+            ue.lastSuccessfulHoSourceCell = ue.lastHoStartSourceCell;
+            ue.lastSuccessfulHoTargetCell = cellId;
+            ue.lastSuccessfulHoTimeSeconds = nowSeconds;
         }
         ue.hasPendingHoStart = false;
         ue.lastHoStartTimeSeconds = -1.0;
@@ -316,6 +342,19 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
         std::cout << " delay=" << std::fixed << std::setprecision(3) << handoverDelayMs << "ms";
     }
     std::cout << std::endl;
+    if (pingPongDetected)
+    {
+        std::cout << "[PING-PONG] t=" << std::fixed << std::setprecision(3)
+                  << Simulator::Now().GetSeconds() << "s"
+                  << prefix.str()
+                  << " path=" << previousSourceCell
+                  << "->" << previousTargetCell
+                  << "->" << cellId
+                  << " currentReturn=" << currentSourceCell
+                  << "->" << cellId
+                  << " gap=" << std::fixed << std::setprecision(3) << pingPongGapSeconds << "s"
+                  << std::endl;
+    }
 }
 
 // ============================================================================
@@ -730,6 +769,7 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_maxSupportedUesPerSatellite = config.maxSupportedUesPerSatellite;
     g_loadCongestionThreshold = config.loadCongestionThreshold;
     g_hoHysteresisDb = config.hoHysteresisDb;
+    g_pingPongWindowSeconds = config.pingPongWindowSeconds;
     g_strictNrtGuard = config.strictNrtGuard;
     g_strictNrtMarginDb = config.strictNrtMarginDb;
     g_manualHoTttSeconds = static_cast<double>(config.hoTttMs) / 1000.0;
@@ -750,14 +790,11 @@ main(int argc, char* argv[])
     RegisterBaselineCommandLineOptions(cmd, config);
     cmd.Parse(argc, argv);
 
-    const BaselineOutputPaths outputPaths = ResolveBaselineOutputPaths(config);
+    ResolveBaselineOutputPaths(config);
     ValidateBaselineSimulationConfig(config);
     ApplyBaselineDerivedLocationConfig(config);
 
     const auto& cfg = config;
-    const std::string& attenuationSummaryOutputPath = outputPaths.attenuationSummaryOutputPath;
-    const std::string& attenuationTimeMatrixOutputPath =
-        outputPaths.attenuationTimeMatrixOutputPath;
     double orbitRaanDeg = cfg.orbitRaanDeg;
     double baseTrueAnomalyDeg = cfg.baseTrueAnomalyDeg;
 
@@ -791,10 +828,11 @@ main(int argc, char* argv[])
     ApplyGlobalMirrorConfig(config);
 
     const bool outputDirsReady = EnsureParentDirectoryForFile(g_gridCatalogPath) &&
-                                 EnsureParentDirectoryForFile(cfg.attenuationInputPath) &&
-                                 EnsureParentDirectoryForFile(cfg.attenuationPerTimePath) &&
-                                 EnsureParentDirectoryForFile(attenuationSummaryOutputPath) &&
-                                 EnsureParentDirectoryForFile(attenuationTimeMatrixOutputPath);
+                                 EnsureParentDirectoryForFile(cfg.beamTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.beamReportPath) &&
+                                 EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
+                                 EnsureParentDirectoryForFile(cfg.gridSvgPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
 
     // 生成用于波束锚定和后续可视化的六边形网格。
@@ -870,6 +908,7 @@ main(int argc, char* argv[])
     std::cout << "[Handover] a3=custom"
               << " hysteresis=" << g_hoHysteresisDb << "dB"
               << " ttt=" << g_manualHoTttSeconds << "s"
+              << " pingPongWindow=" << g_pingPongWindowSeconds << "s"
               << " strictNrtGuard=" << (g_strictNrtGuard ? "ON" : "OFF")
               << " strictNrtMargin=" << g_strictNrtMarginDb << "dB";
     std::cout << std::endl;
@@ -1021,6 +1060,7 @@ main(int argc, char* argv[])
     const auto uePlacements =
         BuildUePlacements(cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters, cfg.ueNum, ueLayout);
     NS_ABORT_MSG_IF(uePlacements.size() != cfg.ueNum, "UE placement count does not match ueNum");
+    DumpUeLayoutCsv(cfg.ueLayoutPath, uePlacements);
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
     {
         ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(uePlacements[i].groundPoint.ecef);
@@ -1310,9 +1350,9 @@ main(int argc, char* argv[])
     {
         g_satAnchorTrace.close();
     }
-    g_satBeamTrace.open(cfg.attenuationInputPath, std::ios::out | std::ios::trunc);
+    g_satBeamTrace.open(cfg.beamTracePath, std::ios::out | std::ios::trunc);
     NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(),
-                    "Failed to open beam trace CSV: " << cfg.attenuationInputPath);
+                    "Failed to open beam trace CSV: " << cfg.beamTracePath);
     g_satBeamTrace
         << "time_s,ue,sat,cell,beam_locked,scan_loss_db,pattern_loss_db,fspl_db,atm_loss_db,rsrp_dbm,"
         << "geometry_rsrp_dbm,custom_a3_shadowing_db,custom_a3_rician_fading_db,"
@@ -1389,7 +1429,7 @@ main(int argc, char* argv[])
 
     const double appDuration = std::max(0.0, cfg.simTime - cfg.appStartTime);
     PrintDlTrafficSummary(g_ues, appDuration, cfg.udpPacketSize);
-    PrintHandoverSummary(g_ues);
+    PrintHandoverSummary(g_ues, g_pingPongWindowSeconds);
 
     if (g_satBeamTrace.is_open())
     {
@@ -1400,23 +1440,46 @@ main(int argc, char* argv[])
         g_satAnchorTrace.close();
     }
 
-    if (cfg.runAttenuationScript)
+    if (cfg.runBeamReportScript)
     {
-        std::remove(attenuationSummaryOutputPath.c_str());
-        std::remove(attenuationTimeMatrixOutputPath.c_str());
-        // 交给外部 Python 脚本生成逐时刻衰减明细 CSV。
+        // 交给外部 Python 脚本生成逐时刻紧凑明细 CSV。
         std::ostringstream cmdline;
-        cmdline << "python3 \"" << cfg.attenuationScriptPath << "\""
-                << " --input \"" << cfg.attenuationInputPath << "\""
-                << " --per-time-out \"" << cfg.attenuationPerTimePath << "\"";
+        cmdline << "python3 \"" << cfg.beamReportScriptPath << "\""
+                << " --input \"" << cfg.beamTracePath << "\""
+                << " --report-out \"" << cfg.beamReportPath << "\"";
         const int scriptRc = std::system(cmdline.str().c_str());
         if (scriptRc == 0)
         {
-            std::cout << "[Attenuation] external report generated successfully" << std::endl;
+            std::cout << "[BeamReport] external report generated successfully" << std::endl;
         }
         else
         {
-            std::cout << "[Attenuation] external report script failed, rc=" << scriptRc << std::endl;
+            std::cout << "[BeamReport] external report script failed, rc=" << scriptRc << std::endl;
+        }
+    }
+
+    if (cfg.runGridSvgScript)
+    {
+        if (!g_useWgs84HexGrid || !g_printGridCatalog)
+        {
+            std::cout << "[GridSvg] skipped because hex-grid catalog export is disabled" << std::endl;
+        }
+        else
+        {
+            std::ostringstream cmdline;
+            cmdline << "python3 \"" << cfg.plotHexGridScriptPath << "\""
+                    << " --csv \"" << g_gridCatalogPath << "\""
+                    << " --sat-anchor-csv \"" << cfg.satAnchorTracePath << "\""
+                    << " --out \"" << cfg.gridSvgPath << "\"";
+            const int scriptRc = std::system(cmdline.str().c_str());
+            if (scriptRc == 0)
+            {
+                std::cout << "[GridSvg] SVG generated successfully" << std::endl;
+            }
+            else
+            {
+                std::cout << "[GridSvg] SVG generation failed, rc=" << scriptRc << std::endl;
+            }
         }
     }
 

@@ -78,7 +78,7 @@ sequenceDiagram
         RT->>RT: 更新 attachedUeCount / offeredPacketRate / loadScore
         RT->>REP: 记录 HO start / HO success / delay
         RT->>REP: 输出 throughput / handover summary
-        RT->>REP: 导出 sat_beam_trace / grid catalog / attenuation data
+        RT->>REP: 导出 ue_layout / sat_beam_trace / grid catalog / grid svg / beam report data
     end
 
     Note over UE,TGT: 结束状态：UE 在新服务卫星下继续传输，等待下一轮周期更新

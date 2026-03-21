@@ -25,10 +25,27 @@ def _parse_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError(f"invalid bool: {value}")
 
 
+def _clean_csv_lines(handle):
+    for line in handle:
+        yield line.replace("\0", "")
+
+
+def _safe_float(value: Optional[str]) -> float:
+    if value is None:
+        return math.nan
+    value = value.strip()
+    if not value:
+        return math.nan
+    try:
+        return float(value)
+    except ValueError:
+        return math.nan
+
+
 def load_cells(csv_path: Path) -> List[Dict[str, float]]:
     cells: List[Dict[str, float]] = []
     with csv_path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(_clean_csv_lines(f))
         required = {"id", "east_m", "north_m", "latitude_deg", "longitude_deg"}
         missing = required.difference(reader.fieldnames or [])
         if missing:
@@ -51,7 +68,7 @@ def load_cells(csv_path: Path) -> List[Dict[str, float]]:
 def load_ues(csv_path: Path) -> List[Dict[str, float | str | int]]:
     ues: List[Dict[str, float | str | int]] = []
     with csv_path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(_clean_csv_lines(f))
         required = {"ue_id", "role", "east_m", "north_m"}
         missing = required.difference(reader.fieldnames or [])
         if missing:
@@ -71,7 +88,7 @@ def load_ues(csv_path: Path) -> List[Dict[str, float | str | int]]:
 def load_sat_anchor_trace(csv_path: Path) -> List[Dict[str, float | int]]:
     rows: List[Dict[str, float | int]] = []
     with csv_path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(_clean_csv_lines(f))
         required = {
             "time_s",
             "sat",
@@ -86,23 +103,36 @@ def load_sat_anchor_trace(csv_path: Path) -> List[Dict[str, float | int]]:
         if missing:
             raise ValueError(f"missing required satellite anchor columns: {sorted(missing)}")
         for row in reader:
-            anchor_east_m = float(row["anchor_east_m"])
-            anchor_north_m = float(row["anchor_north_m"])
+            anchor_east_m = _safe_float(row.get("anchor_east_m"))
+            anchor_north_m = _safe_float(row.get("anchor_north_m"))
             if not math.isfinite(anchor_east_m) or not math.isfinite(anchor_north_m):
+                continue
+            time_s = _safe_float(row.get("time_s"))
+            sat = row.get("sat")
+            plane = row.get("plane")
+            slot = row.get("slot")
+            cell = row.get("cell")
+            anchor_grid_id = row.get("anchor_grid_id")
+            if not math.isfinite(time_s) or None in {sat, plane, slot, cell, anchor_grid_id}:
                 continue
             rows.append(
                 {
-                    "time_s": float(row["time_s"]),
-                    "sat": int(row["sat"]),
-                    "plane": int(row["plane"]),
-                    "slot": int(row["slot"]),
-                    "cell": int(row["cell"]),
-                    "anchor_grid_id": int(row["anchor_grid_id"]),
+                    "time_s": time_s,
+                    "sat": int(sat),
+                    "plane": int(plane),
+                    "slot": int(slot),
+                    "cell": int(cell),
+                    "anchor_grid_id": int(anchor_grid_id),
                     "anchor_east_m": anchor_east_m,
                     "anchor_north_m": anchor_north_m,
                 }
             )
     return rows
+
+
+def infer_default_ue_csv(grid_csv_path: Path) -> Optional[Path]:
+    candidate = grid_csv_path.with_name("ue_layout.csv")
+    return candidate if candidate.exists() else None
 
 
 def infer_hex_radius_m(cells: List[Dict[str, float]]) -> float:
@@ -262,40 +292,10 @@ def render_svg(
                     f'stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>'
                 )
 
-        for sat, sat_rows in sorted(by_sat.items()):
-            if not sat_rows:
-                continue
-            plane = sat_to_plane[sat]
-            color = plane_colors.get(plane, "#495057")
-            start = sat_rows[0]
-            end = sat_rows[-1]
-            start_x, start_y = map_xy(float(start["anchor_east_m"]), float(start["anchor_north_m"]))
-            end_x, end_y = map_xy(float(end["anchor_east_m"]), float(end["anchor_north_m"]))
-
-            lines.append(
-                f'<circle cx="{start_x:.2f}" cy="{start_y:.2f}" r="5.8" fill="#ffffff" '
-                f'stroke="{color}" stroke-width="2.0"/>'
-            )
-            lines.append(
-                f'<rect x="{end_x - 4.8:.2f}" y="{end_y - 4.8:.2f}" width="9.6" height="9.6" '
-                f'fill="{color}" stroke="#111111" stroke-width="0.8"/>'
-            )
-            lines.append(
-                f'<text x="{start_x + 7:.2f}" y="{start_y - 7:.2f}" font-size="9" fill="{color}" '
-                f'font-family="monospace">sat{sat} S</text>'
-            )
-            lines.append(
-                f'<text x="{end_x + 7:.2f}" y="{end_y + 12:.2f}" font-size="9" fill="{color}" '
-                f'font-family="monospace">sat{sat} E</text>'
-            )
-
     if ue_points:
         role_colors = {
             "center": "#d94841",
             "ring": "#2b8a3e",
-            "hotspot": "#d94841",
-            "boundary": "#f59f00",
-            "background": "#2b8a3e",
             "line": "#5f3dc4",
         }
         legend_x = width - margin - 154
@@ -342,23 +342,6 @@ def render_svg(
                 f'<text x="{legend_x + 32:.2f}" y="{ly + 4:.2f}" font-size="11" fill="#111" '
                 f'font-family="monospace">plane{plane} mainline</text>'
             )
-        marker_y = legend_y + max(1, len({int(p["plane"]) for p in sat_anchor_points})) * 22
-        lines.append(
-            f'<circle cx="{legend_x + 5:.2f}" cy="{marker_y:.2f}" r="5.8" fill="#ffffff" '
-            f'stroke="#111111" stroke-width="1.5"/>'
-        )
-        lines.append(
-            f'<text x="{legend_x + 18:.2f}" y="{marker_y + 4:.2f}" font-size="11" fill="#111" '
-            f'font-family="monospace">sat start</text>'
-        )
-        lines.append(
-            f'<rect x="{legend_x + 108:.2f}" y="{marker_y - 4.8:.2f}" width="9.6" height="9.6" '
-            f'fill="#111111" stroke="#111111" stroke-width="0.8"/>'
-        )
-        lines.append(
-            f'<text x="{legend_x + 124:.2f}" y="{marker_y + 4:.2f}" font-size="11" fill="#111" '
-            f'font-family="monospace">sat end</text>'
-        )
 
     lines.append("</svg>")
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -384,7 +367,8 @@ def main() -> None:
 
     out = args.out if args.out else args.csv.with_suffix(".svg")
     cells = load_cells(args.csv)
-    ues = load_ues(args.ue_csv) if args.ue_csv else None
+    ue_csv = args.ue_csv if args.ue_csv else infer_default_ue_csv(args.csv)
+    ues = load_ues(ue_csv) if ue_csv else None
     sat_anchor_points = load_sat_anchor_trace(args.sat_anchor_csv) if args.sat_anchor_csv else None
     render_svg(
         cells=cells,
@@ -406,6 +390,8 @@ def main() -> None:
     print(f"[INFO] cells: {len(cells)}")
     if ues is not None:
         print(f"[INFO] UEs: {len(ues)}")
+        if ue_csv is not None:
+            print(f"[INFO] UE csv: {ue_csv}")
     if sat_anchor_points is not None:
         print(f"[INFO] anchor rows: {len(sat_anchor_points)}")
 

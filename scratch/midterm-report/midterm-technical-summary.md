@@ -23,7 +23,7 @@
 - 后续如何引入“信号质量 + 卫星负载”的联合决策
 
 ### 2.2 当前阶段定位
-当前研究仓库最近已发布稳定节点为 `3.2.1`（Git tag：`research-v3.2.1`）。这里的 `3.2.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区仍在 `3.2` 主阶段内继续整理 `seven-cell baseline`，但尚未单独提升新的稳定节点。
+当前研究仓库最近已发布稳定节点为 `3.2.2`（Git tag：`research-v3.2.2`）。这里的 `3.2.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区若继续补充图表、PPT 或结果总结，应视为 `3.2.2` 之后的汇报材料整理，而不是新的研究主阶段切换。
 
 当前阶段的重点已经从“先把基础物理场景构建出来”推进到“将其整理为可用于后续毕设实验的 baseline 平台”。这意味着：
 - 不再把继续扩星作为默认主线
@@ -133,8 +133,8 @@
 - 外围小区内局部散点偏移：`5 km`
 - 轨道高度：`600 km`
 - 轨道倾角：`53°`
-- 轨道面 `RAAN` 间隔：`3°`
-- 轨道面时间偏移：`0.3 s`
+- 轨道面 `RAAN` 间隔：`-2°`
+- 轨道面时间偏移：`0.0 s`
 - 对齐参考时刻：`20 s`
 - 同轨过境间隔：`2 s`
 - 仿真时长：`40 s`
@@ -149,12 +149,13 @@
 - 邻区可达性约束
 
 当前默认切换参数：
-- `hoHysteresisDb = 3.0 dB`
-- `hoTttMs = 300 ms`
+- `hoHysteresisDb = 2.0 dB`
+- `hoTttMs = 200 ms`
+- `pingPongWindowSeconds = 1.5 s`
 - `customA3ShadowingSigmaDb = 1.0 dB`
 - `customA3ShadowingCorrelationSeconds = 4.0 s`
-- `customA3RicianKDb = 15 dB`
-- `customA3RicianCorrelationSeconds = 1.0 s`
+- `customA3RicianKDb = 10 dB`
+- `customA3RicianCorrelationSeconds = 0.5 s`
 
 此外，当前平台保留 `strictNrtGuard`（严格邻区表守卫）这一增强开关，但当前 baseline 默认不启用；baseline 只保留基本的可见性与 `beam lock` 约束，用于更真实地暴露传统 `A3` 的局限。
 
@@ -203,8 +204,8 @@
 - 切换开始与成功日志
 - 服务星变化日志
 - 周期性仿真进度输出
-- 最终吞吐统计和切换汇总
-- `sat_beam_trace` 等逐时刻导出
+- 最终吞吐统计、切换汇总和自动 `ping-pong` 计数
+- `ue_layout`、`sat_beam_trace`、`sat_anchor_trace`、`grid svg` 等逐时刻导出
 
 结果目录统一为：
 - `scratch/results/`

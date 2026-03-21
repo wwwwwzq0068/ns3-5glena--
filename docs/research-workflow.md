@@ -2,8 +2,8 @@
 
 ## 版本定义
 - 当前研究主阶段定义为 `3.2`。
-- 最近已收敛并打 tag 的稳定节点为 `3.2.1`（`research-v3.2.1`）。
-- 当前若继续调整 `seven-cell` baseline 或相关观测/日志链路，但尚未打 tag，应视为 `3.2` 主阶段下的未发布工作区状态，而不是新的稳定节点。
+- 最近已收敛并打 tag 的稳定节点为 `3.2.2`（`research-v3.2.2`）。
+- 当前若继续补充图表、汇报材料或结果解读，应视为 `3.2` 主阶段下的后续整理，而不是新的稳定节点。
 - 这里的 `3.2 / 3.2.x` 指本仓库中的“毕设/研究工作版本”，不是 ns-3 框架本身的版本号。
 - ns-3 框架版本仍然保持为 `3.46`，不要改动根目录的 `VERSION` 文件去表达研究版本。
 
@@ -23,6 +23,12 @@
   - 更强的双轨候选星空间重叠整定
   - `alignmentReferenceTimeSeconds`（对齐参考时刻）与 `simTime`（仿真时长）解耦
   - 默认关闭 `SRS`（探测参考信号）调度以规避非主线 PHY fatal
+- `3.2.2` 节点在 `3.2.1` 基础上继续纳入：
+  - `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
+  - custom `A3` 扰动观测链与 `ping-pong` 统计
+  - `sat_anchor_trace.csv`、`ue_layout.csv`、`hex_grid_cells.svg`、`sat_beam_report.csv` 等结果输出链
+  - `disableUeIpv4Forwarding`、`forceRlcAmForEpc` 等稳定性控制项
+  - 当前中期汇报所需的 baseline 收口口径
 - 当前 `3.2` 主阶段的研究口径已经明确为：
   - 使用当前 `2x4` 双轨场景暴露传统 A3 baseline 的局限
   - 后续围绕毕设任务书要求，设计“信号质量 + 卫星负载”联合感知切换策略

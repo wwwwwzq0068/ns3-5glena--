@@ -37,8 +37,8 @@ struct BaselineSimulationConfig
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
     uint32_t orbitPlaneCount = 2;
-    double interPlaneRaanSpacingDeg = 3.0;
-    double interPlaneTimeOffsetSeconds = 0.3;
+    double interPlaneRaanSpacingDeg = -2.0;
+    double interPlaneTimeOffsetSeconds = 0.0;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
@@ -69,11 +69,15 @@ struct BaselineSimulationConfig
     std::string outputDir = "scratch/results";
     bool printGridCatalog = true;
     std::string gridCatalogPath = JoinOutputPath(outputDir, "hex_grid_cells.csv");
-    std::string attenuationScriptPath =
-        std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_attenuation_report.py";
-    std::string attenuationInputPath = JoinOutputPath(outputDir, "sat_beam_trace.csv");
-    std::string attenuationPerTimePath = JoinOutputPath(outputDir, "sat_attenuation_per_time.csv");
+    std::string beamReportScriptPath =
+        std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_beam_report.py";
+    std::string plotHexGridScriptPath =
+        std::string(PROJECT_SOURCE_PATH) + "/scratch/plot_hex_grid_svg.py";
+    std::string beamTracePath = JoinOutputPath(outputDir, "sat_beam_trace.csv");
+    std::string beamReportPath = JoinOutputPath(outputDir, "sat_beam_report.csv");
     std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
+    std::string ueLayoutPath = JoinOutputPath(outputDir, "ue_layout.csv");
+    std::string gridSvgPath = JoinOutputPath(outputDir, "hex_grid_cells.svg");
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -92,11 +96,12 @@ struct BaselineSimulationConfig
     double customA3ShadowingSigmaDb = 1.0;
     double customA3ShadowingCorrelationSeconds = 4.0;
     bool customA3UseRician = true;
-    double customA3RicianKDb = 15.0;
-    double customA3RicianCorrelationSeconds = 1.0;
+    double customA3RicianKDb = 10.0;
+    double customA3RicianCorrelationSeconds = 0.5;
 
-    double hoHysteresisDb = 3.0;
-    uint32_t hoTttMs = 300;
+    double hoHysteresisDb = 2.0;
+    uint32_t hoTttMs = 200;
+    double pingPongWindowSeconds = 1.5;
     bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
     bool strictNrtGuard = false;
@@ -111,19 +116,14 @@ struct BaselineSimulationConfig
     double kpiIntervalSeconds = 2.0;
     bool printSimulationProgress = true;
     double progressReportIntervalSeconds = 2.0;
-    bool runAttenuationScript = true;
+    bool runBeamReportScript = true;
+    bool runGridSvgScript = true;
     double throughputReportIntervalSeconds = 0.0;
     double maxSupportedUesPerSatellite = 3.0;
     double loadCongestionThreshold = 0.8;
     bool enableSrsInFSlots = false;
     bool enableSrsInUlSlots = false;
     uint32_t srsSymbols = 0;
-};
-
-struct BaselineOutputPaths
-{
-    std::string attenuationSummaryOutputPath;
-    std::string attenuationTimeMatrixOutputPath;
 };
 
 inline void
@@ -189,6 +189,7 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("customA3RicianCorrelationSeconds", config.customA3RicianCorrelationSeconds);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
+    addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
     addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
     addArg("strictNrtGuard", config.strictNrtGuard);
@@ -203,11 +204,15 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("kpiIntervalSeconds", config.kpiIntervalSeconds);
     addArg("printSimulationProgress", config.printSimulationProgress);
     addArg("progressReportIntervalSeconds", config.progressReportIntervalSeconds);
-    addArg("runAttenuationScript", config.runAttenuationScript);
-    addArg("attenuationScriptPath", config.attenuationScriptPath);
-    addArg("attenuationInputPath", config.attenuationInputPath);
-    addArg("attenuationPerTimePath", config.attenuationPerTimePath);
+    addArg("runBeamReportScript", config.runBeamReportScript);
+    addArg("beamReportScriptPath", config.beamReportScriptPath);
+    addArg("runGridSvgScript", config.runGridSvgScript);
+    addArg("plotHexGridScriptPath", config.plotHexGridScriptPath);
+    addArg("beamTracePath", config.beamTracePath);
+    addArg("beamReportPath", config.beamReportPath);
     addArg("satAnchorTracePath", config.satAnchorTracePath);
+    addArg("ueLayoutPath", config.ueLayoutPath);
+    addArg("gridSvgPath", config.gridSvgPath);
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
     addArg("loadCongestionThreshold", config.loadCongestionThreshold);
@@ -216,41 +221,45 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("srsSymbols", config.srsSymbols);
 }
 
-inline BaselineOutputPaths
+inline void
 ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
 {
     const std::string defaultOutputDir = "scratch/results";
     const std::string defaultGridCatalogPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.csv");
-    const std::string defaultAttenuationInputPath =
+    const std::string defaultBeamTracePath =
         JoinOutputPath(defaultOutputDir, "sat_beam_trace.csv");
-    const std::string defaultAttenuationPerTimePath =
-        JoinOutputPath(defaultOutputDir, "sat_attenuation_per_time.csv");
+    const std::string defaultBeamReportPath =
+        JoinOutputPath(defaultOutputDir, "sat_beam_report.csv");
     const std::string defaultSatAnchorTracePath =
         JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
+    const std::string defaultUeLayoutPath = JoinOutputPath(defaultOutputDir, "ue_layout.csv");
+    const std::string defaultGridSvgPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.svg");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
         config.gridCatalogPath = JoinOutputPath(config.outputDir, "hex_grid_cells.csv");
     }
-    if (config.attenuationInputPath == defaultAttenuationInputPath && config.outputDir != defaultOutputDir)
+    if (config.beamTracePath == defaultBeamTracePath && config.outputDir != defaultOutputDir)
     {
-        config.attenuationInputPath = JoinOutputPath(config.outputDir, "sat_beam_trace.csv");
+        config.beamTracePath = JoinOutputPath(config.outputDir, "sat_beam_trace.csv");
     }
-    if (config.attenuationPerTimePath == defaultAttenuationPerTimePath &&
-        config.outputDir != defaultOutputDir)
+    if (config.beamReportPath == defaultBeamReportPath && config.outputDir != defaultOutputDir)
     {
-        config.attenuationPerTimePath = JoinOutputPath(config.outputDir, "sat_attenuation_per_time.csv");
+        config.beamReportPath = JoinOutputPath(config.outputDir, "sat_beam_report.csv");
     }
     if (config.satAnchorTracePath == defaultSatAnchorTracePath && config.outputDir != defaultOutputDir)
     {
         config.satAnchorTracePath = JoinOutputPath(config.outputDir, "sat_anchor_trace.csv");
     }
+    if (config.ueLayoutPath == defaultUeLayoutPath && config.outputDir != defaultOutputDir)
+    {
+        config.ueLayoutPath = JoinOutputPath(config.outputDir, "ue_layout.csv");
+    }
+    if (config.gridSvgPath == defaultGridSvgPath && config.outputDir != defaultOutputDir)
+    {
+        config.gridSvgPath = JoinOutputPath(config.outputDir, "hex_grid_cells.svg");
+    }
 
-    BaselineOutputPaths paths;
-    paths.attenuationSummaryOutputPath = JoinOutputPath(config.outputDir, "sat_attenuation_summary.csv");
-    paths.attenuationTimeMatrixOutputPath =
-        JoinOutputPath(config.outputDir, "sat_attenuation_time_matrix.csv");
-    return paths;
 }
 
 inline void
@@ -287,8 +296,8 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(config.orbitEccentricity < 0.0 || config.orbitEccentricity >= 1.0,
                     "orbitEccentricity must satisfy 0 <= e < 1");
-    NS_ABORT_MSG_IF(config.interPlaneRaanSpacingDeg < 0.0,
-                    "interPlaneRaanSpacingDeg must be >= 0");
+    NS_ABORT_MSG_IF(std::abs(config.interPlaneRaanSpacingDeg) >= 180.0,
+                    "interPlaneRaanSpacingDeg must satisfy |value| < 180");
     NS_ABORT_MSG_IF(config.interPlaneTimeOffsetSeconds < 0.0,
                     "interPlaneTimeOffsetSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
@@ -308,6 +317,8 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.outputDir.empty(), "outputDir must not be empty");
     NS_ABORT_MSG_IF(config.progressReportIntervalSeconds <= 0.0,
                     "progressReportIntervalSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.pingPongWindowSeconds <= 0.0,
+                    "pingPongWindowSeconds must be > 0");
     NS_ABORT_MSG_IF(config.maxSupportedUesPerSatellite <= 0.0,
                     "maxSupportedUesPerSatellite must be > 0");
     NS_ABORT_MSG_IF(config.loadCongestionThreshold <= 0.0 || config.loadCongestionThreshold > 1.0,

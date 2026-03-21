@@ -13,9 +13,42 @@
 #include "ns3/node.h"
 #include "ns3/pointer.h"
 #include "ns3/uinteger.h"
+#include <array>
+#include <iomanip>
+#include <sstream>
 
 namespace ns3
 {
+
+namespace
+{
+
+std::string
+FormatPacketPrefixHex(Ptr<Packet> packet, std::size_t maxBytes)
+{
+    if (!packet || maxBytes == 0)
+    {
+        return "";
+    }
+
+    std::array<uint8_t, 8> prefix{};
+    const std::size_t bytesToCopy = std::min(maxBytes, prefix.size());
+    const uint32_t copied = packet->CopyData(prefix.data(), bytesToCopy);
+
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (uint32_t i = 0; i < copied; ++i)
+    {
+        if (i != 0)
+        {
+            oss << ' ';
+        }
+        oss << std::setw(2) << static_cast<unsigned>(prefix[i]);
+    }
+    return oss.str();
+}
+
+} // namespace
 
 NS_LOG_COMPONENT_DEFINE("NrNetDevice");
 
@@ -246,7 +279,13 @@ NrNetDevice::Receive(Ptr<Packet> p)
     }
     else
     {
-        NS_ABORT_MSG("Unknown IP type");
+        const std::string prefixHex = FormatPacketPrefixHex(p, 8);
+        NS_LOG_WARN("Dropping packet with unknown IP type on " << m_macaddress
+                                                               << ", size=" << p->GetSize()
+                                                               << "B, prefix=[" << prefixHex
+                                                               << "]");
+        m_dropTrace(p);
+        return;
     }
 }
 

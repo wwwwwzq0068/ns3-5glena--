@@ -3,8 +3,8 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`3.2.1`（Git tag：`research-v3.2.1`）
-- 当前工作区仍在 `3.2` 主阶段内继续整理；若看到 `seven-cell` baseline 与相关新参数/日志改动，应视为 `3.2.1` 之后的未发布状态
+- 最近已发布稳定节点：`3.2.2`（Git tag：`research-v3.2.2`）
+- 当前工作区仍在 `3.2` 主阶段内继续整理；若看到配图、PPT 或结果总结类文档更新，应视为 `3.2.2` 之后的汇报材料收口
 - 这里的 `3.2.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
@@ -16,8 +16,8 @@
 
 ## 当前版本判断
 - 想确认“是不是进入新版本”，先看是否已打新的 `research-v3.2.x` tag
-- 目前最近已发布稳定节点仍是 `research-v3.2.1`
-- 当前工作区中与 `seven-cell` baseline、`sat_anchor_trace.csv`、custom `A3` 扰动链相关的变化，默认按“未发布工作区改动”理解，除非后续再打新 tag
+- 目前最近已发布稳定节点是 `research-v3.2.2`
+- 当前工作区中若继续补充图表、PPT 或结果总结，默认按“`3.2.2` 之后的文档化整理”理解，除非后续再打新 tag
 
 ## 当前默认口径
 场景与参数：
@@ -25,17 +25,18 @@
 - 轨道面数：`2`
 - UE 数：`25`
 - UE 主布局：`seven-cell`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`3 deg`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-2 deg`
 - `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20 s`
 - `simTime`（仿真时长）=`40 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
-- `hoHysteresisDb`（切换迟滞门限）=`3.0 dB`
-- `hoTttMs`（切换触发时间）=`300 ms`
+- `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
+- `hoTttMs`（切换触发时间）=`200 ms`
+- `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
 - `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
 - `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`15 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`1.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`10 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.5 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
@@ -73,6 +74,8 @@
   - 面向中期汇报的技术总结
 - `scratch/midterm-report/midterm-handover-flowcharts.md`
   - 中期汇报流程图与简要讲解提示
+- `scratch/midterm-report/midterm-ppt-design.md`
+  - 中期答辩 PPT 逐页设计方案与配图建议
 
 ## 当前代码组织
 - `leo-ntn-handover-baseline.cc`
@@ -91,28 +94,28 @@
 ## 日志与结果
 日志偏好：
 - 默认保留切换开始、切换成功、服务星变化、周期性进度和最终统计
+- 最终统计当前已包含整体与分 UE 的 `ping-pong` 自动计数
 - 默认不强调 `OVERPASS`、`GRID-ANCHOR` 等高噪声信息
 
 结果目录：
 - 当前默认仿真输出统一写入 `scratch/results/`
 - 常见结果包括：
   - `hex_grid_cells.csv`
+  - `hex_grid_cells.svg`（当 `runGridSvgScript = true`）
+  - `ue_layout.csv`
   - `sat_beam_trace.csv`
   - `sat_anchor_trace.csv`
-  - `sat_attenuation_per_time.csv`
+  - `sat_beam_report.csv`
 
 分析脚本：
-- `sat_attenuation_report.py`
+- `sat_beam_report.py`
   - 默认读取 `scratch/results/sat_beam_trace.csv`
-  - 默认生成 `scratch/results/sat_attenuation_per_time.csv`
+  - 默认生成 `scratch/results/sat_beam_report.csv`
 - `plot_hex_grid_svg.py`
   - 读取六边形网格 `CSV`
   - 生成对应 `SVG`
-  - 当前支持叠加 `UE` 布局 `CSV`，用于导出 `grid + UE` 视图
-  - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“两轨波束锚点主线 + 各卫星起终点”视图
-- `export_ue_layout.py`
-  - 按当前 `UE` 布局规则导出 `UE` 位置 `CSV`
-  - 当前可直接复现 `line` 和 `seven-cell` 两类布局
+  - 默认会尝试读取同目录下的 `ue_layout.csv`，用于导出 `grid + UE` 视图
+  - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“两轨代表主线”的轨迹视图
 
 ## 当前已完成的关键收口
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
@@ -164,7 +167,7 @@
   - 将 `leo-ntn-handover-baseline.cc` 从单 UE 路径改为可配置的多 UE 基线路径
   - 将基础组默认配置设为 `5` 颗卫星、`3` 个 UE
   - 默认关闭高噪声的 `KPI`、`OVERPASS`、`GRID-ANCHOR` 日志
-  - 更新 `sat_attenuation_report.py`，使衰减导出结果保留 `ue` 维度
+  - 更新 `sat_beam_report.py`，使紧凑导出结果保留 `ue` 维度
 - 切换日志与汇总优化
   - 默认切换日志改为以 `ue` 序号作为主标识，不再强调原始 `IMSI/RNTI`
   - 切换完成日志增加执行时延显示
@@ -180,7 +183,7 @@
 - 结果目录整理
   - 默认将仿真输出写入 `scratch/results/`
   - 运行前自动创建结果目录，避免输出散落在仓库根目录
-  - `sat_attenuation_report.py` 的默认输入输出路径同步迁移到 `scratch/results/`
+  - `sat_beam_report.py` 的默认输入输出路径同步迁移到 `scratch/results/`
 
 ### `3.0`
 - 研究版本规则建立
@@ -216,7 +219,7 @@
 ### `3.1.0`
 - baseline 观测与输出收口
   - 纳入 `loadScore`（负载评分）相关运行时字段和逐时刻 `trace` 导出
-  - 将 `sat_attenuation_report.py` 收口为更适合当前分析使用的精简逐时刻输出
+  - 将 `sat_beam_report.py` 收口为更适合当前分析使用的精简逐时刻输出
   - 保留周期性仿真进度输出，便于长时间运行时观察仿真推进情况
 
 ### `3.1.1`
@@ -237,7 +240,8 @@
   - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局
   - 明确保留 `line` 布局作为对照入口，但默认研究场景优先使用 `hotspot-boundary`
   - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
-  - 明确默认会生成 `sat_beam_trace.csv`，并在 `runAttenuationScript = true` 时继续生成 `sat_attenuation_per_time.csv`
+  - 明确默认会生成 `sat_beam_trace.csv`，并在 `runBeamReportScript = true` 时继续生成 `sat_beam_report.csv`
+  - 明确可在 `runGridSvgScript = true` 时继续生成 `hex_grid_cells.svg`
   - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()`、`UdpServer::HandleRead()` 的描述
 - 配置入口收口
   - 新增 `leo-ntn-handover-config.h`
@@ -257,22 +261,24 @@
   - 保留版本演进历史，同时重组 README 结构，减少文档冗余
 
 ### `3.2.1`
-- 最近已发布稳定节点
+- 稳定节点
   - 对应 tag：`research-v3.2.1`
   - 对应提交：`c692e68 chore(v3.2.1): snapshot tightened baseline and joint strategy docs`
   - 重点是收紧 baseline 与联合策略文档口径，而不是再定义一个新的场景版本
 
-### `post-v3.2.1`
-- 当前未发布工作区主线
+### `3.2.2`
+- 最近已发布稳定节点
+  - 对应 tag：`research-v3.2.2`
+  - 对应提交：`0a37d54 chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
   - `b50d5cc Refactor UE layout to seven-cell baseline` 已将 `UE` 主布局重构到 `seven-cell`
-  - 当前工作区继续围绕 `seven-cell baseline` 整理参数、观测链与可视化输出
-  - 若没有新的 `research-v3.2.x` tag，这些改动都应视为“下一稳定节点之前的未发布工作”
+  - 当前稳定节点继续围绕 `seven-cell baseline` 收紧参数、观测链与可视化输出
+  - 当前默认结果链已包括 `ue_layout.csv`、`sat_beam_trace.csv`、`sat_anchor_trace.csv`、`sat_beam_report.csv` 和 `hex_grid_cells.svg`
+  - 当前 baseline 已具备用于中期汇报配图和结果总结的基本输出条件
 
-## 建议发布包
-- 建议下一稳定节点使用 `research-v3.2.2`
-- 当前这批改动更像 `3.2` 主阶段内的 baseline 收紧，而不是新的主阶段升级
+## `3.2.2` 已发布包
+- `research-v3.2.2` 已完成当前这批 baseline 收紧工作，不再建议把它描述为新的主阶段升级
 
-建议纳入 `v3.2.2` 的内容：
+`v3.2.2` 已纳入的内容：
 - `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
 - custom `A3` 观测链的 `shadowing / Rician` 扰动注入
 - `sat_beam_trace.csv` 新字段：`geometry_rsrp_dbm`、`custom_a3_shadowing_db`、`custom_a3_rician_fading_db`
@@ -281,10 +287,11 @@
 - `NrEpcTftClassifier` 的 malformed packet 防御
 - 当前版本文档口径收口
 
-建议发布前检查：
+`v3.2.2` 发布前检查已收口为：
 - 默认参数下跑通一轮 `seven-cell baseline`
 - 确认 `scratch/results/` 输出链完整
 - 确认 baseline 文档、README 与中期汇报技术总结的参数口径一致
 
-建议收口提交：
-- `chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
+当前若继续做中期汇报整理，优先参考：
+- `scratch/midterm-report/midterm-figure-plan.md`
+- `scratch/midterm-report/midterm-ppt-design.md`
