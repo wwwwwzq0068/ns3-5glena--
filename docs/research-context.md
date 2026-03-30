@@ -40,10 +40,10 @@
 
 ## Default Files To Inspect
 - `scratch/leo-ntn-handover-baseline.cc`
-- `scratch/beam-link-budget.h`
-- `scratch/leo-orbit-calculator.h`
-- `scratch/leo-ntn-handover-utils.h`
-- `scratch/wgs84-hex-grid.h`
+- `scratch/handover/beam-link-budget.h`
+- `scratch/handover/leo-orbit-calculator.h`
+- `scratch/handover/leo-ntn-handover-utils.h`
+- `scratch/handover/wgs84-hex-grid.h`
 
 ## Response Style For This Project
 - Explain simulation logs in research terms.

@@ -7,14 +7,14 @@
 #include "ns3/nr-gnb-rrc.h"
 #include "ns3/nr-module.h"
 #include "ns3/nr-ue-rrc.h"
-#include "beam-link-budget.h"
-#include "leo-ntn-handover-config.h"
-#include "leo-orbit-calculator.h"
-#include "leo-ntn-handover-reporting.h"
-#include "leo-ntn-handover-runtime.h"
-#include "leo-ntn-handover-update.h"
-#include "leo-ntn-handover-utils.h"
-#include "wgs84-hex-grid.h"
+#include "handover/beam-link-budget.h"
+#include "handover/leo-ntn-handover-config.h"
+#include "handover/leo-orbit-calculator.h"
+#include "handover/leo-ntn-handover-reporting.h"
+#include "handover/leo-ntn-handover-runtime.h"
+#include "handover/leo-ntn-handover-update.h"
+#include "handover/leo-ntn-handover-utils.h"
+#include "handover/wgs84-hex-grid.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -103,21 +103,29 @@ static double g_progressStopTimeSeconds = 0.0;
 static double g_offeredPacketRatePerUe = 1000.0;
 static double g_maxSupportedUesPerSatellite = 3.0;
 static double g_loadCongestionThreshold = 0.8;
-static double g_hoHysteresisDb = 0.3;
+static double g_hoHysteresisDb = 2.0;
 // 将 A->B->A 识别为 ping-pong 的时间窗口。
-static double g_pingPongWindowSeconds = 1.0;
+static double g_pingPongWindowSeconds = 1.5;
+// 吞吐恢复判定：以切换前短窗口平均吞吐为参考，结束后连续若干个采样达到阈值即视为恢复。
+static constexpr uint32_t g_recoveryReferenceWindowSamples = 20;
+static constexpr uint32_t g_recoveryRequiredConsecutiveSamples = 3;
+static constexpr double g_recoveryThresholdRatio = 0.9;
 
 // 严格邻区守卫：只有满足可见、波束锁定和门限条件的邻区才会被激活。
 static bool g_strictNrtGuard = false;
-static double g_strictNrtMarginDb = 0.3;
+static double g_strictNrtMarginDb = 2.0;
 
 // 当前 baseline 固定使用自定义 A3 风格执行器。
-static double g_manualHoTttSeconds = 0.1;
+static double g_manualHoTttSeconds = 0.2;
 
 // 逐时刻卫星链路预算导出文件。
 static std::ofstream g_satBeamTrace;
 // 逐时刻卫星波束锚点导出文件。
 static std::ofstream g_satAnchorTrace;
+// 切换窗口下行吞吐采样导出文件。
+static std::ofstream g_handoverThroughputTrace;
+// 精确记录 HO-START / HO-END-OK 时刻的事件导出文件。
+static std::ofstream g_handoverEventTrace;
 // 自定义 A3 观测链使用的高斯随机变量。
 static Ptr<NormalRandomVariable> g_customA3NormalRv;
 
@@ -241,6 +249,77 @@ ReportStateTransition(std::string,
               << std::endl;
 }
 
+static int32_t
+ResolveSatelliteIndexFromCellId(uint16_t cellId)
+{
+    const auto it = g_cellToSatellite.find(cellId);
+    if (it == g_cellToSatellite.end())
+    {
+        return -1;
+    }
+    return static_cast<int32_t>(it->second);
+}
+
+static double
+ComputeMeanThroughputMbps(const std::deque<double>& samples)
+{
+    if (samples.empty())
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    double sum = 0.0;
+    uint32_t count = 0;
+    for (double value : samples)
+    {
+        if (!std::isfinite(value))
+        {
+            continue;
+        }
+        sum += value;
+        ++count;
+    }
+
+    if (count == 0)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return sum / static_cast<double>(count);
+}
+
+static void
+WriteHandoverEventTraceRow(double nowSeconds,
+                           uint32_t ueIdx,
+                           uint32_t handoverId,
+                           const std::string& eventName,
+                           uint16_t sourceCellId,
+                           uint16_t targetCellId,
+                           double delayMs,
+                           double recoveryMs,
+                           bool pingPongDetected)
+{
+    if (!g_handoverEventTrace.is_open())
+    {
+        return;
+    }
+
+    g_handoverEventTrace << std::fixed << std::setprecision(3) << nowSeconds << "," << ueIdx << ","
+                         << handoverId << "," << eventName << "," << sourceCellId << ","
+                         << targetCellId << "," << ResolveSatelliteIndexFromCellId(sourceCellId)
+                         << "," << ResolveSatelliteIndexFromCellId(targetCellId) << ",";
+    if (std::isfinite(delayMs))
+    {
+        g_handoverEventTrace << std::fixed << std::setprecision(3) << delayMs;
+    }
+    g_handoverEventTrace << ",";
+    if (std::isfinite(recoveryMs))
+    {
+        g_handoverEventTrace << std::fixed << std::setprecision(3) << recoveryMs;
+    }
+    g_handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << "\n";
+    g_handoverEventTrace.flush();
+}
+
 /**
  * gNB 侧切换开始回调。
  *
@@ -254,11 +333,38 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
         auto& ue = g_ues[*ueIdx];
+        ue.handoverTraceSequence++;
+        ue.activeHandoverTraceId = ue.handoverTraceSequence;
         ue.hasPendingHoStart = true;
+        ue.waitingForThroughputRecovery = false;
+        ue.waitingRecoveryHoId = 0;
+        ue.waitingRecoveryStartTimeSeconds = -1.0;
+        ue.waitingRecoverySatisfiedSamples = 0;
         ue.lastHoStartSourceCell = cellId;
         ue.lastHoStartTargetCell = targetCellId;
         ue.lastHoStartTimeSeconds = Simulator::Now().GetSeconds();
+        ue.pendingRecoveryReferenceThroughputMbps =
+            ComputeMeanThroughputMbps(ue.recentThroughputSamplesMbps);
+        if (std::isfinite(ue.pendingRecoveryReferenceThroughputMbps) &&
+            ue.pendingRecoveryReferenceThroughputMbps > 0.0)
+        {
+            ue.pendingRecoveryThresholdThroughputMbps =
+                ue.pendingRecoveryReferenceThroughputMbps * g_recoveryThresholdRatio;
+        }
+        else
+        {
+            ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+        }
         ue.handoverStartCount++;
+        WriteHandoverEventTraceRow(ue.lastHoStartTimeSeconds,
+                                   *ueIdx,
+                                   ue.activeHandoverTraceId,
+                                   "HO_START",
+                                   cellId,
+                                   targetCellId,
+                                   std::numeric_limits<double>::quiet_NaN(),
+                                   std::numeric_limits<double>::quiet_NaN(),
+                                   false);
         prefix << " ue=" << *ueIdx;
     }
 
@@ -287,11 +393,13 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
     uint16_t previousSourceCell = 0;
     uint16_t previousTargetCell = 0;
     uint16_t currentSourceCell = 0;
+    uint32_t activeHandoverTraceId = 0;
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
         auto& ue = g_ues[*ueIdx];
         ue.handoverEndOkCount++;
         const double nowSeconds = Simulator::Now().GetSeconds();
+        activeHandoverTraceId = ue.activeHandoverTraceId;
         previousSourceCell = ue.lastSuccessfulHoSourceCell;
         previousTargetCell = ue.lastSuccessfulHoTargetCell;
         currentSourceCell = ue.lastHoStartSourceCell;
@@ -328,8 +436,25 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
             ue.lastSuccessfulHoTargetCell = cellId;
             ue.lastSuccessfulHoTimeSeconds = nowSeconds;
         }
+        const bool hasRecoveryThreshold =
+            std::isfinite(ue.pendingRecoveryThresholdThroughputMbps) &&
+            ue.pendingRecoveryThresholdThroughputMbps > 0.0;
+        ue.waitingForThroughputRecovery = hasRecoveryThreshold;
+        ue.waitingRecoveryHoId = hasRecoveryThreshold ? activeHandoverTraceId : 0;
+        ue.waitingRecoveryStartTimeSeconds = hasRecoveryThreshold ? nowSeconds : -1.0;
+        ue.waitingRecoverySatisfiedSamples = 0;
+        WriteHandoverEventTraceRow(nowSeconds,
+                                   *ueIdx,
+                                   activeHandoverTraceId,
+                                   "HO_END_OK",
+                                   ue.lastHoStartSourceCell,
+                                   cellId,
+                                   handoverDelayMs,
+                                   std::numeric_limits<double>::quiet_NaN(),
+                                   pingPongDetected);
         ue.hasPendingHoStart = false;
         ue.lastHoStartTimeSeconds = -1.0;
+        ue.activeHandoverTraceId = 0;
         prefix << " ue=" << *ueIdx;
     }
 
@@ -497,6 +622,100 @@ PrintDlThroughput(uint32_t packetSizeBytes, Time interval)
               << " rxPackets=" << totalRxPackets << std::endl;
 
     Simulator::Schedule(interval, &PrintDlThroughput, packetSizeBytes, interval);
+}
+
+/**
+ * 周期性导出“切换窗口下的每 UE 瞬时吞吐”。
+ *
+ * 设计目的不是替代最终平均吞吐统计，而是保留切换前后的小时间窗曲线，
+ * 便于直接画出 HO Start / HO Success 附近的吞吐坑谷。
+ */
+static void
+SampleHandoverDlThroughput(uint32_t packetSizeBytes, Time interval)
+{
+    if (!g_handoverThroughputTrace.is_open())
+    {
+        return;
+    }
+
+    const double nowSeconds = Simulator::Now().GetSeconds();
+    const double dtSeconds = interval.GetSeconds();
+
+    for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
+    {
+        auto& ue = g_ues[ueIdx];
+        const uint64_t currentRxPackets = ue.server ? ue.server->GetReceived() : 0;
+        const uint64_t deltaPackets = currentRxPackets - ue.lastThroughputTraceRxPackets;
+        ue.lastThroughputTraceRxPackets = currentRxPackets;
+
+        uint16_t servingCellId = 0;
+        if (ue.dev && ue.dev->GetRrc())
+        {
+            servingCellId = ue.dev->GetRrc()->GetCellId();
+        }
+
+        const double throughputMbps =
+            (dtSeconds > 0.0) ? (deltaPackets * packetSizeBytes * 8.0) / dtSeconds / 1e6 : 0.0;
+
+        if (!ue.hasPendingHoStart && !ue.waitingForThroughputRecovery)
+        {
+            ue.recentThroughputSamplesMbps.push_back(throughputMbps);
+            while (ue.recentThroughputSamplesMbps.size() > g_recoveryReferenceWindowSamples)
+            {
+                ue.recentThroughputSamplesMbps.pop_front();
+            }
+        }
+
+        if (!ue.hasPendingHoStart && ue.waitingForThroughputRecovery)
+        {
+            const double thresholdMbps = ue.pendingRecoveryThresholdThroughputMbps;
+            if (std::isfinite(thresholdMbps) && throughputMbps + 1e-9 >= thresholdMbps)
+            {
+                ue.waitingRecoverySatisfiedSamples++;
+            }
+            else
+            {
+                ue.waitingRecoverySatisfiedSamples = 0;
+            }
+
+            if (ue.waitingRecoverySatisfiedSamples >= g_recoveryRequiredConsecutiveSamples &&
+                ue.waitingRecoveryStartTimeSeconds >= 0.0)
+            {
+                const double recoverySeconds = nowSeconds - ue.waitingRecoveryStartTimeSeconds;
+                ue.throughputRecoveryCount++;
+                ue.totalThroughputRecoverySeconds += recoverySeconds;
+                ue.lastThroughputRecoverySeconds = recoverySeconds;
+                WriteHandoverEventTraceRow(nowSeconds,
+                                           ueIdx,
+                                           ue.waitingRecoveryHoId,
+                                           "THROUGHPUT_RECOVERED",
+                                           ue.lastSuccessfulHoSourceCell,
+                                           ue.lastSuccessfulHoTargetCell,
+                                           std::numeric_limits<double>::quiet_NaN(),
+                                           recoverySeconds * 1000.0,
+                                           false);
+                ue.waitingForThroughputRecovery = false;
+                ue.waitingRecoveryHoId = 0;
+                ue.waitingRecoveryStartTimeSeconds = -1.0;
+                ue.waitingRecoverySatisfiedSamples = 0;
+                ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+                ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+                ue.recentThroughputSamplesMbps.clear();
+                ue.recentThroughputSamplesMbps.push_back(throughputMbps);
+            }
+        }
+
+        g_handoverThroughputTrace << std::fixed << std::setprecision(3) << nowSeconds << ","
+                                  << ueIdx << "," << servingCellId << ","
+                                  << ResolveSatelliteIndexFromCellId(servingCellId) << ","
+                                  << throughputMbps << "," << deltaPackets << ","
+                                  << currentRxPackets << "," << (ue.hasPendingHoStart ? 1 : 0)
+                                  << "," << ue.activeHandoverTraceId << ","
+                                  << ue.lastHoStartSourceCell << "," << ue.lastHoStartTargetCell
+                                  << "\n";
+    }
+
+    Simulator::Schedule(interval, &SampleHandoverDlThroughput, packetSizeBytes, interval);
 }
 
 /**
@@ -831,6 +1050,8 @@ main(int argc, char* argv[])
                                  EnsureParentDirectoryForFile(cfg.beamTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.beamReportPath) &&
                                  EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.handoverThroughputTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.handoverEventTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
                                  EnsureParentDirectoryForFile(cfg.gridSvgPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
@@ -917,6 +1138,13 @@ main(int argc, char* argv[])
               << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
               << std::endl;
     std::cout << "[Output] dir=" << g_outputDir << std::endl;
+    if (cfg.enableHandoverThroughputTrace)
+    {
+        std::cout << "[Output] handoverThroughputTrace=" << cfg.handoverThroughputTracePath
+                  << " eventTrace=" << cfg.handoverEventTracePath
+                  << " sampleInterval=" << cfg.handoverThroughputTraceIntervalSeconds << "s"
+                  << std::endl;
+    }
 
     const double semiMajorAxisMeters =
         LeoOrbitCalculator::kWgs84SemiMajorAxisMeters + cfg.satAltitudeMeters;
@@ -1350,6 +1578,14 @@ main(int argc, char* argv[])
     {
         g_satAnchorTrace.close();
     }
+    if (g_handoverThroughputTrace.is_open())
+    {
+        g_handoverThroughputTrace.close();
+    }
+    if (g_handoverEventTrace.is_open())
+    {
+        g_handoverEventTrace.close();
+    }
     g_satBeamTrace.open(cfg.beamTracePath, std::ios::out | std::ios::trunc);
     NS_ABORT_MSG_IF(!g_satBeamTrace.is_open(),
                     "Failed to open beam trace CSV: " << cfg.beamTracePath);
@@ -1363,6 +1599,25 @@ main(int argc, char* argv[])
     g_satAnchorTrace
         << "time_s,sat,plane,slot,cell,anchor_grid_id,anchor_latitude_deg,anchor_longitude_deg,"
         << "anchor_east_m,anchor_north_m\n";
+    if (cfg.enableHandoverThroughputTrace)
+    {
+        g_handoverThroughputTrace.open(cfg.handoverThroughputTracePath,
+                                       std::ios::out | std::ios::trunc);
+        NS_ABORT_MSG_IF(!g_handoverThroughputTrace.is_open(),
+                        "Failed to open handover throughput trace CSV: "
+                            << cfg.handoverThroughputTracePath);
+        g_handoverThroughputTrace
+            << "time_s,ue,serving_cell,serving_sat,throughput_mbps,delta_rx_packets,"
+            << "total_rx_packets,in_handover,active_ho_id,pending_source_cell,pending_target_cell\n";
+
+        g_handoverEventTrace.open(cfg.handoverEventTracePath, std::ios::out | std::ios::trunc);
+        NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
+                        "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
+        g_handoverEventTrace
+            << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,recovery_ms,"
+            << "ping_pong_detected\n";
+        g_handoverEventTrace.flush();
+    }
 
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverStart",
                     MakeCallback(&ReportHandoverStart));
@@ -1375,6 +1630,7 @@ main(int argc, char* argv[])
     for (auto& ue : g_ues)
     {
         ue.lastRxPackets = 0;
+        ue.lastThroughputTraceRxPackets = 0;
     }
     if (cfg.throughputReportIntervalSeconds > 0.0)
     {
@@ -1382,6 +1638,15 @@ main(int argc, char* argv[])
                             &PrintDlThroughput,
                             cfg.udpPacketSize,
                             Seconds(cfg.throughputReportIntervalSeconds));
+    }
+    if (cfg.enableHandoverThroughputTrace)
+    {
+        const double firstTraceSampleTimeSeconds =
+            cfg.appStartTime + 0.5 * cfg.handoverThroughputTraceIntervalSeconds;
+        Simulator::Schedule(Seconds(firstTraceSampleTimeSeconds),
+                            &SampleHandoverDlThroughput,
+                            cfg.udpPacketSize,
+                            Seconds(cfg.handoverThroughputTraceIntervalSeconds));
     }
 
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
@@ -1438,6 +1703,14 @@ main(int argc, char* argv[])
     if (g_satAnchorTrace.is_open())
     {
         g_satAnchorTrace.close();
+    }
+    if (g_handoverThroughputTrace.is_open())
+    {
+        g_handoverThroughputTrace.close();
+    }
+    if (g_handoverEventTrace.is_open())
+    {
+        g_handoverEventTrace.close();
     }
 
     if (cfg.runBeamReportScript)

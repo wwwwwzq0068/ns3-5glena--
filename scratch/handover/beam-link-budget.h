@@ -57,19 +57,19 @@ struct BeamModelConfig
     bool enableCustomA3Shadowing = false;
 
     /** 自定义 A3 阴影衰落标准差，单位 dB。 */
-    double customA3ShadowingSigmaDb = 1.0;
+    double customA3ShadowingSigmaDb = 2.5;
 
     /** 自定义 A3 阴影衰落时间相关尺度，单位秒。 */
-    double customA3ShadowingCorrelationSeconds = 4.0;
+    double customA3ShadowingCorrelationSeconds = 1.0;
 
     /** 是否将莱斯快衰落注入自定义 A3 观测链。 */
     bool enableCustomA3RicianFading = false;
 
     /** 自定义 A3 莱斯衰落的 K 因子，单位 dB。 */
-    double customA3RicianKDb = 15.0;
+    double customA3RicianKDb = 3.0;
 
     /** 自定义 A3 莱斯衰落时间相关尺度，单位秒。 */
-    double customA3RicianCorrelationSeconds = 1.0;
+    double customA3RicianCorrelationSeconds = 0.2;
 };
 
 struct BeamLinkBudget

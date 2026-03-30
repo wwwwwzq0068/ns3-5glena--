@@ -66,11 +66,20 @@ struct HandoverAggregate
     /** 全部成功切换的执行时延总和，单位秒。 */
     double totalHoDelaySeconds = 0.0;
 
+    /** 已完成吞吐恢复判定的切换次数。 */
+    uint32_t totalHoRecovered = 0;
+
+    /** 全部已完成恢复判定的吞吐恢复时间总和，单位秒。 */
+    double totalHoRecoverySeconds = 0.0;
+
     /** 整体切换成功率，范围为 0 到 100。 */
     double overallSuccessRate = 0.0;
 
     /** 全部成功切换的平均执行时延，单位毫秒。 */
     double averageDelayMs = 0.0;
+
+    /** 全部已完成恢复判定切换的平均吞吐恢复时间，单位毫秒。 */
+    double averageRecoveryMs = 0.0;
 
     /** 全部 UE 识别到的短时回切总数。 */
     uint32_t totalPingPongCount = 0;
@@ -119,6 +128,8 @@ BuildHandoverAggregate(const std::vector<UeRuntime>& ues)
         out.totalHoStart += ue.handoverStartCount;
         out.totalHoEndOk += ue.handoverEndOkCount;
         out.totalHoDelaySeconds += ue.totalHandoverExecutionDelaySeconds;
+        out.totalHoRecovered += ue.throughputRecoveryCount;
+        out.totalHoRecoverySeconds += ue.totalThroughputRecoverySeconds;
         out.totalPingPongCount += ue.pingPongCount;
     }
     if (out.totalHoStart > 0)
@@ -129,6 +140,11 @@ BuildHandoverAggregate(const std::vector<UeRuntime>& ues)
     if (out.totalHoEndOk > 0)
     {
         out.averageDelayMs = out.totalHoDelaySeconds * 1000.0 / static_cast<double>(out.totalHoEndOk);
+    }
+    if (out.totalHoRecovered > 0)
+    {
+        out.averageRecoveryMs =
+            out.totalHoRecoverySeconds * 1000.0 / static_cast<double>(out.totalHoRecovered);
     }
     return out;
 }
@@ -170,6 +186,15 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSec
               << aggregate.overallSuccessRate << "%" << std::endl;
     std::cout << "Average HO execution delay: " << std::fixed << std::setprecision(3)
               << aggregate.averageDelayMs << " ms" << std::endl;
+    if (aggregate.totalHoRecovered > 0)
+    {
+        std::cout << "Average throughput recovery time: " << std::fixed << std::setprecision(3)
+                  << aggregate.averageRecoveryMs << " ms" << std::endl;
+    }
+    else
+    {
+        std::cout << "Average throughput recovery time: n/a" << std::endl;
+    }
     std::cout << "Total ping-pong events: " << aggregate.totalPingPongCount
               << " (window=" << std::fixed << std::setprecision(3) << pingPongWindowSeconds
               << "s)" << std::endl;
@@ -185,11 +210,26 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSec
             (ue.handoverEndOkCount > 0)
                 ? (ue.totalHandoverExecutionDelaySeconds * 1000.0 / static_cast<double>(ue.handoverEndOkCount))
                 : 0.0;
+        const bool hasRecovery = ue.throughputRecoveryCount > 0;
+        const double ueAvgRecoveryMs =
+            hasRecovery
+                ? (ue.totalThroughputRecoverySeconds * 1000.0 /
+                   static_cast<double>(ue.throughputRecoveryCount))
+                : 0.0;
 
         std::cout << "UE" << ueIdx << ": ho=" << ue.handoverEndOkCount << "/" << ue.handoverStartCount
                   << " successRate=" << std::fixed << std::setprecision(1) << ueSuccessRate << "%"
                   << " avgDelay=" << std::fixed << std::setprecision(3) << ueAvgDelayMs << " ms"
-                  << " pingPong=" << ue.pingPongCount;
+                  << " avgRecovery=";
+        if (hasRecovery)
+        {
+            std::cout << std::fixed << std::setprecision(3) << ueAvgRecoveryMs << " ms";
+        }
+        else
+        {
+            std::cout << "n/a";
+        }
+        std::cout << " pingPong=" << ue.pingPongCount;
         if (ue.hasPredictedHandover)
         {
             std::cout << " predicted sat" << ue.expectedSourceIndex << "->sat" << ue.expectedTargetIndex

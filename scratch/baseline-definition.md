@@ -43,10 +43,10 @@
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`200 ms`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
-- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`10 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.5 s`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`2.5 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`1.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`3.0 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.2 s`
 - `strictNrtGuard = false`
 - `strictNrtMarginDb = hoHysteresisDb`
 - `useWgs84HexGrid = true`
@@ -54,7 +54,7 @@
 - `disableUeIpv4Forwarding = true`
 
 说明：
-- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v3.2.2`
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v3.3.0`
 - 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
@@ -91,7 +91,7 @@
 重点检查：
 - 是否出现非零切换，而不是全程无切换
 - 切换流程是否可正常闭环，成功率和执行时延是否可统计
-- 切换附近是否能观察吞吐扰动
+- 切换附近是否能观察吞吐扰动，并优先结合 `handover_dl_throughput_trace.csv` 与 `handover_event_trace.csv` 对齐 `HO Start / HO Success`
 - 外围小区 UE 是否出现频繁切换或潜在 `ping-pong`
 - 最终 summary 中的自动 `ping-pong` 计数是否为非零，且与实时日志中的短时回切现象一致
 - 星间 `attachedUeCount`、`offeredPacketRate`、`loadScore` 是否出现可观察的不均衡

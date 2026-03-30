@@ -3,9 +3,9 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`3.2.2`（Git tag：`research-v3.2.2`）
-- 当前工作区仍在 `3.2` 主阶段内继续整理；若看到配图、PPT 或结果总结类文档更新，应视为 `3.2.2` 之后的汇报材料收口
-- 这里的 `3.2.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
+- 最近已发布稳定节点：`3.3.0`（Git tag：`research-v3.3.0`）
+- 当前工作区已经切入 `3.3` 主阶段；本次收口保持 `3.2.2` baseline 语义不变，重点完成 `scratch/` 目录重组与清理
+- 这里的 `3.3.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
@@ -15,9 +15,9 @@
 - 当前改进方向先是继续评估默认已开启的 `shadowing / Rician` 扰动如何影响自定义 `beam budget/A3` 判决链，之后才是“信号质量 + 卫星负载”联合感知切换策略
 
 ## 当前版本判断
-- 想确认“是不是进入新版本”，先看是否已打新的 `research-v3.2.x` tag
-- 目前最近已发布稳定节点是 `research-v3.2.2`
-- 当前工作区中若继续补充图表、PPT 或结果总结，默认按“`3.2.2` 之后的文档化整理”理解，除非后续再打新 tag
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v3.3.x` tag
+- 目前最近已发布稳定节点是 `research-v3.3.0`
+- 当前工作区中若继续补充结果、脚本或说明，默认按“`3.3.0` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
 
 ## 当前默认口径
 场景与参数：
@@ -33,10 +33,10 @@
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`200 ms`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
-- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`10 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.5 s`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`2.5 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`1.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`3.0 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.2 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
@@ -75,7 +75,289 @@
 - `scratch/midterm-report/midterm-handover-flowcharts.md`
   - 中期汇报流程图与简要讲解提示
 - `scratch/midterm-report/midterm-ppt-design.md`
-  - 中期答辩 PPT 逐页设计方案与配图建议
+  - 中期答辩 PPT 逐页设计终稿
+- `scratch/midterm-report/midterm-image-generation-spec.md`
+  - 中期答辩图片生成与制图说明
+
+当前目录收纳约定：
+- `scratch/leo-ntn-handover-baseline.cc`
+  - 主仿真入口，继续留在 `scratch/` 根目录
+- `scratch/handover/`
+  - handover 主线相关辅助头文件
+- `scratch/plotting/`
+  - 分析与绘图脚本
+
+## 开发与运行流程
+这部分只回答一个问题：在当前 `ns-3.46 + contrib/nr + scratch/leo-ntn-handover-baseline.cc` 工作流里，什么情况下该 `configure`，什么情况下只要 `build`，什么情况下可以直接 `run --no-build`。
+
+### 1. 推荐的两套工作模式
+建议长期固定成两套模式，不要混着用：
+
+- `debug` 模式
+  - 用途：查崩溃、断言失败、异常日志、切换逻辑是否跑偏
+  - 特点：更容易排障，但运行慢
+- `optimized` 模式
+  - 用途：正式跑 baseline、扫参数、导出结果、长时间仿真
+  - 特点：明显更快，适合实验
+
+建议默认使用：
+
+- 开发排障时：`debug`
+- 正式实验时：`optimized`
+
+### 2. 什么情况下要重新 `configure`
+只有当“构建配置”发生变化时，才需要重新 `configure`。
+
+常见触发条件：
+
+- 在 `debug` 和 `optimized/release` 之间切换
+- 想打开或关闭 `tests/examples`
+- 修改了 `CMake` 相关配置
+- 更换编译器、生成器或构建目录
+- 构建缓存明显异常，需要重建配置
+
+常用命令：
+
+```bash
+./ns3 configure -d debug
+./ns3 configure -d optimized --disable-tests --disable-examples
+```
+
+说明：
+
+- `-d debug`：保留断言和日志，适合排障
+- `-d optimized`：关闭大量调试成本并打开优化，适合正式仿真
+- `--disable-tests --disable-examples`：主要减少编译负担，不是直接改变仿真逻辑
+
+### 3. 什么情况下只要 `build`
+如果你改了 `.cc`、`.h` 里的实现逻辑，但没有改构建档位或 `CMake` 配置，通常只要重新编译，不用再次 `configure`。
+
+典型例子：
+
+- 改了 `leo-ntn-handover-baseline.cc`
+- 改了 `leo-ntn-handover-update.h`
+- 改了 `leo-ntn-handover-runtime.h`
+- 改了 `contrib/nr/` 下的 `C++` 代码
+- 改了 `leo-ntn-handover-config.h` 中的默认参数值
+
+常用命令：
+
+```bash
+./ns3 build
+```
+
+然后运行：
+
+```bash
+./ns3 run --no-build "leo-ntn-handover-baseline"
+```
+
+这里推荐带上 `--no-build`，原因很简单：既然刚刚已经成功 `build` 过，就不要在 `run` 时再隐式触发一轮构建。
+
+### 4. 什么情况下可以直接 `run --no-build`
+如果你没有改任何 `C++` 源码，只是想换一组运行参数，那么可以直接运行，不需要重新编译。
+
+典型例子：
+
+- 想把 `simTime` 从 `40` 改到 `10`
+- 想把 `lambda` 从 `1000` 改到 `100`
+- 想测试不同的 `hoTttMs`
+- 想临时关闭 `runBeamReportScript` 或 `runGridSvgScript`
+
+常用命令：
+
+```bash
+./ns3 run --no-build "leo-ntn-handover-baseline --simTime=10 --lambda=100"
+./ns3 run --no-build "leo-ntn-handover-baseline --hoTttMs=400 --hoHysteresisDb=3.0"
+./ns3 run --no-build "leo-ntn-handover-baseline --runBeamReportScript=0 --runGridSvgScript=0"
+```
+
+适用前提：
+
+- 之前已经成功编译过当前构建档位
+- 这次没有改 `C++` 代码
+
+### 5. 面向当前仓库的推荐操作流程
+下面这套流程足够覆盖大多数日常工作。
+
+#### 大范围改代码之后
+适用情况：
+
+- 改了多个 `.cc/.h`
+- 改了 `scratch/` 和 `contrib/nr/` 的实现
+- 不确定缓存是否仍然干净
+
+建议流程：
+
+```bash
+./ns3 configure -d optimized --disable-tests --disable-examples
+./ns3 build
+./ns3 run --no-build "leo-ntn-handover-baseline"
+```
+
+如果当前目的是查 bug，而不是跑正式结果，把第一步换成：
+
+```bash
+./ns3 configure -d debug
+```
+
+#### 小范围改逻辑之后
+适用情况：
+
+- 只改了少量 `C++` 逻辑
+- 没有切换构建档位
+- 没动 `CMake`
+
+建议流程：
+
+```bash
+./ns3 build
+./ns3 run --no-build "leo-ntn-handover-baseline"
+```
+
+#### 只微调参数之后
+适用情况：
+
+- 只改命令行参数
+- 不改源码
+
+建议流程：
+
+```bash
+./ns3 run --no-build "leo-ntn-handover-baseline --simTime=10 --lambda=100"
+```
+
+#### 正式实验批量跑参数时
+适用情况：
+
+- 想扫 `TTT`、`hysteresis`、`lambda`
+- 想连续多次运行
+- 想控制 wall-clock
+
+建议流程：
+
+```bash
+./ns3 configure -d optimized --disable-tests --disable-examples
+./ns3 build
+./ns3 run --no-build "leo-ntn-handover-baseline --simTime=40 ..."
+```
+
+原则：
+
+- 用 `optimized`
+- 尽量复用同一轮编译结果
+- 运行阶段优先使用 `--no-build`
+
+### 6. 构建缓存异常时怎么处理
+如果你遇到下面这些症状，优先怀疑缓存或构建状态有问题：
+
+- 明明改了代码，运行结果像没生效
+- 构建目标名或库链接状态异常
+- 切换过 `debug/optimized` 后行为很混乱
+- `build` 或 `run` 反复出现难以解释的旧错误
+
+建议流程：
+
+```bash
+./ns3 clean
+./ns3 configure -d optimized --disable-tests --disable-examples
+./ns3 build
+```
+
+如果当前是深度排障，再改为：
+
+```bash
+./ns3 configure -d debug
+```
+
+### 7. 为什么正式实验更建议用 `optimized`
+当前 baseline 默认就是高事件量场景：
+
+- `25 UE`
+- `lambda = 1000 pkt/s/UE`
+- `updateIntervalMs = 100`
+- 默认开启 custom `A3` 的 `shadowing / Rician`
+
+因此：
+
+- `debug` 更适合查错
+- `optimized` 更适合出结果
+
+如果使用 `debug` 跑长时间 baseline，wall-clock 明显变慢是正常现象，不要把这种放慢直接误判成算法回归。
+
+### 8. VS Code 里怎么用更顺手
+当前工作区已经有 `.vscode/tasks.json`，其中比较实用的是：
+
+- `ns3: build`
+- `ns3: run target`
+- `ns3: show targets`
+
+因此在 VS Code 中，推荐优先使用：
+
+- Terminal 直接执行 `./ns3 ...`
+- 或者用现成的 `Tasks`
+
+原因：
+
+- `./ns3` 是 ns-3 官方 wrapper，最懂当前目标名和参数传递方式
+- 对 `scratch` 程序来说，`./ns3 run "target --args"` 通常比直接找底层二进制路径更稳
+
+### 9. CMake Tools 的 `Run in Terminal` 什么时候可用
+如果你安装了 `CMake Tools` 扩展，`Run in Terminal` 通常要在下面条件满足后才会变得稳定可用：
+
+- 工作区已经成功 `Configure`
+- CMake 已经识别到一个可执行 `launch target`
+- 当前不是只选中了一个库目标
+
+如果它不可用，常见原因通常是：
+
+- 还没成功 `configure`
+- 当前没有选中可执行目标
+- CMake Tools 还没识别到 `launch target`
+
+对这个仓库，判断标准可以简单记成：
+
+- 只要 `./ns3 build` 和 `./ns3 run ...` 已经正常工作，就不必强依赖 `Run in Terminal`
+- `Run in Terminal` 更像 IDE 便捷入口，不是这个仓库的主工作流
+
+### 10. 最推荐记住的 6 条命令
+调试版重新配置：
+
+```bash
+./ns3 configure -d debug
+```
+
+实验版重新配置：
+
+```bash
+./ns3 configure -d optimized --disable-tests --disable-examples
+```
+
+重新编译：
+
+```bash
+./ns3 build
+```
+
+运行默认 baseline：
+
+```bash
+./ns3 run --no-build "leo-ntn-handover-baseline"
+```
+
+运行一组临时参数：
+
+```bash
+./ns3 run --no-build "leo-ntn-handover-baseline --simTime=10 --lambda=100"
+```
+
+缓存异常时重来一轮：
+
+```bash
+./ns3 clean
+./ns3 configure -d optimized --disable-tests --disable-examples
+./ns3 build
+```
 
 ## 当前代码组织
 - `leo-ntn-handover-baseline.cc`
@@ -106,16 +388,22 @@
   - `sat_beam_trace.csv`
   - `sat_anchor_trace.csv`
   - `sat_beam_report.csv`
+  - `handover_dl_throughput_trace.csv`
+  - `handover_event_trace.csv`
 
 分析脚本：
-- `sat_beam_report.py`
+- `plotting/sat_beam_report.py`
   - 默认读取 `scratch/results/sat_beam_trace.csv`
   - 默认生成 `scratch/results/sat_beam_report.csv`
-- `plot_hex_grid_svg.py`
+- `plotting/plot_hex_grid_svg.py`
   - 读取六边形网格 `CSV`
   - 生成对应 `SVG`
   - 默认会尝试读取同目录下的 `ue_layout.csv`，用于导出 `grid + UE` 视图
   - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“两轨代表主线”的轨迹视图
+- `plotting/plot_handover_throughput.py`
+  - 默认读取 `scratch/results/handover_dl_throughput_trace.csv`
+  - 默认读取 `scratch/results/handover_event_trace.csv`
+  - 面向单个 `UE` 的单次切换窗口，输出 `HO Start / HO Success` 对齐的吞吐连续性图
 
 ## 当前已完成的关键收口
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
@@ -266,32 +554,28 @@
   - 对应提交：`c692e68 chore(v3.2.1): snapshot tightened baseline and joint strategy docs`
   - 重点是收紧 baseline 与联合策略文档口径，而不是再定义一个新的场景版本
 
-### `3.2.2`
+### `3.3.0`
 - 最近已发布稳定节点
-  - 对应 tag：`research-v3.2.2`
-  - 对应提交：`0a37d54 chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
-  - `b50d5cc Refactor UE layout to seven-cell baseline` 已将 `UE` 主布局重构到 `seven-cell`
-  - 当前稳定节点继续围绕 `seven-cell baseline` 收紧参数、观测链与可视化输出
-  - 当前默认结果链已包括 `ue_layout.csv`、`sat_beam_trace.csv`、`sat_anchor_trace.csv`、`sat_beam_report.csv` 和 `hex_grid_cells.svg`
-  - 当前 baseline 已具备用于中期汇报配图和结果总结的基本输出条件
+  - 对应 tag：`research-v3.3.0`
+  - 当前保持 `3.2.2` baseline 语义与默认参数不变
+  - 将主脚本保留在 `scratch/` 根目录，辅助头文件集中到 `scratch/handover/`
+  - 将分析与绘图脚本集中到 `scratch/plotting/`
+  - 清理历史结果、缓存、示例 scratch 目录与中期阶段性派生资产
 
-## `3.2.2` 已发布包
-- `research-v3.2.2` 已完成当前这批 baseline 收紧工作，不再建议把它描述为新的主阶段升级
+## `3.3.0` 已发布包
+- `research-v3.3.0` 代表当前工作区整理后的第一版收口快照，重点是目录结构、资产清理与文档对齐，而不是 baseline 语义改写
 
-`v3.2.2` 已纳入的内容：
-- `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
-- custom `A3` 观测链的 `shadowing / Rician` 扰动注入
-- `sat_beam_trace.csv` 新字段：`geometry_rsrp_dbm`、`custom_a3_shadowing_db`、`custom_a3_rician_fading_db`
-- `sat_anchor_trace.csv` 输出，以及 `plot_hex_grid_svg.py` 对卫星锚点轨迹的叠加绘图
-- `forceRlcAmForEpc`、`disableUeIpv4Forwarding` 等稳定性开关
-- `NrEpcTftClassifier` 的 malformed packet 防御
-- 当前版本文档口径收口
+`v3.3.0` 已纳入的内容：
+- `scratch/` 目录按主入口、handover 辅助头文件、plotting 脚本和 midterm 文档归档重组
+- 删除历史 `scratch/results/` 子目录、缓存文件和示例 scratch 代码
+- 保留核心 midterm markdown 文档，其余中期阶段性派生资产转为归档外内容
+- 同步 `docs/`、`scratch/` 与 baseline 定义文档的路径和版本口径
 
-`v3.2.2` 发布前检查已收口为：
+`v3.3.0` 发布前检查已收口为：
 - 默认参数下跑通一轮 `seven-cell baseline`
 - 确认 `scratch/results/` 输出链完整
 - 确认 baseline 文档、README 与中期汇报技术总结的参数口径一致
 
 当前若继续做中期汇报整理，优先参考：
-- `scratch/midterm-report/midterm-figure-plan.md`
+- `scratch/midterm-report/midterm-image-generation-spec.md`
 - `scratch/midterm-report/midterm-ppt-design.md`

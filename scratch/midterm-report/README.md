@@ -1,12 +1,13 @@
 # Midterm Report Workspace
 
-This folder stores files prepared specifically for the midterm presentation/report.
+This folder now keeps only the core midterm write-ups that are still worth
+retaining after the midterm milestone closed.
 
-Current contents:
+Retained files:
 - `midterm-technical-summary.md`: technical summary draft
 - `midterm-handover-flowcharts.md`: handover flowchart notes
-- `midterm-figure-plan.md`: recommended figure plan for the midterm report
-- `midterm-ppt-design.md`: recommended slide-by-slide PPT design for the midterm defense
+- `midterm-ppt-design.md`: final slide-by-slide PPT production guide
+- `midterm-image-generation-spec.md`: image generation and figure-making instructions for the PPT
 
 Current default scenario focus:
 - `2x4` dual-plane constellation
@@ -14,4 +15,8 @@ Current default scenario focus:
 - UE layout generation is now organized as local offset templates plus a unified geographic conversion step
 - Current slide and figure materials are aligned with the `research-v3.2.2` baseline snapshot
 
-Use this directory for future midterm slides, outlines, figures, and speaking notes.
+Cleanup note:
+- Derived figures, draft assets, scripts, tables, and speaking notes were removed
+  after the midterm phase to keep `scratch/` focused on the thesis mainline.
+
+Use this directory only as a lightweight archive of the midterm narrative.

@@ -1,9 +1,9 @@
 # 当前任务记忆
 
 ## 当前版本状态
-- 最近已发布稳定节点：`3.2.2`（Git tag：`research-v3.2.2`）
-- 当前工作区仍位于 `3.2` 主阶段内；若继续补充图表、汇报材料或结果解读，应视为 `research-v3.2.2` 之后的文档化整理
-- 这里的 `3.2.x` 指研究工作版本，不是 ns-3 框架版本
+- 最近已发布稳定节点：`3.3.0`（Git tag：`research-v3.3.0`）
+- 当前工作区已进入 `3.3` 主阶段；当前版本保持 `3.2.2` baseline 语义不变，重点完成工作区收纳与文档收口
+- 这里的 `3.3.x` 指研究工作版本，不是 ns-3 框架版本
 - ns-3 框架版本保持为 `3.46`
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
@@ -30,10 +30,10 @@
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`200 ms`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`1.0 dB`
-- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`4.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`10 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.5 s`
+- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`2.5 dB`
+- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`1.0 s`
+- `customA3RicianKDb`（莱斯 `K` 因子）=`3.0 dB`
+- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.2 s`
 - `forceRlcAmForEpc`（可选将 `EPC` 用户面承载映射为 `RLC AM`）=`false`
 - `disableUeIpv4Forwarding`（默认关闭 `UE IPv4 forwarding`）=`true`
 
@@ -77,8 +77,8 @@
   - `sat_beam_report.csv`（当 `runBeamReportScript = true`）
   - 六边形网格相关 `CSV/SVG`
 - 当前常用分析脚本：
-  - `scratch/sat_beam_report.py`
-  - `scratch/plot_hex_grid_svg.py`
+  - `scratch/plotting/sat_beam_report.py`
+  - `scratch/plotting/plot_hex_grid_svg.py`
 
 ## 当前研究问题
 - 继续验证传统 `A3` baseline 在当前双轨场景下是否能稳定暴露：
@@ -115,19 +115,18 @@
 - 先澄清当前 `sat_beam_trace` 和自定义 `beam budget` 判决链在默认开启 `shadowing / Rician` 后还能回答什么、不能回答什么，再进入后续联合策略
 - 在不改变 baseline 定位的前提下，最后再推进“信号质量 + 卫星负载”联合感知算法
 
-## `3.2.2` 收口结果
-- 当前最新稳定节点已收口为 `research-v3.2.2`，不再建议把这批改动写成新的主阶段升级
-- 原因：这批变化本质上仍属于 `3.2` 主阶段内的 baseline 场景收紧、观测链增强与可视化补充，而不是新的研究主线切换
+## `3.3.0` 收口结果
+- 当前最新稳定节点已收口为 `research-v3.3.0`
+- 本次升级不改变 `3.2.2` 已收口的 baseline 场景和判决语义，重点是把工作区整理成更适合后续 thesis 主线推进的形态
 
-`3.2.2` 已纳入的改动包：
-- baseline 场景口径切到 `seven-cell`，并将 `UE` 生成逻辑重构为“局部偏移模板 + 统一地理坐标转换”
-- custom `A3` 观测链支持注入 `shadowing / Rician` 扰动，并补充 `geometryRsrpDbm` 等 trace 字段
-- 新增 `sat_anchor_trace.csv` 及 `plot_hex_grid_svg.py` 的轨迹叠加能力
-- 新增 `forceRlcAmForEpc`、`disableUeIpv4Forwarding` 等稳定性控制项
-- `NrEpcTftClassifier` 增加 malformed `IPv4/IPv6 UDP/TCP` 包防御
-- 收口提交为：`0a37d54 chore(v3.2.2): snapshot seven-cell baseline and custom-a3 measurement chain`
+`3.3.0` 已纳入的改动包：
+- 将主脚本保留在 `scratch/` 根目录，并把 handover 辅助头文件集中到 `scratch/handover/`
+- 将分析与绘图脚本集中到 `scratch/plotting/`
+- 清理 `scratch/results/` 中历史实验结果、`__pycache__`、示例 scratch 目录与中期阶段性派生资产
+- 保留 `scratch/midterm-report/` 的核心 markdown 文档作为轻量归档
+- 同步更新 `docs/` 与 `scratch/` 的路径说明和工作区口径
 
-`3.2.2` 最少发布检查：
+`3.3.0` 最少发布检查：
 - 跑通一轮默认 `seven-cell baseline`
 - 确认 `hex_grid_cells.svg`、`ue_layout.csv`、`sat_beam_trace.csv`、`sat_anchor_trace.csv`、`sat_beam_report.csv` 输出链完整
 - 确认文档中的默认参数与代码默认值一致
@@ -135,5 +134,5 @@
 
 ## 当前汇报准备入口
 - 版本收口说明优先参考本文件本节，以及 `scratch/README.md` 中的版本演进记录
-- 配图清单优先参考 `scratch/midterm-report/midterm-figure-plan.md`
+- 配图说明优先参考 `scratch/midterm-report/midterm-image-generation-spec.md`
 - PPT 页次与配图对应优先参考 `scratch/midterm-report/midterm-ppt-design.md`

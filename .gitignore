@@ -44,6 +44,7 @@ CMakeUserPresets.json
 /scratch/results/**
 !/scratch/results/
 !/scratch/results/README.md
+/tmp_pdf/
 /results/
 /runs/
 /artifacts/

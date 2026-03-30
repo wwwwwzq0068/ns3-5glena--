@@ -23,6 +23,7 @@
 #include "leo-orbit-calculator.h"
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -143,6 +144,12 @@ struct UeRuntime
     /** 上一次吞吐统计时看到的累计收包数。 */
     uint64_t lastRxPackets = 0;
 
+    /** 切换窗口吞吐 trace 上一次采样时看到的累计收包数。 */
+    uint64_t lastThroughputTraceRxPackets = 0;
+
+    /** 最近一小段稳定期内的吞吐样本，用于估计切换前参考吞吐。 */
+    std::deque<double> recentThroughputSamplesMbps;
+
     /** 已观察到的切换开始次数。 */
     uint32_t handoverStartCount = 0;
 
@@ -151,6 +158,15 @@ struct UeRuntime
 
     /** 成功切换执行时延累加值，单位秒。 */
     double totalHandoverExecutionDelaySeconds = 0.0;
+
+    /** 已完成吞吐恢复判定的切换次数。 */
+    uint32_t throughputRecoveryCount = 0;
+
+    /** 吞吐恢复时间累加值，单位秒。 */
+    double totalThroughputRecoverySeconds = 0.0;
+
+    /** 最近一次完成恢复判定的吞吐恢复时间，单位秒。 */
+    double lastThroughputRecoverySeconds = -1.0;
 
     /** 已识别到的短时回切（A->B->A）次数。 */
     uint32_t pingPongCount = 0;
@@ -163,6 +179,30 @@ struct UeRuntime
 
     /** 最近一次成功切换完成时刻，单位秒。 */
     double lastSuccessfulHoTimeSeconds = -1.0;
+
+    /** 当前 UE 已分配到的切换事件序号，用于关联事件和吞吐 trace。 */
+    uint32_t handoverTraceSequence = 0;
+
+    /** 当前尚未闭合的切换事件序号；没有 pending handover 时为 0。 */
+    uint32_t activeHandoverTraceId = 0;
+
+    /** 当前切换的参考吞吐，取切换前短窗口平均值，单位 Mbps。 */
+    double pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+
+    /** 当前切换的恢复门限吞吐，单位 Mbps。 */
+    double pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+
+    /** 当前是否处于“等待吞吐恢复”状态。 */
+    bool waitingForThroughputRecovery = false;
+
+    /** 正在等待吞吐恢复的切换事件号。 */
+    uint32_t waitingRecoveryHoId = 0;
+
+    /** 当前等待吞吐恢复的起点时刻，单位秒。 */
+    double waitingRecoveryStartTimeSeconds = -1.0;
+
+    /** 当前连续满足恢复门限的采样个数。 */
+    uint32_t waitingRecoverySatisfiedSamples = 0;
 
     /** 自定义切换逻辑当前认为的服务卫星索引。 */
     uint32_t manualHoServingIdx = std::numeric_limits<uint32_t>::max();
@@ -231,6 +271,8 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastServingCellForLog = 0;
     ue.lastKpiReportTime = -1.0;
     ue.lastRxPackets = 0;
+    ue.lastThroughputTraceRxPackets = 0;
+    ue.recentThroughputSamplesMbps.clear();
     ue.seenExpectedHandover = false;
     ue.hasPendingHoStart = false;
     ue.lastHoStartSourceCell = 0;
@@ -239,10 +281,21 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverStartCount = 0;
     ue.handoverEndOkCount = 0;
     ue.totalHandoverExecutionDelaySeconds = 0.0;
+    ue.throughputRecoveryCount = 0;
+    ue.totalThroughputRecoverySeconds = 0.0;
+    ue.lastThroughputRecoverySeconds = -1.0;
     ue.pingPongCount = 0;
     ue.lastSuccessfulHoSourceCell = 0;
     ue.lastSuccessfulHoTargetCell = 0;
     ue.lastSuccessfulHoTimeSeconds = -1.0;
+    ue.handoverTraceSequence = 0;
+    ue.activeHandoverTraceId = 0;
+    ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+    ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+    ue.waitingForThroughputRecovery = false;
+    ue.waitingRecoveryHoId = 0;
+    ue.waitingRecoveryStartTimeSeconds = -1.0;
+    ue.waitingRecoverySatisfiedSamples = 0;
     ue.manualHoServingIdx = std::numeric_limits<uint32_t>::max();
     ue.manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
     ue.manualHoCandidateSince = -1.0;

@@ -13,7 +13,7 @@ import csv
 import math
 from pathlib import Path
 from statistics import median
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 def _parse_bool(value: str) -> bool:
@@ -135,6 +135,26 @@ def infer_default_ue_csv(grid_csv_path: Path) -> Optional[Path]:
     return candidate if candidate.exists() else None
 
 
+def assign_ues_to_cells(
+    cells: List[Dict[str, float]],
+    ues: Optional[List[Dict[str, float | str | int]]],
+) -> Dict[int, Set[str]]:
+    if not ues:
+        return {}
+
+    cell_roles: Dict[int, Set[str]] = {}
+    for ue in ues:
+        east = float(ue["east_m"])
+        north = float(ue["north_m"])
+        nearest = min(
+            cells,
+            key=lambda cell: (cell["east_m"] - east) ** 2 + (cell["north_m"] - north) ** 2,
+        )
+        cell_id = int(nearest["id"])
+        cell_roles.setdefault(cell_id, set()).add(str(ue["role"]))
+    return cell_roles
+
+
 def infer_hex_radius_m(cells: List[Dict[str, float]]) -> float:
     # For pointy-top hex grid, same-row center spacing is dx = sqrt(3) * r.
     row_to_east: Dict[float, List[float]] = {}
@@ -189,10 +209,31 @@ def render_svg(
     sat_anchor_points: Optional[List[Dict[str, float | int]]] = None,
     ue_label_prefix: str = "UE",
     ue_show_labels: bool = True,
+    highlight_ue_cells: bool = False,
+    show_only_occupied_labels: bool = False,
+    focus_occupied_cells: bool = False,
+    focus_padding_hex: float = 1.2,
+    legend_scale: float = 1.0,
     subtitle: str = "",
 ) -> None:
-    east_vals = [c["east_m"] for c in cells]
-    north_vals = [c["north_m"] for c in cells]
+    occupied_cell_roles = assign_ues_to_cells(cells, ue_points) if highlight_ue_cells or focus_occupied_cells else {}
+    radius_m = infer_hex_radius_m(cells)
+
+    if focus_occupied_cells and occupied_cell_roles:
+        focused_cells = [c for c in cells if int(c["id"]) in occupied_cell_roles]
+        east_vals = []
+        north_vals = []
+        for cell in focused_cells:
+            for east, north in hex_vertices(cell["east_m"], cell["north_m"], radius_m):
+                east_vals.append(east)
+                north_vals.append(north)
+        pad_m = max(0.0, focus_padding_hex) * radius_m * 2.0
+        east_vals.extend([min(east_vals) - pad_m, max(east_vals) + pad_m])
+        north_vals.extend([min(north_vals) - pad_m, max(north_vals) + pad_m])
+    else:
+        east_vals = [c["east_m"] for c in cells]
+        north_vals = [c["north_m"] for c in cells]
+
     if sat_anchor_points:
         east_vals.extend(float(p["anchor_east_m"]) for p in sat_anchor_points)
         north_vals.extend(float(p["anchor_north_m"]) for p in sat_anchor_points)
@@ -200,8 +241,6 @@ def render_svg(
     min_n, max_n = min(north_vals), max(north_vals)
     span_e = max(max_e - min_e, 1.0)
     span_n = max(max_n - min_n, 1.0)
-
-    radius_m = infer_hex_radius_m(cells)
 
     plot_w = max(1, width - 2 * margin)
     plot_h = max(1, height - 2 * margin)
@@ -224,28 +263,69 @@ def render_svg(
         f'viewBox="0 0 {width} {height}">'
     )
     lines.append('<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>')
-    lines.append(
-        f'<text x="{margin}" y="{margin - 12}" font-size="16" fill="#111111" '
-        f'font-family="monospace">{title}</text>'
-    )
+    if title:
+        lines.append(
+            f'<text x="{margin}" y="{margin - 12}" font-size="16" fill="#111111" '
+            f'font-family="monospace">{title}</text>'
+        )
     if subtitle:
         lines.append(
             f'<text x="{margin}" y="{margin + 10}" font-size="12" fill="#444444" '
             f'font-family="monospace">{subtitle}</text>'
         )
 
-    for i, c in enumerate(cells):
+    visible_cells = cells
+    if focus_occupied_cells:
+        visible_cells = [
+            c
+            for c in cells
+            if (min_e - radius_m) <= c["east_m"] <= (max_e + radius_m)
+            and (min_n - radius_m) <= c["north_m"] <= (max_n + radius_m)
+        ]
+
+    for i, c in enumerate(visible_cells):
+        cell_id = int(c["id"])
+        fill = "#eaf3ff"
+        stroke = "#4f6d8a"
+        stroke_width = "1"
+        opacity = "1.0"
+        if highlight_ue_cells:
+            roles = occupied_cell_roles.get(cell_id, set())
+            fill = "#f6f8fb"
+            stroke = "#c7d0da"
+            stroke_width = "0.9"
+            opacity = "0.82"
+            if roles == {"center"}:
+                fill = "#fff0db"
+                stroke = "#e67700"
+                stroke_width = "1.8"
+                opacity = "1.0"
+            elif "ring" in roles:
+                fill = "#e7f5ff"
+                stroke = "#1c7ed6"
+                stroke_width = "1.6"
+                opacity = "1.0"
+            elif roles:
+                fill = "#f3d9fa"
+                stroke = "#ae3ec9"
+                stroke_width = "1.6"
+                opacity = "1.0"
+
         poly = hex_vertices(c["east_m"], c["north_m"], radius_m)
         lines.append(
-            f'<polygon points="{map_poly(poly)}" fill="#eaf3ff" stroke="#4f6d8a" stroke-width="1"/>'
+            f'<polygon points="{map_poly(poly)}" fill="{fill}" stroke="{stroke}" '
+            f'stroke-width="{stroke_width}" opacity="{opacity}"/>'
         )
         cx, cy = map_xy(c["east_m"], c["north_m"])
         if show_centers:
             lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="1.8" fill="#1c1c1c"/>')
-        if show_labels and (i % max(1, label_step) == 0):
+        should_label = show_labels and (i % max(1, label_step) == 0)
+        if show_only_occupied_labels and highlight_ue_cells:
+            should_label = should_label and cell_id in occupied_cell_roles
+        if should_label:
             lines.append(
                 f'<text x="{cx + 3:.2f}" y="{cy - 3:.2f}" font-size="9" fill="#0a1f44" '
-                f'font-family="monospace">{int(c["id"])}</text>'
+                f'font-family="monospace">{cell_id}</text>'
             )
 
     if sat_anchor_points:
@@ -292,6 +372,30 @@ def render_svg(
                     f'stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>'
                 )
 
+    if highlight_ue_cells and occupied_cell_roles:
+        legend_x = width - margin - 210
+        legend_y = margin + 18
+        legend_rect_w = 16 * legend_scale
+        legend_rect_h = 12 * legend_scale
+        legend_text_size = 11 * legend_scale
+        cell_legend_items = [
+            ("center cell", "#fff0db", "#e67700"),
+            ("ring cell", "#e7f5ff", "#1c7ed6"),
+            ("other grid", "#f6f8fb", "#c7d0da"),
+        ]
+        for idx, (label, fill, stroke) in enumerate(cell_legend_items):
+            ly = legend_y + idx * (22 * legend_scale)
+            lines.append(
+                f'<rect x="{legend_x:.2f}" y="{ly - (7 * legend_scale):.2f}" '
+                f'width="{legend_rect_w:.2f}" height="{legend_rect_h:.2f}" '
+                f'fill="{fill}" stroke="{stroke}" stroke-width="1.2"/>'
+            )
+            lines.append(
+                f'<text x="{legend_x + (24 * legend_scale):.2f}" y="{ly + (3 * legend_scale):.2f}" '
+                f'font-size="{legend_text_size:.2f}" fill="#111" '
+                f'font-family="monospace">{label}</text>'
+            )
+
     if ue_points:
         role_colors = {
             "center": "#d94841",
@@ -299,7 +403,9 @@ def render_svg(
             "line": "#5f3dc4",
         }
         legend_x = width - margin - 154
-        legend_y = margin + 22
+        legend_y = margin + ((92 * legend_scale) if highlight_ue_cells and occupied_cell_roles else (22 * legend_scale))
+        ue_legend_radius = 4.8 * legend_scale
+        ue_legend_text_size = 11 * legend_scale
         seen_roles: List[str] = []
         for ue in ue_points:
             role = str(ue["role"])
@@ -317,10 +423,14 @@ def render_svg(
         if seen_roles:
             for idx, role in enumerate(seen_roles):
                 fill = role_colors.get(role, "#c2255c")
-                ly = legend_y + idx * 22
-                lines.append(f'<circle cx="{legend_x:.2f}" cy="{ly:.2f}" r="4.8" fill="{fill}" stroke="#111" stroke-width="0.7"/>')
+                ly = legend_y + idx * (22 * legend_scale)
                 lines.append(
-                    f'<text x="{legend_x + 14:.2f}" y="{ly + 4:.2f}" font-size="11" fill="#111" '
+                    f'<circle cx="{legend_x:.2f}" cy="{ly:.2f}" r="{ue_legend_radius:.2f}" '
+                    f'fill="{fill}" stroke="#111" stroke-width="0.7"/>'
+                )
+                lines.append(
+                    f'<text x="{legend_x + (14 * legend_scale):.2f}" y="{ly + (4 * legend_scale):.2f}" '
+                    f'font-size="{ue_legend_text_size:.2f}" fill="#111" '
                     f'font-family="monospace">{role}</text>'
                 )
 
@@ -363,6 +473,11 @@ def main() -> None:
     p.add_argument("--sat-anchor-csv", type=Path, help="Optional satellite anchor trace CSV to overlay")
     p.add_argument("--ue-show-labels", type=_parse_bool, default=True)
     p.add_argument("--ue-label-prefix", default="UE")
+    p.add_argument("--highlight-ue-cells", type=_parse_bool, default=False)
+    p.add_argument("--show-only-occupied-labels", type=_parse_bool, default=False)
+    p.add_argument("--focus-occupied-cells", type=_parse_bool, default=False)
+    p.add_argument("--focus-padding-hex", type=float, default=1.2)
+    p.add_argument("--legend-scale", type=float, default=1.0)
     args = p.parse_args()
 
     out = args.out if args.out else args.csv.with_suffix(".svg")
@@ -384,6 +499,11 @@ def main() -> None:
         sat_anchor_points=sat_anchor_points,
         ue_label_prefix=args.ue_label_prefix,
         ue_show_labels=args.ue_show_labels,
+        highlight_ue_cells=args.highlight_ue_cells,
+        show_only_occupied_labels=args.show_only_occupied_labels,
+        focus_occupied_cells=args.focus_occupied_cells,
+        focus_padding_hex=args.focus_padding_hex,
+        legend_scale=max(0.5, args.legend_scale),
         subtitle=args.subtitle,
     )
     print(f"[OK] wrote: {out}")

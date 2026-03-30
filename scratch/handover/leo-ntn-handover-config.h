@@ -70,14 +70,17 @@ struct BaselineSimulationConfig
     bool printGridCatalog = true;
     std::string gridCatalogPath = JoinOutputPath(outputDir, "hex_grid_cells.csv");
     std::string beamReportScriptPath =
-        std::string(PROJECT_SOURCE_PATH) + "/scratch/sat_beam_report.py";
+        std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/sat_beam_report.py";
     std::string plotHexGridScriptPath =
-        std::string(PROJECT_SOURCE_PATH) + "/scratch/plot_hex_grid_svg.py";
+        std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/plot_hex_grid_svg.py";
     std::string beamTracePath = JoinOutputPath(outputDir, "sat_beam_trace.csv");
     std::string beamReportPath = JoinOutputPath(outputDir, "sat_beam_report.csv");
     std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
     std::string ueLayoutPath = JoinOutputPath(outputDir, "ue_layout.csv");
     std::string gridSvgPath = JoinOutputPath(outputDir, "hex_grid_cells.svg");
+    std::string handoverThroughputTracePath =
+        JoinOutputPath(outputDir, "handover_dl_throughput_trace.csv");
+    std::string handoverEventTracePath = JoinOutputPath(outputDir, "handover_event_trace.csv");
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -93,11 +96,11 @@ struct BaselineSimulationConfig
     double atmLossDb = 0.5;
     double beamDropPenaltyDb = 200.0;
     bool customA3UseShadowing = true;
-    double customA3ShadowingSigmaDb = 1.0;
-    double customA3ShadowingCorrelationSeconds = 4.0;
+    double customA3ShadowingSigmaDb = 2.5;
+    double customA3ShadowingCorrelationSeconds = 1.0;
     bool customA3UseRician = true;
-    double customA3RicianKDb = 10.0;
-    double customA3RicianCorrelationSeconds = 0.5;
+    double customA3RicianKDb = 3.0;
+    double customA3RicianCorrelationSeconds = 0.2;
 
     double hoHysteresisDb = 2.0;
     uint32_t hoTttMs = 200;
@@ -119,6 +122,8 @@ struct BaselineSimulationConfig
     bool runBeamReportScript = true;
     bool runGridSvgScript = true;
     double throughputReportIntervalSeconds = 0.0;
+    bool enableHandoverThroughputTrace = true;
+    double handoverThroughputTraceIntervalSeconds = 0.005;
     double maxSupportedUesPerSatellite = 3.0;
     double loadCongestionThreshold = 0.8;
     bool enableSrsInFSlots = false;
@@ -214,6 +219,10 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("ueLayoutPath", config.ueLayoutPath);
     addArg("gridSvgPath", config.gridSvgPath);
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
+    addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
+    addArg("handoverEventTracePath", config.handoverEventTracePath);
+    addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
+    addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
     addArg("loadCongestionThreshold", config.loadCongestionThreshold);
     addArg("enableSrsInFSlots", config.enableSrsInFSlots);
@@ -234,6 +243,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
     const std::string defaultUeLayoutPath = JoinOutputPath(defaultOutputDir, "ue_layout.csv");
     const std::string defaultGridSvgPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.svg");
+    const std::string defaultHandoverThroughputTracePath =
+        JoinOutputPath(defaultOutputDir, "handover_dl_throughput_trace.csv");
+    const std::string defaultHandoverEventTracePath =
+        JoinOutputPath(defaultOutputDir, "handover_event_trace.csv");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
@@ -258,6 +271,17 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     if (config.gridSvgPath == defaultGridSvgPath && config.outputDir != defaultOutputDir)
     {
         config.gridSvgPath = JoinOutputPath(config.outputDir, "hex_grid_cells.svg");
+    }
+    if (config.handoverThroughputTracePath == defaultHandoverThroughputTracePath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.handoverThroughputTracePath =
+            JoinOutputPath(config.outputDir, "handover_dl_throughput_trace.csv");
+    }
+    if (config.handoverEventTracePath == defaultHandoverEventTracePath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.handoverEventTracePath = JoinOutputPath(config.outputDir, "handover_event_trace.csv");
     }
 
 }
@@ -319,6 +343,9 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "progressReportIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.pingPongWindowSeconds <= 0.0,
                     "pingPongWindowSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.enableHandoverThroughputTrace &&
+                        config.handoverThroughputTraceIntervalSeconds <= 0.0,
+                    "handoverThroughputTraceIntervalSeconds must be > 0 when enabled");
     NS_ABORT_MSG_IF(config.maxSupportedUesPerSatellite <= 0.0,
                     "maxSupportedUesPerSatellite must be > 0");
     NS_ABORT_MSG_IF(config.loadCongestionThreshold <= 0.0 || config.loadCongestionThreshold > 1.0,
