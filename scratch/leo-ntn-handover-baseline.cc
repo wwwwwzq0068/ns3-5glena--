@@ -777,8 +777,9 @@ ExecuteCustomA3Handover(UeRuntime& ue,
         return;
     }
 
+    // P2.2: 防抖时间与 TTT 联动，与 baseline-a3 保持一致的语义
     if (ue.hasPendingHoStart || (ue.manualHoLastTriggerTime >= 0.0 &&
-                                 nowSeconds - ue.manualHoLastTriggerTime < 0.2))
+                                 nowSeconds - ue.manualHoLastTriggerTime < g_manualHoTttSeconds))
     {
         return;
     }
