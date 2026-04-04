@@ -87,6 +87,7 @@ set(source_files
     model/lena-error-model.cc
     model/nr-a2-a4-rsrq-handover-algorithm.cc
     model/nr-a3-rsrp-handover-algorithm.cc
+    model/nr-leo-a3-measurement-handover-algorithm.cc
     model/nr-amc.cc
     model/nr-anr.cc
     model/nr-asn1-header.cc
@@ -274,6 +275,7 @@ set(header_files
     model/lena-error-model.h
     model/nr-a2-a4-rsrq-handover-algorithm.h
     model/nr-a3-rsrp-handover-algorithm.h
+    model/nr-leo-a3-measurement-handover-algorithm.h
     model/nr-amc.h
     model/nr-anr-sap.h
     model/nr-anr.h

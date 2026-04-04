@@ -7,6 +7,7 @@
 #include "ns3/nr-gnb-rrc.h"
 #include "ns3/nr-module.h"
 #include "ns3/nr-ue-rrc.h"
+#include "ns3/nr-leo-a3-measurement-handover-algorithm.h"
 #include "handover/beam-link-budget.h"
 #include "handover/leo-ntn-handover-config.h"
 #include "handover/leo-orbit-calculator.h"
@@ -991,7 +992,10 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_pingPongWindowSeconds = config.pingPongWindowSeconds;
     g_strictNrtGuard = config.strictNrtGuard;
     g_strictNrtMarginDb = config.strictNrtMarginDb;
-    g_manualHoTttSeconds = static_cast<double>(config.hoTttMs) / 1000.0;
+    // P2.1: joint 路径的 TTT 也归一化到 3GPP 标准值，与 baseline-a3 保持一致
+    const uint16_t effectiveTttMs = NrLeoA3MeasurementHandoverAlgorithm::NormalizeTimeToTriggerMs(
+        static_cast<uint16_t>(std::min<uint32_t>(config.hoTttMs, std::numeric_limits<uint16_t>::max())));
+    g_manualHoTttSeconds = static_cast<double>(effectiveTttMs) / 1000.0;
 }
 
 // ============================================================================
