@@ -10,9 +10,7 @@ Current default files include:
 - `hex_grid_cells.csv`
 - `hex_grid_cells.svg`
 - `ue_layout.csv`
-- `sat_beam_trace.csv`
 - `sat_anchor_trace.csv`
-- `sat_beam_report.csv`
 - `handover_dl_throughput_trace.csv`
 - `handover_event_trace.csv`
 

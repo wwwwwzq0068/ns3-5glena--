@@ -205,8 +205,8 @@
 ### 制图说明
 不要直接截图 Mermaid。建议在 PPT、draw.io 或 Figma 里重画成横向五阶段流程：
 - `几何更新`
-- `候选筛选`
-- `A3 判决`
+- `MeasurementReport`
+- `目标选择`
 - `切换执行`
 - `统计输出`
 
@@ -246,17 +246,17 @@
 - 真实结果图
 
 ### 来源
-- `scratch/results/sat_beam_report.csv`
-- `scratch/results/sat_beam_trace.csv`
 - `scratch/results/sat_anchor_trace.csv`
+- `scratch/results/handover_event_trace.csv`
+- `scratch/results/handover_dl_throughput_trace.csv`
 
 ### 制图说明
 优先选一种最容易讲清的问题：
-- 单个 `UE` 的候选卫星 `RSRP` 风格指标随时间变化
 - 服务卫星切换时间线
 - 锚点变化轨迹图
+- 切换事件与吞吐波动对齐图
 
-建议选择“单个 `UE` 的前两强候选对比曲线”，因为最能讲“边界竞争”和“A3 触发”。
+建议优先选择“切换事件时间线”或“切换事件与吞吐波动对齐图”，因为更贴近当前统一测量驱动实现。
 
 ### 限制
 - 必须基于真实数据重绘
@@ -294,11 +294,11 @@
 - `scratch/midterm-report/midterm-handover-flowcharts.md`
 
 ### 制图说明
-建议画成简化的左右结构，而不是完整流程图。右侧框图只保留最核心关系：左边主链为“候选筛选 -> baseline A3 -> Target Sat”，右边补三个负载输入框 `attachedUeCount`、`offeredPacketRate`、`loadScore`，汇入“联合信号-负载决策”模块，再指向 `Target Sat`。视觉重点是“增量接入”，而不是“另起炉灶”。
+建议画成简化的左右结构，而不是完整流程图。左边主链为“MeasurementReport -> baseline strongest neighbor -> Target Sat”，右边补三个负载输入框 `attachedUeCount`、`offeredPacketRate`、`loadScore`，汇入“联合信号-负载决策”模块，再指向同一个 `Target Sat`。视觉重点是“共用测量入口后的增量分叉”，而不是“另起炉灶”。
 
 ### 限制
 - 不建议直接用 AI 绘制流程图
-- 必须明确这是“下一阶段”
+- 必须明确 baseline 与 improved 共用同一测量入口
 - 负载相关节点建议只保留：
   - `attachedUeCount`
   - `offeredPacketRate`

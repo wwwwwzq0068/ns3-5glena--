@@ -8,7 +8,7 @@
  *
  * 这里放的是“运行时上下文”：
  * - 卫星侧对象与邻区状态；
- * - UE 侧对象、预测切换状态和统计计数；
+ * - UE 侧对象和切换/业务连续性统计；
  * - 若干与运行时状态直接相关的辅助函数。
  *
  * 不放在本文件中的内容：
@@ -108,21 +108,6 @@ struct UeRuntime
     /** 初始接入卫星的索引。 */
     uint32_t initialAttachIdx = std::numeric_limits<uint32_t>::max();
 
-    /** 预测切换中的源卫星索引。 */
-    uint32_t expectedSourceIndex = 0;
-
-    /** 预测切换中的目标卫星索引。 */
-    uint32_t expectedTargetIndex = 0;
-
-    /** 是否已经生成了预测切换。 */
-    bool hasPredictedHandover = false;
-
-    /** 预测切换是否在真实仿真中被观察到。 */
-    bool seenExpectedHandover = false;
-
-    /** 预测切换触发时刻，单位秒。 */
-    double predictedHandoverTimeSeconds = -1.0;
-
     /** 当前是否已经记录到尚未闭合的 HO-START。 */
     bool hasPendingHoStart = false;
 
@@ -203,30 +188,6 @@ struct UeRuntime
 
     /** 当前连续满足恢复门限的采样个数。 */
     uint32_t waitingRecoverySatisfiedSamples = 0;
-
-    /** 自定义切换逻辑当前认为的服务卫星索引。 */
-    uint32_t manualHoServingIdx = std::numeric_limits<uint32_t>::max();
-
-    /** 自定义切换逻辑当前追踪的候选目标卫星索引。 */
-    uint32_t manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
-
-    /** 当前目标卫星开始持续优于服务卫星的起始时刻。 */
-    double manualHoCandidateSince = -1.0;
-
-    /** 上一次主动触发自定义切换的时刻。 */
-    double manualHoLastTriggerTime = -1.0;
-
-    /** 上一拍记录的各卫星距离，用于判定最近卫星变化。 */
-    std::vector<double> prevDistances;
-
-    /** 每条 UE-卫星观测链当前持有的阴影衰落样本，单位 dB。 */
-    std::vector<double> customA3ShadowingDb;
-
-    /** 每条 UE-卫星观测链当前持有的莱斯功率增益样本，线性值。 */
-    std::vector<double> customA3RicianPowerLinear;
-
-    /** 上一次更新自定义 A3 扰动的时刻，单位秒。 */
-    double customA3LastUpdateTimeSeconds = -1.0;
 };
 
 struct UeLayoutConfig
@@ -273,7 +234,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastRxPackets = 0;
     ue.lastThroughputTraceRxPackets = 0;
     ue.recentThroughputSamplesMbps.clear();
-    ue.seenExpectedHandover = false;
     ue.hasPendingHoStart = false;
     ue.lastHoStartSourceCell = 0;
     ue.lastHoStartTargetCell = 0;
@@ -296,14 +256,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.waitingRecoveryHoId = 0;
     ue.waitingRecoveryStartTimeSeconds = -1.0;
     ue.waitingRecoverySatisfiedSamples = 0;
-    ue.manualHoServingIdx = std::numeric_limits<uint32_t>::max();
-    ue.manualHoCandidateIdx = std::numeric_limits<uint32_t>::max();
-    ue.manualHoCandidateSince = -1.0;
-    ue.manualHoLastTriggerTime = -1.0;
-    ue.prevDistances.assign(gNbNum, -1.0);
-    ue.customA3ShadowingDb.assign(gNbNum, std::numeric_limits<double>::quiet_NaN());
-    ue.customA3RicianPowerLinear.assign(gNbNum, std::numeric_limits<double>::quiet_NaN());
-    ue.customA3LastUpdateTimeSeconds = -1.0;
 }
 
 /**

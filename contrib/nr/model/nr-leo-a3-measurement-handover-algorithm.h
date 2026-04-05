@@ -10,6 +10,7 @@
 #include "nr-rrc-sap.h"
 
 #include "ns3/nstime.h"
+#include "ns3/traced-callback.h"
 
 namespace ns3
 {
@@ -51,8 +52,10 @@ class NrLeoA3MeasurementHandoverAlgorithm : public NrHandoverAlgorithm
     Time m_timeToTrigger;
     uint16_t m_reportIntervalMs;
     uint8_t m_maxReportCells;
+    bool m_triggerHandover;
     NrHandoverManagementSapUser* m_handoverManagementSapUser;
     NrHandoverManagementSapProvider* m_handoverManagementSapProvider;
+    TracedCallback<uint16_t, NrRrcSap::MeasResults> m_measurementReportTrace;
 };
 
 } // namespace ns3

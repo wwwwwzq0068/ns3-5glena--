@@ -5,9 +5,9 @@
 当前口径与本方案保持一致：
 - 研究主线：`LEO-NTN` 切换研究
 - 当前 baseline：`2x4` 双轨、`25 UE`、`seven-cell`
-- 当前最新稳定节点：`research-v3.2.2`
-- 当前阶段定位：完成三维物理建模、`Earth-fixed` 覆盖建模与传统 `A3 baseline` 平台收口
-- 下一阶段重点：`信号质量 + 卫星负载` 联合切换策略
+- 当前最新稳定节点：`research-v4.0.1`
+- 当前阶段定位：完成三维物理建模、`Earth-fixed` 覆盖建模与统一真实测量驱动的 `A3 baseline / improved` 平台收口
+- 当前重点：在同一 `MeasurementReport` 入口下比较 baseline 与 improved
 
 ---
 
@@ -75,9 +75,9 @@
 - `midterm-handover-flowcharts.md` 图 1
   - 用于第 `10` 页 当前 baseline 切换机制
 - `midterm-handover-flowcharts.md` 图 2
-  - 用于第 `14` 页 当前不足与下一步工作
-- `sat_beam_trace.csv` / `sat_beam_report.csv`
-  - 用于第 `12` 页 当前结果与初步分析
+  - 用于第 `14` 页 baseline / improved 对照说明
+- `handover_event_trace.csv` / `handover_dl_throughput_trace.csv`
+  - 用于第 `12-13` 页 当前结果与初步分析
 - 吞吐统计曲线或切换附近吞吐窗口图
   - 用于第 `13` 页 吞吐连续性分析
 
@@ -327,10 +327,10 @@
 
 ### 建议文字
 - 当前 baseline 采用传统 `A3` 风格切换语义
-- 判决依据为 `RSRP + hysteresis + TTT`
-- 同时保留基本的可见性与 `beam lock` 约束
-- 当前 baseline 不引入负载决策
-- 其作用是为后续改进策略提供统一对照组
+- 判决依据为标准 `MeasurementReport + RSRP + hysteresis + TTT`
+- baseline 与 improved 共用同一条测量入口
+- 当前 baseline 不引入负载决策，improved 在同一批候选上叠加 `loadScore`
+- 其作用是为同场景对照实验提供统一入口
 
 ### 配图建议
 - 使用现有中期流程图素材中的 baseline 切换时序图
@@ -396,9 +396,9 @@
   - 卫星锚点变化轨迹图
 
 ### 可参考数据
-- `scratch/results/sat_beam_trace.csv`
-- `scratch/results/sat_beam_report.csv`
 - `scratch/results/sat_anchor_trace.csv`
+- `scratch/results/handover_event_trace.csv`
+- `scratch/results/handover_dl_throughput_trace.csv`
 
 ### 图注建议
 `图 7 baseline 结果输出与分析示例图`
@@ -449,8 +449,8 @@
 ### 建议文字
 - 当前 baseline 的问题暴露稳定性仍需进一步验证
 - 第二轨卫星是否形成充分竞争仍需继续观察
-- 当前负载信息已统计，但尚未真正进入切换决策闭环
-- 下一阶段将在保持场景口径不变的前提下，引入“`信号质量 + 卫星负载`”联合切换策略
+- 当前负载信息已经进入 improved 目标选择，但其收益边界仍需继续验证
+- 下一步将在保持场景口径不变的前提下，继续比较 baseline 与 improved 的结果差异
 - 后续将以切换成功率、时延、吞吐连续性、`ping-pong` 和负载均衡为核心指标开展对比实验
 
 ### 配图建议
@@ -459,7 +459,7 @@
   - `scratch/midterm-report/midterm-handover-flowcharts.md`
 
 ### 图注建议
-`图 9 联合信号-负载切换策略接入路径图`
+`图 9 baseline / improved 共用测量入口的目标选择对照图`
 
 ### 版式建议
 - 左侧列“当前不足”

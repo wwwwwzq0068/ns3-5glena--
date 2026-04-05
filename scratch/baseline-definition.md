@@ -10,7 +10,7 @@
 ## baseline 定义
 当前建议将 baseline 定义为：
 
-> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用仅基于信号质量的 `A3` 风格切换基线；UE 使用 `seven-cell`（中心 1 小区 + 周围 6 小区）二维部署，决策仅依赖 `RSRP`、`hysteresis`、`TTT` 以及基本的可见性/波束锁定约束，不引入严格邻区守卫、负载感知、预测优化或学习型决策。
+> 在固定 `2x4` 双轨、`25 UE`、中等时长仿真场景下，采用基于标准 `PHY/RRC MeasurementReport` 的传统 `A3` 风格切换基线；UE 使用 `seven-cell`（中心 1 小区 + 周围 6 小区）二维部署，baseline 决策仅依赖 `RSRP`、`hysteresis` 与 `TTT`，不引入负载感知、预测优化或学习型决策。
 
 这一定义强调三件事：
 - 场景边界固定
@@ -42,36 +42,32 @@
 - `bandwidth = 40 MHz`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`200 ms`
+- `measurementReportIntervalMs = 120 ms`
+- `measurementMaxReportCells = 8`
+- `handoverMode = baseline`
+- `improvedSignalWeight = 0.7`
+- `improvedLoadWeight = 0.3`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`2.5 dB`
-- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`1.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`3.0 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.2 s`
-- `strictNrtGuard = false`
-- `strictNrtMarginDb = hoHysteresisDb`
 - `useWgs84HexGrid = true`
 - `forceRlcAmForEpc = false`
 - `disableUeIpv4Forwarding = true`
 
 说明：
-- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v3.3.0`
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v4.0.1`
 - 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
-- 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，但 baseline 判决仍以自定义几何 `beam budget/rsrpDbm` 为准
-- 当前平台已支持将 `shadowing / Rician` 作为可选扰动注入 custom `beam budget/A3` 观测链，且当前 baseline 默认开启；但判决仍不是直接读取 PHY 测量
+- 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
+- 当前已移除原来的几何 `beam budget/custom A3` handover 判决链；几何计算只保留给轨道推进、地面锚点与初始接入
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 重新走上行 `NAS/TFT` 分类路径
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 选择
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
-- 判决主线为：`RSRP` 比较、`hysteresis`、`TTT`、基本可见性/波束锁定约束
-- 当前多 UE 场景使用自定义执行器来复现 `A3` 触发语义
+- 判决主线为：标准 `MeasurementReport` 上报的 `RSRP` 比较、`hysteresis` 与 `TTT`
+- `handoverMode = baseline` 时，直接在 A3 上报候选中选择最强邻区
+- `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时叠加 `loadScore`
 - 只要决策依据不包含负载权重，这条路径仍属于 baseline
-
-说明：
-- `strictNrtGuard`（严格邻区表守卫）继续保留在平台中，但不再作为 baseline 默认项
-- 后续若启用 `strictNrtGuard`，应将其视为对 baseline 的增强机制，而不是 baseline 本体
 
 ## baseline 验证清单
 建议把验证分成三层，而不是只看“能不能跑”。
@@ -126,10 +122,10 @@
 当前实现状态：
 1. `SatelliteRuntime` 已包含基础负载字段
 2. 周期更新中已经会计算每星基础负载状态
-3. 这些量当前只用于观测和 trace 输出
-4. 下一步才是在改进算法中把 `RSRP` 与 `loadScore` 组合
+3. 这些量在 `handoverMode = improved` 下已经进入目标选择
+4. baseline 仍不使用 `loadScore` 做决策
 
 ## 下一步
 - 用当前默认参数完成一轮 `seven-cell baseline` 验证
-- 保持 `A3` 触发语义不变，继续评估当前默认开启的 `shadowing / Rician` 扰动如何影响自定义判决链
+- 在同一 `MeasurementReport` 入口下，对比 `baseline` 与 `improved` 的目标选择差异
 - 保持 baseline 与改进算法的对比边界清楚，避免同时改动场景口径、随机信道扰动和决策逻辑

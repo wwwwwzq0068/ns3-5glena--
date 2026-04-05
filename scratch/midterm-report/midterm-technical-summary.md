@@ -23,7 +23,7 @@
 - 后续如何引入“信号质量 + 卫星负载”的联合决策
 
 ### 2.2 当前阶段定位
-当前研究仓库最近已发布稳定节点为 `3.2.2`（Git tag：`research-v3.2.2`）。这里的 `3.2.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区若继续补充图表、PPT 或结果总结，应视为 `3.2.2` 之后的汇报材料整理，而不是新的研究主阶段切换。
+当前研究仓库最近已发布稳定节点为 `4.0.1`（Git tag：`research-v4.0.1`）。这里的 `4.0.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区若继续补充图表、PPT 或结果总结，应视为 `4.0.1` 之后的主阶段内迭代。
 
 当前阶段的重点已经从“先把基础物理场景构建出来”推进到“将其整理为可用于后续毕设实验的 baseline 平台”。这意味着：
 - 不再把继续扩星作为默认主线
@@ -122,7 +122,7 @@
 - 为后续改进策略提供统一对比口径
 
 ### 5.2 当前主场景
-根据当前稳定节点 `3.2.0`，baseline 主场景为：
+根据当前稳定节点 `4.0.1`，baseline 主场景为：
 - 卫星数：`8`
 - 轨道面数：`2`
 - 轨道结构：`2x4`
@@ -151,13 +151,12 @@
 当前默认切换参数：
 - `hoHysteresisDb = 2.0 dB`
 - `hoTttMs = 200 ms`
+- `measurementReportIntervalMs = 120 ms`
+- `measurementMaxReportCells = 8`
+- `handoverMode = baseline`
+- `improvedSignalWeight = 0.7`
+- `improvedLoadWeight = 0.3`
 - `pingPongWindowSeconds = 1.5 s`
-- `customA3ShadowingSigmaDb = 1.0 dB`
-- `customA3ShadowingCorrelationSeconds = 4.0 s`
-- `customA3RicianKDb = 10 dB`
-- `customA3RicianCorrelationSeconds = 0.5 s`
-
-此外，当前平台保留 `strictNrtGuard`（严格邻区表守卫）这一增强开关，但当前 baseline 默认不启用；baseline 只保留基本的可见性与 `beam lock` 约束，用于更真实地暴露传统 `A3` 的局限。
 
 ### 5.4 baseline 的意义
 当前 baseline 的目标不是证明传统 `A3` 很优，而是提供一个清楚、稳定、可统计的起点。只有 baseline 定义清楚，后续改进策略的收益才有对照意义。
@@ -205,7 +204,7 @@
 - 服务星变化日志
 - 周期性仿真进度输出
 - 最终吞吐统计、切换汇总和自动 `ping-pong` 计数
-- `ue_layout`、`sat_beam_trace`、`sat_anchor_trace`、`grid svg` 等逐时刻导出
+- `ue_layout`、`sat_anchor_trace`、`grid svg` 以及切换窗口吞吐/事件 trace 等逐时刻导出
 
 结果目录统一为：
 - `scratch/results/`
@@ -214,8 +213,8 @@
 
 需要说明的一点是：
 - 当前 `PHY` 信道已保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`
-- 但 baseline 的 `A3` 判决主线仍使用自定义几何 `beam budget/rsrpDbm`，还没有把随机衰落直接接进判决链
-- 当前平台已经补上一个可开关实验入口：可将 `shadowing / Rician` 扰动注入 custom `beam budget/A3` 观测链；当前默认已开启，但判决仍不是直接读取 PHY 测量
+- baseline 与 improved 都直接消费标准 `MeasurementReport`
+- 原来的几何 `beam budget/custom A3` handover 判决链已经从主线移除；几何计算只保留给轨道推进、地面锚点与初始接入
 
 ### 6.4 稳定性与性能处理
 已完成的非算法性关键工作包括：
@@ -250,8 +249,8 @@
 ### 7.2 当前仍存在的不足
 当前平台已经具备 baseline 研究能力，但仍有三类不足：
 - baseline 仍需通过更多实验确认其问题暴露是否稳定
-- 负载接口已接入，但尚未真正进入切换决策
-- 随机信道扰动与自定义判决链之间仍有一层语义断点，需要先单独澄清后再推进增强策略
+- 改进策略虽然已经接入 `loadScore`，但仍需更多实验验证其收益边界
+- 当前短跑 wall-clock 明显高于早期几何代理链，需要继续确认统一真实测量后对运行成本的影响边界
 
 ### 7.3 下一步优化方向
 下一阶段建议分三条线推进：
@@ -261,14 +260,14 @@
    - 观察频繁切换、潜在 `ping-pong` 和吞吐连续性
    - 核实卫星过境与七小区占位关系是否稳定可解释
 
-2. 信道扰动澄清线
-   - 独立评估 `shadowing / Rician` 扰动是否接入自定义 `beam budget/A3` 判决链
-   - 区分“PHY 更真实”与“切换判决已受扰动影响”这两个层次
-   - 在不改变 baseline 默认定义的前提下，确认边界竞争与 `ping-pong` 会如何变化
+2. baseline / improved 对照线
+   - 在统一 `MeasurementReport` 入口下验证 baseline 与 improved 的差异
+   - 观察边界竞争、`ping-pong`、吞吐连续性和负载分布是否出现可解释变化
+   - 确认 `handoverMode`、权重参数与结果趋势之间的关系
 
-3. 改进策略准备线
-   - 在当前平台上正式引入负载感知
-   - 设计“信号质量 + 卫星负载”的联合指标
+3. 改进策略细化线
+   - 继续优化“信号质量 + 卫星负载”的联合指标
+   - 评估是否需要引入更细粒度负载量或更稳健的目标筛选规则
    - 在统一 baseline 对照下验证收益
 
 ## 8. 适合中期汇报的结论表达

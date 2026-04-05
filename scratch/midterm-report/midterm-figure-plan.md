@@ -6,9 +6,9 @@
 - 每一小节优先放 1 张最能支撑该节结论的图，避免堆图。
 - 图的作用应是“证明结论”，而不是重复正文文字。
 
-当前口径默认对齐 `research-v3.2.2`：
+当前口径默认对齐统一真实测量驱动的当前工作区：
 - baseline：`2x4` 双轨、`25 UE`、`seven-cell`
-- 当前最新稳定节点：`research-v3.2.2`
+- 当前最新稳定节点：`research-v4.0.1`
 - 后续如无新 tag，图表更新按汇报材料整理理解
 
 ## 0. 图与 PPT 页码对应
@@ -90,18 +90,18 @@
 ### 1.4 复现 A3 风格切换判决语义
 
 建议图片：
-- baseline 切换时序图或流程图
+- 统一测量驱动切换时序图或流程图
 
 候选素材：
 - `scratch/midterm-report/midterm-handover-flowcharts.md` 中的图 1
 
 图片作用：
-- 展示当前切换主线从候选筛选、A3 判决到 `TriggerHandover` 执行和统计输出的完整路径
+- 展示当前切换主线从 `MeasurementReport`、目标选择到 `TriggerHandover` 执行和统计输出的完整路径
 - 比代码截图更能体现工程实现的完整性
 
 图注建议：
 - 图 4 当前 LEO-NTN baseline 切换时序图
-- 图中展示了几何更新、候选筛选、A3 风格触发、切换执行与结果统计的整体流程
+- 图中展示了几何更新、标准测量上报、目标选择、切换执行与结果统计的整体流程
 
 制作建议：
 - 优先使用规范流程图，不建议使用终端日志截图
@@ -133,9 +133,9 @@
 - 卫星锚点轨迹或服务区域变化图
 
 候选素材：
-- `scratch/results/sat_beam_trace.csv`
-- `scratch/results/sat_beam_report.csv`
 - `scratch/results/sat_anchor_trace.csv`
+- `scratch/results/handover_event_trace.csv`
+- `scratch/results/handover_dl_throughput_trace.csv`
 
 图片作用：
 - 说明平台不仅能输出日志，也能支撑后续对切换现象的分析
@@ -154,21 +154,21 @@
 ### 2.1 联合切换策略设计
 
 建议图片：
-- “信号质量 + 卫星负载”联合策略接入图
+- baseline / improved 共用测量入口的对照图
 
 候选素材：
 - `scratch/midterm-report/midterm-handover-flowcharts.md` 中的图 2
 
 图片作用：
-- 明确说明这是下一阶段工作
-- 体现联合策略是在现有平台上增量接入，而不是推翻重做
+- 明确说明 baseline 与 improved 已经在统一测量入口上形成对照
+- 体现 improved 只在目标选择阶段做增量扩展，而不是推翻重做
 
 图注建议：
-- 图 7 联合信号-负载切换策略接入路径
-- 图中展示当前 baseline 输入量、负载状态接口以及后续联合评估模块的插入位置
+- 图 7 baseline / improved 共用测量入口的目标选择对照图
+- 图中展示当前 baseline 输入量、负载状态接口以及 improved 相对于 baseline 的增量部分
 
 制作建议：
-- 图注中明确写“后续接入路径”，避免误读为“已完成”
+- 图注中明确写“共用测量入口”，避免误读为“仍是旧几何判决链”
 
 ### 2.2 对照实验设计与评估指标
 

@@ -3,21 +3,21 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`3.3.0`（Git tag：`research-v3.3.0`）
-- 当前工作区已经切入 `3.3` 主阶段；本次收口保持 `3.2.2` baseline 语义不变，重点完成 `scratch/` 目录重组与清理
-- 这里的 `3.3.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
+- 最近已发布稳定节点：`4.0.1`（Git tag：`research-v4.0.1`）
+- 当前工作区与 `research-v4.0.1` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
+- 这里的 `4.0.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
 - 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
 - 当前默认目标不是继续扩星，而是把该七小区场景作为传统 `A3 baseline` 的缺陷暴露平台
-- `strictNrtGuard`（严格邻区表守卫）不再计入 baseline 默认定义，转入后续增强策略侧
-- 当前改进方向先是继续评估默认已开启的 `shadowing / Rician` 扰动如何影响自定义 `beam budget/A3` 判决链，之后才是“信号质量 + 卫星负载”联合感知切换策略
+- 当前 handover 主链已统一到标准 `PHY/RRC MeasurementReport`
+- 当前改进方向是在同一测量入口上推进“信号质量 + 卫星负载”联合目标选择
 
 ## 当前版本判断
-- 想确认“是不是进入新版本”，先看是否已打新的 `research-v3.3.x` tag
-- 目前最近已发布稳定节点是 `research-v3.3.0`
-- 当前工作区中若继续补充结果、脚本或说明，默认按“`3.3.0` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.0.x` tag
+- 目前最近已发布稳定节点是 `research-v4.0.1`
+- 当前工作区中若继续补充结果、脚本或说明，默认按“`4.0.1` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
 
 ## 当前默认口径
 场景与参数：
@@ -32,19 +32,21 @@
 - `lambda`（业务流强度）=`1000 pkt/s/UE`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`200 ms`
+- `measurementReportIntervalMs`（测量上报周期）=`120 ms`
+- `measurementMaxReportCells`（单次最多上报邻区数）=`8`
+- `handoverMode`（切换模式）默认=`baseline`
+- `improvedSignalWeight`（改进策略信号权重）=`0.7`
+- `improvedLoadWeight`（改进策略负载权重）=`0.3`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `customA3ShadowingSigmaDb`（阴影衰落标准差）=`2.5 dB`
-- `customA3ShadowingCorrelationSeconds`（阴影衰落相关时间）=`1.0 s`
-- `customA3RicianKDb`（莱斯 `K` 因子）=`3.0 dB`
-- `customA3RicianCorrelationSeconds`（莱斯衰落相关时间）=`0.2 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
-- 判决依据保持为 `RSRP + hysteresis + TTT + 基本可见性/beam lock`
-- `strictNrtGuard`（严格邻区表守卫）保留为可选增强开关，不作为 baseline 默认条件
+- baseline 与 improved 共用同一条 `MeasurementReport -> target selection -> TriggerHandover` 主链
+- `handoverMode=baseline`：在 A3 上报候选中选择最强邻区
+- `handoverMode=improved`：在同一批真实测量候选中叠加 `loadScore` 选目标
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
-- 当前 PHY 信道已开启 `ShadowingEnabled`，但默认 `A3` 判决仍看几何 `beam budget/rsrpDbm`
-- 当前平台已支持把 `shadowing / Rician` 扰动可开关地注入 custom `beam budget/A3` 观测链，且当前默认开启；但判决仍不是直接读取 PHY 测量
+- 当前 PHY 信道已开启 `ShadowingEnabled`，切换判决直接读取真实 PHY/RRC 测量
+- 原来的几何 `beam budget/custom A3` handover 代理链已经移除
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不覆盖 helper 的 `RLC` 映射
 
@@ -162,14 +164,14 @@
 - 想把 `simTime` 从 `40` 改到 `10`
 - 想把 `lambda` 从 `1000` 改到 `100`
 - 想测试不同的 `hoTttMs`
-- 想临时关闭 `runBeamReportScript` 或 `runGridSvgScript`
+- 想临时关闭 `runGridSvgScript`
 
 常用命令：
 
 ```bash
 ./ns3 run --no-build "leo-ntn-handover-baseline --simTime=10 --lambda=100"
 ./ns3 run --no-build "leo-ntn-handover-baseline --hoTttMs=400 --hoHysteresisDb=3.0"
-./ns3 run --no-build "leo-ntn-handover-baseline --runBeamReportScript=0 --runGridSvgScript=0"
+./ns3 run --no-build "leo-ntn-handover-baseline --handoverMode=improved --runGridSvgScript=0"
 ```
 
 适用前提：
@@ -276,7 +278,7 @@
 - `25 UE`
 - `lambda = 1000 pkt/s/UE`
 - `updateIntervalMs = 100`
-- 默认开启 custom `A3` 的 `shadowing / Rician`
+- 默认走 `MeasurementReport` 驱动的 `A3` 触发链
 
 因此：
 
@@ -385,16 +387,11 @@
   - `hex_grid_cells.csv`
   - `hex_grid_cells.svg`（当 `runGridSvgScript = true`）
   - `ue_layout.csv`
-  - `sat_beam_trace.csv`
   - `sat_anchor_trace.csv`
-  - `sat_beam_report.csv`
   - `handover_dl_throughput_trace.csv`
   - `handover_event_trace.csv`
 
 分析脚本：
-- `plotting/sat_beam_report.py`
-  - 默认读取 `scratch/results/sat_beam_trace.csv`
-  - 默认生成 `scratch/results/sat_beam_report.csv`
 - `plotting/plot_hex_grid_svg.py`
   - 读取六边形网格 `CSV`
   - 生成对应 `SVG`
@@ -408,16 +405,16 @@
 ## 当前已完成的关键收口
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
 - 切换相关实时日志与最终汇总格式已经完成一轮收敛
-- 当前已去掉单 UE `A3 gate` 兼容链，baseline 固定走多 UE `custom A3` 路径
-- 当前已将周期更新中的卫星公共轨道传播与 UE 派生观测彻底分开
+- 当前已去掉旧的几何 `custom A3` handover 代理链，baseline 与 improved 统一走 `MeasurementReport`
+- 当前已将周期更新中的卫星公共轨道传播与 handover 判决主链彻底分开
 - 当前已将默认参数和合法性检查集中到 `leo-ntn-handover-config.h`
 - 当前已接入 `loadScore`（负载评分）相关运行时字段与逐时刻 trace 输出
 - 当前已将默认 `UE` 布局切换为 `seven-cell`，并补齐导出 `CSV/SVG` 的脚本链
 
 ## 接下来
-- 先用当前默认参数完成一轮 `seven-cell baseline` 几何与切换现象验证
-- 继续评估当前默认开启的 `shadowing / Rician` 扰动如何影响自定义 `beam budget/A3` 判决链中的边界竞争与 `ping-pong`
-- 最后在不改 baseline 场景定义的前提下，推进“信号质量 + 卫星负载”联合目标选择
+- 先用当前默认参数完成一轮 `seven-cell baseline` 测量驱动切换验证
+- 在相同 `MeasurementReport` 入口下，对比 baseline 与 improved 的目标选择差异
+- 最后再根据实验结果细化联合目标函数和负载指标
 
 ## 维护规则
 - 修改 `scratch/` 目录下的重要代码后，同步检查：
@@ -430,6 +427,7 @@
 
 ## 版本演进记录
 本节保留研究过程中的主要版本收口信息。写法上不再逐条堆叠零散改动，而是按版本归档关键变化，便于后续回看“什么时候改了什么、为什么改”。
+本节中的旧参数、旧输出文件或旧脚本名称仅用于历史追溯，不代表当前默认实现。
 
 ### `2.5` 之前的基础工作
 - 三维物理建模底座
@@ -455,7 +453,7 @@
   - 将 `leo-ntn-handover-baseline.cc` 从单 UE 路径改为可配置的多 UE 基线路径
   - 将基础组默认配置设为 `5` 颗卫星、`3` 个 UE
   - 默认关闭高噪声的 `KPI`、`OVERPASS`、`GRID-ANCHOR` 日志
-  - 更新 `sat_beam_report.py`，使紧凑导出结果保留 `ue` 维度
+  - 收紧当时的逐时刻导出格式，使多 UE 结果更便于分析
 - 切换日志与汇总优化
   - 默认切换日志改为以 `ue` 序号作为主标识，不再强调原始 `IMSI/RNTI`
   - 切换完成日志增加执行时延显示
@@ -471,7 +469,7 @@
 - 结果目录整理
   - 默认将仿真输出写入 `scratch/results/`
   - 运行前自动创建结果目录，避免输出散落在仓库根目录
-  - `sat_beam_report.py` 的默认输入输出路径同步迁移到 `scratch/results/`
+  - 当时的分析脚本默认输入输出路径同步迁移到 `scratch/results/`
 
 ### `3.0`
 - 研究版本规则建立
@@ -507,7 +505,7 @@
 ### `3.1.0`
 - baseline 观测与输出收口
   - 纳入 `loadScore`（负载评分）相关运行时字段和逐时刻 `trace` 导出
-  - 将 `sat_beam_report.py` 收口为更适合当前分析使用的精简逐时刻输出
+  - 收口当时的辅助导出脚本，使结果更适合阶段性分析
   - 保留周期性仿真进度输出，便于长时间运行时观察仿真推进情况
 
 ### `3.1.1`
@@ -528,7 +526,7 @@
   - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局
   - 明确保留 `line` 布局作为对照入口，但默认研究场景优先使用 `hotspot-boundary`
   - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
-  - 明确默认会生成 `sat_beam_trace.csv`，并在 `runBeamReportScript = true` 时继续生成 `sat_beam_report.csv`
+  - 明确当时默认会生成额外的候选轨迹与中间分析文件
   - 明确可在 `runGridSvgScript = true` 时继续生成 `hex_grid_cells.svg`
   - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()`、`UdpServer::HandleRead()` 的描述
 - 配置入口收口
@@ -536,7 +534,7 @@
   - 将默认参数、命令行参数注册、输出路径收口和参数合法性检查从主脚本抽离
   - 本次调整不改变 `2x4` 双轨、`25 UE`、传统 `A3 baseline` 的场景口径
 - 减法式清理
-  - 去掉单 UE `A3 gate` 兼容链，明确当前 baseline 固定走多 UE `custom A3` 执行路径
+  - 去掉单 UE 兼容触发链，统一多 UE 主执行路径
   - 删除若干只写不读状态，收紧运行时样板代码
   - 将卫星公共轨道状态统一为一次计算，`UE` 侧观测改为基于公共 `ECEF/速度` 派生
   - 将 `lockCellAnchorToUe` 和 `lockGridCenterToUe` 的派生逻辑收口到配置层
@@ -562,19 +560,32 @@
   - 将分析与绘图脚本集中到 `scratch/plotting/`
   - 清理历史结果、缓存、示例 scratch 目录与中期阶段性派生资产
 
-## `3.3.0` 已发布包
-- `research-v3.3.0` 代表当前工作区整理后的第一版收口快照，重点是目录结构、资产清理与文档对齐，而不是 baseline 语义改写
+### `4.0.1`
+- 当前稳定节点
+  - 对应 tag：`research-v4.0.1`
+  - 对应提交：本次 `4.0.1` 发布提交
+  - 当前正式收口 measurement-driven baseline / improved 对照主线
+  - 统一使用标准 `PHY/RRC MeasurementReport` 作为 handover 候选入口
+  - 移除旧的几何 `beam budget/custom A3` handover 代理链及其派生 beam trace/report 输出
+  - 周期更新主循环收紧为轨道推进、服务关系观测与负载统计
+  - 将 `TTT` 归一化和 debounce 语义对齐到当前标准 A3 配置
+  - 同步 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的版本和主线口径
 
-`v3.3.0` 已纳入的内容：
-- `scratch/` 目录按主入口、handover 辅助头文件、plotting 脚本和 midterm 文档归档重组
-- 删除历史 `scratch/results/` 子目录、缓存文件和示例 scratch 代码
-- 保留核心 midterm markdown 文档，其余中期阶段性派生资产转为归档外内容
-- 同步 `docs/`、`scratch/` 与 baseline 定义文档的路径和版本口径
+## `4.0.1` 已发布包
+- `research-v4.0.1` 代表当前 measurement-driven baseline / improved 主线的第一版稳定收口快照，重点是统一测量驱动切换入口、清理旧代理链，并把文档口径同步到同一条研究主线上
 
-`v3.3.0` 发布前检查已收口为：
+`v4.0.1` 已纳入的内容：
+- `baseline` 与 `improved` 共用 `MeasurementReport -> target selection -> TriggerHandover` 主链
+- `NrLeoA3MeasurementHandoverAlgorithm` 暴露标准测量回调，并支持场景侧自定义目标选择
+- 删除 `sat_beam_trace.csv`、`sat_beam_report.csv` 及其派生脚本，保留更贴近当前主线的事件与吞吐输出
+- 周期更新中保留每星 `attachedUeCount`、`offeredPacketRate`、`loadScore`、`admissionAllowed` 统计
+- 同步 `docs/`、`scratch/` 与中期汇报文档的路径、参数和版本口径
+
+`v4.0.1` 发布前检查已收口为：
 - 默认参数下跑通一轮 `seven-cell baseline`
 - 确认 `scratch/results/` 输出链完整
 - 确认 baseline 文档、README 与中期汇报技术总结的参数口径一致
+- 确认 measurement-driven baseline / improved 的当前代码与文档描述一致
 
 当前若继续做中期汇报整理，优先参考：
 - `scratch/midterm-report/midterm-image-generation-spec.md`

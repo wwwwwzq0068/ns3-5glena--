@@ -229,13 +229,7 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSec
         {
             std::cout << "n/a";
         }
-        std::cout << " pingPong=" << ue.pingPongCount;
-        if (ue.hasPredictedHandover)
-        {
-            std::cout << " predicted sat" << ue.expectedSourceIndex << "->sat" << ue.expectedTargetIndex
-                      << " success=" << (ue.seenExpectedHandover ? "YES" : "NO");
-        }
-        std::cout << std::endl;
+        std::cout << " pingPong=" << ue.pingPongCount << std::endl;
     }
 }
 

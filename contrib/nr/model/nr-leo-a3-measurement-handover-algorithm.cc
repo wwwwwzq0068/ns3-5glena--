@@ -6,6 +6,7 @@
 
 #include "nr-common.h"
 
+#include "ns3/boolean.h"
 #include "ns3/double.h"
 #include "ns3/log.h"
 #include "ns3/uinteger.h"
@@ -59,8 +60,8 @@ NrLeoA3MeasurementHandoverAlgorithm::GetTypeId()
                 MakeDoubleChecker<double>(0.0, 15.0))
             .AddAttribute("TimeToTrigger",
                           "Duration during which the A3 entry condition must stay true before "
-                          "the UE reports it. Non-standard values are normalized to the nearest "
-                          "3GPP-supported TTT.",
+                          "the UE reports it. Non-standard values are normalized upward to the "
+                          "next 3GPP-supported TTT.",
                           TimeValue(MilliSeconds(160)),
                           MakeTimeAccessor(&NrLeoA3MeasurementHandoverAlgorithm::m_timeToTrigger),
                           MakeTimeChecker())
@@ -76,7 +77,22 @@ NrLeoA3MeasurementHandoverAlgorithm::GetTypeId()
                           UintegerValue(8),
                           MakeUintegerAccessor(
                               &NrLeoA3MeasurementHandoverAlgorithm::m_maxReportCells),
-                          MakeUintegerChecker<uint8_t>(1, 32));
+                          MakeUintegerChecker<uint8_t>(1, 32))
+            .AddAttribute("TriggerHandover",
+                          "Whether to trigger the handover immediately when a valid "
+                          "MeasurementReport is received. Disable this when the scenario "
+                          "wants to reuse the standard PHY/RRC MeasurementReport path but "
+                          "apply its own target-selection logic.",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(
+                              &NrLeoA3MeasurementHandoverAlgorithm::m_triggerHandover),
+                          MakeBooleanChecker())
+            .AddTraceSource("MeasurementReport",
+                            "Forwarded MeasurementReport that matched the handover measId "
+                            "registered by this algorithm. Exporting RNTI and MeasResults.",
+                            MakeTraceSourceAccessor(
+                                &NrLeoA3MeasurementHandoverAlgorithm::m_measurementReportTrace),
+                            "ns3::TracedCallback::Uint16tNrRrcSapMeasResults");
     return tid;
 }
 
@@ -98,18 +114,17 @@ NrLeoA3MeasurementHandoverAlgorithm::GetNrHandoverManagementSapProvider()
 uint16_t
 NrLeoA3MeasurementHandoverAlgorithm::NormalizeTimeToTriggerMs(uint16_t timeToTriggerMs)
 {
-    const auto bestMatch =
-        std::min_element(kSupportedTimeToTriggerMs.begin(),
+    const auto normalized =
+        std::lower_bound(kSupportedTimeToTriggerMs.begin(),
                          kSupportedTimeToTriggerMs.end(),
-                         [timeToTriggerMs](uint16_t lhs, uint16_t rhs) {
-                             const auto lhsDelta = static_cast<uint32_t>(std::abs(
-                                 static_cast<int32_t>(lhs) - static_cast<int32_t>(timeToTriggerMs)));
-                             const auto rhsDelta = static_cast<uint32_t>(std::abs(
-                                 static_cast<int32_t>(rhs) - static_cast<int32_t>(timeToTriggerMs)));
-                             return lhsDelta < rhsDelta;
-                         });
+                         timeToTriggerMs);
 
-    return (bestMatch != kSupportedTimeToTriggerMs.end()) ? *bestMatch : 0;
+    if (normalized != kSupportedTimeToTriggerMs.end())
+    {
+        return *normalized;
+    }
+
+    return kSupportedTimeToTriggerMs.back();
 }
 
 void
@@ -172,6 +187,8 @@ NrLeoA3MeasurementHandoverAlgorithm::DoReportUeMeas(uint16_t rnti,
         return;
     }
 
+    m_measurementReportTrace(rnti, measResults);
+
     if (!measResults.haveMeasResultNeighCells || measResults.measResultListEutra.empty())
     {
         NS_LOG_WARN(this << " Event A3 received without neighbour measurements");
@@ -198,6 +215,13 @@ NrLeoA3MeasurementHandoverAlgorithm::DoReportUeMeas(uint16_t rnti,
 
     if (bestNeighbourCellId == 0)
     {
+        return;
+    }
+
+    if (!m_triggerHandover)
+    {
+        NS_LOG_LOGIC("MeasurementReport received for cellId " << bestNeighbourCellId
+                                                              << " but TriggerHandover is OFF");
         return;
     }
 

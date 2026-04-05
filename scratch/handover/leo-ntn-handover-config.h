@@ -69,12 +69,8 @@ struct BaselineSimulationConfig
     std::string outputDir = "scratch/results";
     bool printGridCatalog = true;
     std::string gridCatalogPath = JoinOutputPath(outputDir, "hex_grid_cells.csv");
-    std::string beamReportScriptPath =
-        std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/sat_beam_report.py";
     std::string plotHexGridScriptPath =
         std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/plot_hex_grid_svg.py";
-    std::string beamTracePath = JoinOutputPath(outputDir, "sat_beam_trace.csv");
-    std::string beamReportPath = JoinOutputPath(outputDir, "sat_beam_report.csv");
     std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
     std::string ueLayoutPath = JoinOutputPath(outputDir, "ue_layout.csv");
     std::string gridSvgPath = JoinOutputPath(outputDir, "hex_grid_cells.svg");
@@ -94,21 +90,17 @@ struct BaselineSimulationConfig
     double sideLobeAttenuationDb = 30.0;
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
-    double beamDropPenaltyDb = 200.0;
-    bool customA3UseShadowing = true;
-    double customA3ShadowingSigmaDb = 2.5;
-    double customA3ShadowingCorrelationSeconds = 1.0;
-    bool customA3UseRician = true;
-    double customA3RicianKDb = 3.0;
-    double customA3RicianCorrelationSeconds = 0.2;
 
     double hoHysteresisDb = 2.0;
     uint32_t hoTttMs = 200;
+    uint16_t measurementReportIntervalMs = 120;
+    uint8_t measurementMaxReportCells = 8;
+    std::string handoverMode = "baseline";
+    double improvedSignalWeight = 0.7;
+    double improvedLoadWeight = 0.3;
     double pingPongWindowSeconds = 1.5;
     bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
-    bool strictNrtGuard = false;
-    double strictNrtMarginDb = -1.0;
     bool compactReport = true;
     bool printGridAnchorEvents = false;
     bool printKpiReports = false;
@@ -119,7 +111,6 @@ struct BaselineSimulationConfig
     double kpiIntervalSeconds = 2.0;
     bool printSimulationProgress = true;
     double progressReportIntervalSeconds = 2.0;
-    bool runBeamReportScript = true;
     bool runGridSvgScript = true;
     double throughputReportIntervalSeconds = 0.0;
     bool enableHandoverThroughputTrace = true;
@@ -185,20 +176,16 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("sideLobeAttenuationDb", config.sideLobeAttenuationDb);
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
-    addArg("beamDropPenaltyDb", config.beamDropPenaltyDb);
-    addArg("customA3UseShadowing", config.customA3UseShadowing);
-    addArg("customA3ShadowingSigmaDb", config.customA3ShadowingSigmaDb);
-    addArg("customA3ShadowingCorrelationSeconds", config.customA3ShadowingCorrelationSeconds);
-    addArg("customA3UseRician", config.customA3UseRician);
-    addArg("customA3RicianKDb", config.customA3RicianKDb);
-    addArg("customA3RicianCorrelationSeconds", config.customA3RicianCorrelationSeconds);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
+    addArg("measurementReportIntervalMs", config.measurementReportIntervalMs);
+    addArg("measurementMaxReportCells", config.measurementMaxReportCells);
+    addArg("handoverMode", config.handoverMode);
+    addArg("improvedSignalWeight", config.improvedSignalWeight);
+    addArg("improvedLoadWeight", config.improvedLoadWeight);
     addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
     addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
-    addArg("strictNrtGuard", config.strictNrtGuard);
-    addArg("strictNrtMarginDb", config.strictNrtMarginDb);
     addArg("compactReport", config.compactReport);
     addArg("printGridAnchorEvents", config.printGridAnchorEvents);
     addArg("printKpiReports", config.printKpiReports);
@@ -209,12 +196,8 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("kpiIntervalSeconds", config.kpiIntervalSeconds);
     addArg("printSimulationProgress", config.printSimulationProgress);
     addArg("progressReportIntervalSeconds", config.progressReportIntervalSeconds);
-    addArg("runBeamReportScript", config.runBeamReportScript);
-    addArg("beamReportScriptPath", config.beamReportScriptPath);
     addArg("runGridSvgScript", config.runGridSvgScript);
     addArg("plotHexGridScriptPath", config.plotHexGridScriptPath);
-    addArg("beamTracePath", config.beamTracePath);
-    addArg("beamReportPath", config.beamReportPath);
     addArg("satAnchorTracePath", config.satAnchorTracePath);
     addArg("ueLayoutPath", config.ueLayoutPath);
     addArg("gridSvgPath", config.gridSvgPath);
@@ -235,10 +218,6 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
 {
     const std::string defaultOutputDir = "scratch/results";
     const std::string defaultGridCatalogPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.csv");
-    const std::string defaultBeamTracePath =
-        JoinOutputPath(defaultOutputDir, "sat_beam_trace.csv");
-    const std::string defaultBeamReportPath =
-        JoinOutputPath(defaultOutputDir, "sat_beam_report.csv");
     const std::string defaultSatAnchorTracePath =
         JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
     const std::string defaultUeLayoutPath = JoinOutputPath(defaultOutputDir, "ue_layout.csv");
@@ -251,14 +230,6 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
         config.gridCatalogPath = JoinOutputPath(config.outputDir, "hex_grid_cells.csv");
-    }
-    if (config.beamTracePath == defaultBeamTracePath && config.outputDir != defaultOutputDir)
-    {
-        config.beamTracePath = JoinOutputPath(config.outputDir, "sat_beam_trace.csv");
-    }
-    if (config.beamReportPath == defaultBeamReportPath && config.outputDir != defaultOutputDir)
-    {
-        config.beamReportPath = JoinOutputPath(config.outputDir, "sat_beam_report.csv");
     }
     if (config.satAnchorTracePath == defaultSatAnchorTracePath && config.outputDir != defaultOutputDir)
     {
@@ -327,12 +298,14 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
-    NS_ABORT_MSG_IF(config.customA3ShadowingSigmaDb < 0.0, "customA3ShadowingSigmaDb must be >= 0");
-    NS_ABORT_MSG_IF(config.customA3ShadowingCorrelationSeconds <= 0.0,
-                    "customA3ShadowingCorrelationSeconds must be > 0");
-    NS_ABORT_MSG_IF(config.customA3RicianKDb < 0.0, "customA3RicianKDb must be >= 0");
-    NS_ABORT_MSG_IF(config.customA3RicianCorrelationSeconds <= 0.0,
-                    "customA3RicianCorrelationSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved",
+                    "handoverMode must be either 'baseline' or 'improved'");
+    NS_ABORT_MSG_IF(config.measurementMaxReportCells == 0,
+                    "measurementMaxReportCells must be >= 1");
+    NS_ABORT_MSG_IF(config.improvedSignalWeight < 0.0, "improvedSignalWeight must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedLoadWeight < 0.0, "improvedLoadWeight must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedSignalWeight + config.improvedLoadWeight <= 0.0,
+                    "improvedSignalWeight + improvedLoadWeight must be > 0");
     NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");
@@ -351,12 +324,6 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.loadCongestionThreshold <= 0.0 || config.loadCongestionThreshold > 1.0,
                     "loadCongestionThreshold must satisfy 0 < x <= 1");
 
-    if (config.strictNrtMarginDb < 0.0)
-    {
-        config.strictNrtMarginDb = config.hoHysteresisDb;
-    }
-
-    NS_ABORT_MSG_IF(config.strictNrtMarginDb < 0.0, "strictNrtMarginDb must be >= 0");
 }
 
 } // namespace ns3
