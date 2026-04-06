@@ -72,6 +72,89 @@ struct AutoAlignOrbitResult
 };
 
 /**
+ * 估计从当前时刻起，某颗卫星还能为给定 UE 提供服务的剩余时间。
+ *
+ * 这里采用“先粗步长扫描，再二分逼近”的方式：
+ * - 如果当前时刻已经不可见，结果直接为 0；
+ * - 如果在给定搜索窗口内一直可见，返回搜索窗口上限；
+ * - 否则返回首次跌出最小仰角门限之前的近似剩余时间。
+ */
+inline double
+EstimateRemainingVisibleSeconds(double nowSeconds,
+                                const LeoOrbitCalculator::KeplerElements& orbit,
+                                const LeoOrbitCalculator::GroundPoint& ueGroundPoint,
+                                double carrierFrequencyHz,
+                                double minElevationRad,
+                                double gmstAtEpochRad,
+                                double maxLookaheadSeconds,
+                                double coarseStepSeconds = 0.5)
+{
+    if (maxLookaheadSeconds <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double lookaheadLimit = std::max(0.0, maxLookaheadSeconds);
+    const double stepSeconds = std::max(0.1, coarseStepSeconds);
+    const auto isVisibleAt = [&](double deltaSeconds) {
+        return LeoOrbitCalculator::Calculate(nowSeconds + deltaSeconds,
+                                             orbit,
+                                             gmstAtEpochRad,
+                                             ueGroundPoint,
+                                             carrierFrequencyHz,
+                                             minElevationRad)
+            .visible;
+    };
+
+    if (!isVisibleAt(0.0))
+    {
+        return 0.0;
+    }
+
+    double lowerBoundSeconds = 0.0;
+    double upperBoundSeconds = std::min(stepSeconds, lookaheadLimit);
+
+    while (upperBoundSeconds < lookaheadLimit - 1e-9 && isVisibleAt(upperBoundSeconds))
+    {
+        lowerBoundSeconds = upperBoundSeconds;
+        upperBoundSeconds = std::min(upperBoundSeconds + stepSeconds, lookaheadLimit);
+    }
+
+    if (upperBoundSeconds >= lookaheadLimit - 1e-9 && isVisibleAt(upperBoundSeconds))
+    {
+        return lookaheadLimit;
+    }
+
+    for (uint32_t i = 0; i < 16; ++i)
+    {
+        const double middleSeconds = 0.5 * (lowerBoundSeconds + upperBoundSeconds);
+        if (isVisibleAt(middleSeconds))
+        {
+            lowerBoundSeconds = middleSeconds;
+        }
+        else
+        {
+            upperBoundSeconds = middleSeconds;
+        }
+    }
+
+    return lowerBoundSeconds;
+}
+
+/**
+ * 将剩余可见时间映射为 [0,1] 的可见性效用。
+ */
+inline double
+ComputeVisibilityUtility(double remainingVisibleSeconds, double scoreWindowSeconds)
+{
+    if (scoreWindowSeconds <= 0.0)
+    {
+        return 0.0;
+    }
+    return std::clamp(remainingVisibleSeconds / scoreWindowSeconds, 0.0, 1.0);
+}
+
+/**
  * 根据卫星当前位置，在六边形网格中选择用于波束锚定的网格单元。
  */
 inline GridAnchorSelection

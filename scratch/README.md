@@ -3,21 +3,21 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`4.0.1`（Git tag：`research-v4.0.1`）
-- 当前工作区与 `research-v4.0.1` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
-- 这里的 `4.0.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
+- 最近已发布稳定节点：`4.1`（Git tag：`research-v4.1`）
+- 当前工作区与 `research-v4.1` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
+- 这里的 `4.1.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
 - 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
 - 当前默认目标不是继续扩星，而是把该七小区场景作为传统 `A3 baseline` 的缺陷暴露平台
 - 当前 handover 主链已统一到标准 `PHY/RRC MeasurementReport`
-- 当前改进方向是在同一测量入口上推进“信号质量 + 卫星负载”联合目标选择
+- 当前改进方向是在同一测量入口上推进“信号质量 + 剩余可见时间 + 卫星负载”联合目标选择，并逐步补上回切保护、可见性门控与源站负载感知的负载覆写门槛
 
 ## 当前版本判断
-- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.0.x` tag
-- 目前最近已发布稳定节点是 `research-v4.0.1`
-- 当前工作区中若继续补充结果、脚本或说明，默认按“`4.0.1` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.1.x` 或 `research-v4.1` tag
+- 目前最近已发布稳定节点是 `research-v4.1`
+- 当前工作区中若继续补充结果、脚本或说明，默认按“`4.1` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
 
 ## 当前默认口径
 场景与参数：
@@ -37,14 +37,21 @@
 - `handoverMode`（切换模式）默认=`baseline`
 - `improvedSignalWeight`（改进策略信号权重）=`0.7`
 - `improvedLoadWeight`（改进策略负载权重）=`0.3`
+- `improvedVisibilityWeight`（改进策略可见性权重）=`0.2`
+- `improvedMinLoadScoreDelta`（触发负载覆写所需的最小负载优势）=`0.2`
+- `improvedMaxSignalGapDb`（允许负载覆写时相对最强信号候选的最大信号差）=`3.0 dB`
+- `improvedReturnGuardSeconds`（短时回切保护窗口）=`1.5 s`
+- `improvedMinVisibilitySeconds`（允许切入候选所需的最小剩余可见时间）=`1.0 s`
+- `improvedVisibilityHorizonSeconds`（可见性评分归一化时间窗）=`8.0 s`
+- `improvedVisibilityPredictionStepSeconds`（可见性向前预测步长）=`0.5 s`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
 - baseline 与 improved 共用同一条 `MeasurementReport -> target selection -> TriggerHandover` 主链
 - `handoverMode=baseline`：在 A3 上报候选中选择最强邻区
-- `handoverMode=improved`：在同一批真实测量候选中叠加 `loadScore` 选目标
-- 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段
+- `handoverMode=improved`：在同一批真实测量候选中联合考虑 `remainingVisibility` 与 `loadScore` 选目标，并加入过载候选过滤、短时回切保护、最小剩余可见时间门控和源站负载感知的负载优势门槛
+- 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段；`loadScore` 本身采用更平滑的压力近似，避免少量 UE 时过早打满
 - 当前 PHY 信道已开启 `ShadowingEnabled`，切换判决直接读取真实 PHY/RRC 测量
 - 原来的几何 `beam budget/custom A3` handover 代理链已经移除
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
@@ -67,7 +74,7 @@
 - `docs/current-task-memory.md`
   - 当前稳定节点、默认口径、已确认实现和近期工作边界
 - `docs/joint-handover-strategy.md`
-  - 后续“信号质量 + 卫星负载”联合策略的设计说明、变量映射与数学表达
+  - 后续“信号质量 + 可见性 + 卫星负载”联合策略的设计说明、变量映射与数学表达
 - `docs/research-workflow.md`
   - 版本、分支、提交和结果管理规则
 - `scratch/baseline-definition.md`
@@ -257,6 +264,69 @@
 - 构建目标名或库链接状态异常
 - 切换过 `debug/optimized` 后行为很混乱
 - `build` 或 `run` 反复出现难以解释的旧错误
+
+## `4.1` 实验矩阵
+本节给出当前 `research-v4.1` 主线下建议优先执行的一组实验编号表，目标是把后续研究重心集中到切换策略本身，而不是再回到旧的物理层观测入口争议。
+
+当前这组实验的前提是：
+- baseline 与 improved 已经统一到真实 `MeasurementReport` 入口
+- “第二轨是否参与竞争”不再作为当前实验矩阵的待验证问题
+- 场景边界继续固定为 `2x4` 双轨、`25 UE`、`seven-cell`
+
+建议优先关注的指标：
+- handover success rate
+- handover delay
+- throughput continuity
+- ping-pong count
+- load balance
+
+| ID | 目标 | 关键参数 | 建议重复次数 | 主要用途 |
+| --- | --- | --- | --- | --- |
+| `B00` | baseline 验证基线 | `handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0` | `5` | 采用当前选定的 `E3` 高 `ping-pong` 暴露组，作为后续算法验证起点 |
+| `B10` | baseline 短 TTT | `handoverMode=baseline hoTttMs=160` | `3` | 观察更激进触发是否增加频繁切换和 `ping-pong` |
+| `B11` | baseline 中 TTT | `handoverMode=baseline hoTttMs=320` | `3` | 观察更稳健触发是否降低无效切换 |
+| `B12` | baseline 长 TTT | `handoverMode=baseline hoTttMs=480` | `3` | 观察过晚切换是否损伤吞吐连续性 |
+| `B20` | baseline 低 hysteresis | `handoverMode=baseline hoHysteresisDb=1.0` | `3` | 观察较低门限对边界切换的放大效应 |
+| `B21` | baseline 高 hysteresis | `handoverMode=baseline hoHysteresisDb=3.0` | `3` | 观察较高门限对切换抑制和时延的影响 |
+| `I00` | improved 默认权重 | `handoverMode=improved improvedSignalWeight=0.7 improvedLoadWeight=0.3` | `5` | 作为当前 improved 主对照组 |
+| `I01` | improved 偏信号 | `handoverMode=improved improvedSignalWeight=0.8 improvedLoadWeight=0.2` | `3` | 观察轻度负载感知能否兼顾稳定性 |
+| `I02` | improved 均衡权重 | `handoverMode=improved improvedSignalWeight=0.5 improvedLoadWeight=0.5` | `3` | 观察更强负载感知是否改善负载分布 |
+
+建议执行顺序：
+1. 先跑 `B00`，使用当前选定的 `E3` 参数组建立高 `ping-pong` baseline，对后续算法验证形成更强对照。
+2. 再跑 `B10` 到 `B12`，单独看 `TTT` 的影响边界。
+3. 然后跑 `B20`、`B21`，单独看 `hysteresis` 的影响边界。
+4. 最后跑 `I00` 到 `I02`，在相同场景口径下比较目标选择收益。
+
+论文第一轮推荐对照集：
+- `B00`
+- `B11`
+- `B21`
+- `I00`
+- `I02`
+
+每组实验建议至少记录：
+- 版本：`research-v4.1`
+- 运行命令
+- `RngRun`
+- 总切换次数
+- 切换成功率
+- 平均切换时延
+- `ping-pong` 次数
+- 切换附近吞吐波动
+- 负载分布的定性结论
+
+当前仓库已提供批量执行脚本：
+
+```bash
+scratch/run_handover_experiment_matrix.sh --list
+scratch/run_handover_experiment_matrix.sh --group baseline-repeat --repeat 5
+scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
+```
+
+说明：
+- 这里的脚本层 `B00` 已切换到当前选定的 `E3` 参数组：`hoTttMs=160`、`hoHysteresisDb=2.0`
+- 仓库正式 baseline 口径仍保持 `research-v4.1` 的默认参数定义；这里只是为了后续算法验证，先固定一个更能暴露 `ping-pong` 的实验起点
 
 建议流程：
 
@@ -560,8 +630,15 @@
   - 将分析与绘图脚本集中到 `scratch/plotting/`
   - 清理历史结果、缓存、示例 scratch 目录与中期阶段性派生资产
 
+### `4.1`
+  - 对应 tag：`research-v4.1`
+  - 对应提交：本次 `4.1` 发布提交
+  - 当前正式收口“信号 + 可见性 + 负载”联合策略与源站负载感知负载均衡主线
+  - improved 目标选择支持剩余可见时间门控、平滑负载压力与源站负载导向卸载
+  - 将 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的当前口径同步到 `4.1`
+
 ### `4.0.1`
-- 当前稳定节点
+  - 当前稳定节点
   - 对应 tag：`research-v4.0.1`
   - 对应提交：本次 `4.0.1` 发布提交
   - 当前正式收口 measurement-driven baseline / improved 对照主线
@@ -570,6 +647,16 @@
   - 周期更新主循环收紧为轨道推进、服务关系观测与负载统计
   - 将 `TTT` 归一化和 debounce 语义对齐到当前标准 A3 配置
   - 同步 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的版本和主线口径
+
+## `4.1` 已发布包
+- `research-v4.1` 代表当前 measurement-driven baseline / improved 主线下的最新稳定收口快照，重点是把 improved 收紧为“信号 + 可见性 + 负载”的联合策略，并增强源站负载感知的负载均衡能力
+
+`v4.1` 已纳入的内容：
+- `baseline` 与 `improved` 继续共用 `MeasurementReport -> target selection -> TriggerHandover` 主链
+- `improved` 当前同时使用 `signal`、`remainingVisibility`、`loadScore` 做联合目标选择
+- `loadScore` 从单纯人数比提升为“线性容量比 + 平滑饱和”的平滑压力分数
+- 源站负载压力会动态增强负载项、放宽负载覆写门槛，并奖励能够减轻源站压力的候选
+- 同步 `docs/`、`scratch/` 与中期汇报文档的版本和主线口径
 
 ## `4.0.1` 已发布包
 - `research-v4.0.1` 代表当前 measurement-driven baseline / improved 主线的第一版稳定收口快照，重点是统一测量驱动切换入口、清理旧代理链，并把文档口径同步到同一条研究主线上

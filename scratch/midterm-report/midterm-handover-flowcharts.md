@@ -38,7 +38,7 @@ sequenceDiagram
         RT->>RT: 根据 UE 偏移模板生成地面位置
         RT->>RT: 计算 slant range / elevation / azimuth / Doppler
         RT->>RT: 更新 Earth-fixed 六边形网格锚点
-        RT->>RT: 更新 attachedUeCount / offeredPacketRate / loadScore
+        RT->>RT: 更新 attachedUeCount / offeredPacketRate / loadScore（平滑压力）
     end
 
     rect rgb(250,250,235)
@@ -54,7 +54,7 @@ sequenceDiagram
         alt handoverMode = baseline
             DEC->>DEC: 选择最强测量邻区
         else handoverMode = improved
-            DEC->>DEC: 叠加 loadScore 做联合评分
+            DEC->>DEC: 叠加 loadScore 与源站负载压力做联合评分
         end
         DEC->>SRC: TriggerHandover(targetCellId)
         SRC-->>UE: UE 切换到目标小区
@@ -95,7 +95,7 @@ flowchart TD
     C --> G[负载状态统计<br/>attachedUeCount / offeredPacketRate / loadScore]
 
     E --> F[baseline 目标选择<br/>最强邻区]
-    E --> H[improved 目标选择<br/>Signal + Load Utility]
+    E --> H[improved 目标选择<br/>Signal + Load + Visibility Utility]
     G --> H
 
     F --> I[统一切换执行器<br/>TriggerHandover]

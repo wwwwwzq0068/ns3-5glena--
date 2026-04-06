@@ -1,14 +1,14 @@
 # 当前任务记忆
 
 ## 当前版本状态
-- 最近已发布稳定节点：`4.0.1`（Git tag：`research-v4.0.1`）
-- 当前工作区已收口到 `4.0.1` 快照，底层框架仍为 `ns-3.46`
+- 最近已发布稳定节点：`4.1`（Git tag：`research-v4.1`）
+- 当前工作区已收口到 `4.1` 快照，底层框架仍为 `ns-3.46`
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
 ## 当前 baseline 快照
 - 当前默认场景：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
 - 当前 baseline：传统 `A3` 风格切换，但触发入口已经统一到标准 `PHY/RRC MeasurementReport`
-- 当前 improved：复用同一批真实测量候选，在目标选择时叠加 `loadScore`
+- 当前 improved：复用同一批真实测量候选，在目标选择时联合考虑 `signal`、`remainingVisibility` 与 `loadScore`，并逐步加入回切保护、可见性门控与源站负载感知的负载覆写门槛
 - 原来的几何 `beam budget/custom A3` handover 代理链已从主线移除；几何计算只保留给轨道推进、地面锚点与初始接入
 
 当前默认关键参数：
@@ -32,6 +32,13 @@
 - `handoverMode = baseline`
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
+- `improvedVisibilityWeight = 0.2`
+- `improvedMinLoadScoreDelta = 0.2`
+- `improvedMaxSignalGapDb = 3.0 dB`
+- `improvedReturnGuardSeconds = 1.5 s`
+- `improvedMinVisibilitySeconds = 1.0 s`
+- `improvedVisibilityHorizonSeconds = 8.0 s`
+- `improvedVisibilityPredictionStepSeconds = 0.5 s`
 - `pingPongWindowSeconds = 1.5 s`
 - `forceRlcAmForEpc = false`
 - `disableUeIpv4Forwarding = true`
@@ -43,7 +50,7 @@
 - 当前 `NrChannelHelper` 已配置 `NTN-Rural + LOS + ThreeGpp`，并开启 `ShadowingEnabled`
 - baseline 与 improved 都通过 `NrLeoA3MeasurementHandoverAlgorithm` 注册标准 A3 测量，并在同一份 `MeasurementReport` 上做目标选择
 - `handoverMode = baseline` 时，直接选择最强测量邻区
-- `handoverMode = improved` 时，直接在同一批测量邻区上按“信号质量 + 负载效用”联合打分
+- `handoverMode = improved` 时，直接在同一批测量邻区上按“信号质量 + 可见性效用 + 负载效用”联合打分，并对过载候选、短时回切、最小剩余可见时间和过小负载优势做额外门控
 - 周期更新中已经会计算每星 `attachedUeCount`、`offeredPacketRate`、`loadScore`、`admissionAllowed`
 - 当前默认关闭高噪声的 `KPI`、`GRID-ANCHOR` 输出，保留切换、进度和最终汇总日志
 - 当前已支持按成功切换序列自动统计短时 `ping-pong`
@@ -51,7 +58,8 @@
 
 ## 当前负载接口状态
 - `SatelliteRuntime` 已具备 `attachedUeCount`、`offeredPacketRate`、`loadScore`、`admissionAllowed`
-- 这些量已进入 `handoverMode = improved` 的目标选择
+- `loadScore` 当前使用更平滑的容量压力近似，避免负载在少量 UE 时过早饱和
+- 这些量已进入 `handoverMode = improved` 的目标选择，且 improved 会根据源站负载压力动态偏向轻载目标
 - baseline 仍不使用负载做决策，因此对照边界保持清楚
 
 ## 当前输出与脚本
@@ -75,7 +83,7 @@
 - 继续核实当前 `2x4` 双轨场景中第二轨是否真正参与竞争，避免把“已建成双轨场景”误写成“已形成充分双轨竞争”
 - 区分 `hex grid`（地面锚点/服务区域目录）与真实 `cell`（协议栈中的卫星小区）语义，避免把 `hex` 数量直接等同为可接入小区数量
 - 评估当前外围 `6` 个小区中的 `UE` 分布是否足够均衡，是否已经形成可观察的跨小区竞争
-- 在保持当前场景口径不变的前提下，继续验证 improved 的负载权重是否真的改善切换目标选择
+- 在保持当前场景口径不变的前提下，继续验证 improved 的可见性与负载权重是否真的改善切换目标选择
 
 ## 当前工作边界
 - 当前不把“继续扩大星座规模”作为默认主线，除非现有 `2x4` 场景已无法体现算法差异

@@ -282,7 +282,7 @@
 - 不要做平滑过度，避免失真
 - 不要隐藏切换时刻
 
-## FLOW-02 联合信号-负载策略接入路径图
+## FLOW-02 联合信号-可见性-负载策略接入路径图
 
 ### 对应页
 - 第 `15` 页下一阶段算法设想
@@ -294,7 +294,7 @@
 - `scratch/midterm-report/midterm-handover-flowcharts.md`
 
 ### 制图说明
-建议画成简化的左右结构，而不是完整流程图。左边主链为“MeasurementReport -> baseline strongest neighbor -> Target Sat”，右边补三个负载输入框 `attachedUeCount`、`offeredPacketRate`、`loadScore`，汇入“联合信号-负载决策”模块，再指向同一个 `Target Sat`。视觉重点是“共用测量入口后的增量分叉”，而不是“另起炉灶”。
+建议画成简化的左右结构，而不是完整流程图。左边主链为“MeasurementReport -> baseline strongest neighbor -> Target Sat”，右边补三组辅助输入：信号质量、剩余可见时间、负载状态，其中负载侧保留 `attachedUeCount`、`offeredPacketRate`、`loadScore` 三个输入框，共同汇入“联合信号-可见性-负载决策”模块，再指向同一个 `Target Sat`。视觉重点是“共用测量入口后的增量分叉”，而不是“另起炉灶”。
 
 ### 限制
 - 不建议直接用 AI 绘制流程图

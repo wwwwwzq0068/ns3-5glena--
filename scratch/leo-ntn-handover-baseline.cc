@@ -122,6 +122,13 @@ enum class HandoverMode
 static HandoverMode g_handoverMode = HandoverMode::BASELINE;
 static double g_improvedSignalWeight = 0.7;
 static double g_improvedLoadWeight = 0.3;
+static double g_improvedVisibilityWeight = 0.2;
+static double g_improvedMinLoadScoreDelta = 0.2;
+static double g_improvedMaxSignalGapDb = 3.0;
+static double g_improvedReturnGuardSeconds = 1.5;
+static double g_improvedMinVisibilitySeconds = 1.0;
+static double g_improvedVisibilityHorizonSeconds = 8.0;
+static double g_improvedVisibilityPredictionStepSeconds = 0.5;
 static uint16_t g_measurementReportIntervalMs = 120;
 static uint8_t g_measurementMaxReportCells = 8;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
@@ -306,11 +313,90 @@ struct MeasurementCandidate
     double rsrpDbm = -std::numeric_limits<double>::infinity();
     double loadScore = 1.0;
     bool admissionAllowed = false;
+    double remainingVisibilitySeconds = 0.0;
+    double visibilityScore = 0.0;
     double jointScore = -std::numeric_limits<double>::infinity();
 };
 
+static double
+PredictRemainingVisibilitySeconds(uint32_t satIdx,
+                                  const LeoOrbitCalculator::GroundPoint& ueGroundPoint,
+                                  double nowSeconds)
+{
+    if (satIdx >= g_satellites.size())
+    {
+        return 0.0;
+    }
+
+    const double horizonSeconds = std::max(0.0, g_improvedVisibilityHorizonSeconds);
+    if (horizonSeconds <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const auto computeVisible = [&](double sampleTimeSeconds) {
+        return LeoOrbitCalculator::Calculate(sampleTimeSeconds,
+                                             g_satellites[satIdx].orbit,
+                                             g_gmstAtEpochRad,
+                                             ueGroundPoint,
+                                             g_carrierFrequencyHz,
+                                             g_minElevationRad)
+            .visible;
+    };
+
+    if (!computeVisible(nowSeconds))
+    {
+        return 0.0;
+    }
+
+    const double stepSeconds = std::max(0.05, g_improvedVisibilityPredictionStepSeconds);
+    const double horizonEndSeconds = nowSeconds + horizonSeconds;
+    double previousVisibleTimeSeconds = nowSeconds;
+
+    for (double probeTimeSeconds = nowSeconds + stepSeconds;
+         probeTimeSeconds <= horizonEndSeconds + 1e-9;
+         probeTimeSeconds += stepSeconds)
+    {
+        const double clampedProbeTimeSeconds = std::min(probeTimeSeconds, horizonEndSeconds);
+        if (computeVisible(clampedProbeTimeSeconds))
+        {
+            previousVisibleTimeSeconds = clampedProbeTimeSeconds;
+            continue;
+        }
+
+        double lowSeconds = previousVisibleTimeSeconds;
+        double highSeconds = clampedProbeTimeSeconds;
+        for (uint32_t iter = 0; iter < 8; ++iter)
+        {
+            const double midSeconds = 0.5 * (lowSeconds + highSeconds);
+            if (computeVisible(midSeconds))
+            {
+                lowSeconds = midSeconds;
+            }
+            else
+            {
+                highSeconds = midSeconds;
+            }
+        }
+        return std::max(0.0, lowSeconds - nowSeconds);
+    }
+
+    return horizonSeconds;
+}
+
+static double
+ComputeLoadPressureFromScore(double loadScore)
+{
+    // 将负载分数按当前拥塞阈值重新归一化，便于在源站接近拥塞时更快放大负载导向。
+    const double congestionSpan = std::max(1e-9, g_loadCongestionThreshold);
+    return std::clamp(loadScore / congestionSpan, 0.0, 1.0);
+}
+
 static std::optional<MeasurementCandidate>
-SelectMeasurementDrivenTarget(uint16_t servingCellId, const NrRrcSap::MeasResults& measResults)
+SelectMeasurementDrivenTarget(uint16_t servingCellId,
+                              uint32_t sourceSatIdx,
+                              const UeRuntime& ue,
+                              const NrRrcSap::MeasResults& measResults)
 {
     std::vector<MeasurementCandidate> candidates;
     candidates.reserve(measResults.measResultListEutra.size());
@@ -335,6 +421,8 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId, const NrRrcSap::MeasResult
         candidate.rsrpDbm = nr::EutranMeasurementMapping::RsrpRange2Dbm(neighbour.rsrpResult);
         candidate.loadScore = satellite.loadScore;
         candidate.admissionAllowed = satellite.admissionAllowed;
+        candidate.remainingVisibilitySeconds =
+            PredictRemainingVisibilitySeconds(candidate.satIdx, ue.groundPoint, Simulator::Now().GetSeconds());
         candidates.push_back(candidate);
     }
 
@@ -342,6 +430,10 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId, const NrRrcSap::MeasResult
     {
         return std::nullopt;
     }
+
+    const double sourceLoadScore =
+        (sourceSatIdx < g_satellites.size()) ? g_satellites[sourceSatIdx].loadScore : 0.0;
+    const double sourceLoadPressure = ComputeLoadPressureFromScore(sourceLoadScore);
 
     if (g_handoverMode == HandoverMode::BASELINE)
     {
@@ -352,29 +444,129 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId, const NrRrcSap::MeasResult
                                  });
     }
 
+    std::vector<MeasurementCandidate> filteredCandidates;
+    filteredCandidates.reserve(candidates.size());
+    std::copy_if(candidates.begin(),
+                 candidates.end(),
+                 std::back_inserter(filteredCandidates),
+                 [](const auto& candidate) { return candidate.admissionAllowed; });
+    if (filteredCandidates.empty())
+    {
+        filteredCandidates = candidates;
+    }
+
+    const double nowSeconds = Simulator::Now().GetSeconds();
+    const bool withinReturnGuard =
+        g_improvedReturnGuardSeconds > 0.0 && ue.lastSuccessfulHoTimeSeconds >= 0.0 &&
+        (nowSeconds - ue.lastSuccessfulHoTimeSeconds <= g_improvedReturnGuardSeconds) &&
+        ue.lastSuccessfulHoSourceCell != 0;
+
+    if (withinReturnGuard)
+    {
+        std::vector<MeasurementCandidate> guardedCandidates;
+        guardedCandidates.reserve(filteredCandidates.size());
+        std::copy_if(filteredCandidates.begin(),
+                     filteredCandidates.end(),
+                     std::back_inserter(guardedCandidates),
+                     [&](const auto& candidate) {
+                         return candidate.cellId != ue.lastSuccessfulHoSourceCell;
+                     });
+        if (!guardedCandidates.empty())
+        {
+            filteredCandidates = std::move(guardedCandidates);
+        }
+    }
+
+    if (g_improvedMinVisibilitySeconds > 0.0)
+    {
+        std::vector<MeasurementCandidate> visibilityQualifiedCandidates;
+        visibilityQualifiedCandidates.reserve(filteredCandidates.size());
+        std::copy_if(filteredCandidates.begin(),
+                     filteredCandidates.end(),
+                     std::back_inserter(visibilityQualifiedCandidates),
+                     [](const auto& candidate) {
+                         return candidate.remainingVisibilitySeconds >=
+                                g_improvedMinVisibilitySeconds;
+                     });
+        if (!visibilityQualifiedCandidates.empty())
+        {
+            filteredCandidates = std::move(visibilityQualifiedCandidates);
+        }
+    }
+
+    const auto bestSignalIt =
+        std::max_element(filteredCandidates.begin(),
+                         filteredCandidates.end(),
+                         [](const auto& lhs, const auto& rhs) {
+                             return lhs.rsrpDbm < rhs.rsrpDbm;
+                         });
+    const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
+
+    const double dynamicMaxSignalGapDb =
+        g_improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
+    const double dynamicMinLoadScoreDelta =
+        std::max(0.05, g_improvedMinLoadScoreDelta * (1.0 - 0.5 * sourceLoadPressure));
+    const double effectiveSignalWeight =
+        std::max(0.15, g_improvedSignalWeight * (1.0 - 0.4 * sourceLoadPressure));
+    const double effectiveLoadWeight = g_improvedLoadWeight + 0.6 * sourceLoadPressure;
+    const double effectiveVisibilityWeight =
+        g_improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
+
+    std::vector<MeasurementCandidate> scoredCandidates;
+    scoredCandidates.reserve(filteredCandidates.size());
+    for (const auto& candidate : filteredCandidates)
+    {
+        const double signalGapDb = bestSignalCandidate.rsrpDbm - candidate.rsrpDbm;
+        const double loadAdvantage = bestSignalCandidate.loadScore - candidate.loadScore;
+        const bool keepCandidate = candidate.cellId == bestSignalCandidate.cellId ||
+                                   signalGapDb <= dynamicMaxSignalGapDb ||
+                                   loadAdvantage >= dynamicMinLoadScoreDelta;
+        if (!keepCandidate)
+        {
+            continue;
+        }
+        scoredCandidates.push_back(candidate);
+    }
+
+    if (scoredCandidates.empty())
+    {
+        return bestSignalCandidate;
+    }
+
     double minRsrpDbm = std::numeric_limits<double>::infinity();
     double maxRsrpDbm = -std::numeric_limits<double>::infinity();
-    for (const auto& candidate : candidates)
+    for (const auto& candidate : scoredCandidates)
     {
         minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
         maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
     }
 
     const double signalSpanDb = std::max(1e-9, maxRsrpDbm - minRsrpDbm);
-    const double totalWeight = std::max(1e-9, g_improvedSignalWeight + g_improvedLoadWeight);
-    const double normalizedSignalWeight = g_improvedSignalWeight / totalWeight;
-    const double normalizedLoadWeight = g_improvedLoadWeight / totalWeight;
+    const double totalWeight = std::max(
+        1e-9,
+        effectiveSignalWeight + effectiveLoadWeight + effectiveVisibilityWeight);
+    const double normalizedSignalWeight = effectiveSignalWeight / totalWeight;
+    const double normalizedLoadWeight = effectiveLoadWeight / totalWeight;
+    const double normalizedVisibilityWeight = effectiveVisibilityWeight / totalWeight;
 
-    for (auto& candidate : candidates)
+    for (auto& candidate : scoredCandidates)
     {
         const double signalScore = (candidate.rsrpDbm - minRsrpDbm) / signalSpanDb;
         const double loadUtility = std::clamp(1.0 - candidate.loadScore, 0.0, 1.0);
-        candidate.jointScore =
-            normalizedSignalWeight * signalScore + normalizedLoadWeight * loadUtility;
+        const double loadReliefUtility =
+            std::clamp(sourceLoadScore - candidate.loadScore, 0.0, 1.0);
+        candidate.visibilityScore = std::clamp(candidate.remainingVisibilitySeconds /
+                                                   std::max(1e-9, g_improvedVisibilityHorizonSeconds),
+                                               0.0,
+                                               1.0);
+        candidate.jointScore = normalizedSignalWeight * signalScore +
+                               normalizedLoadWeight * loadUtility +
+                               normalizedVisibilityWeight * candidate.visibilityScore +
+                               0.25 * sourceLoadPressure * loadReliefUtility;
     }
 
-    return *std::max_element(candidates.begin(),
-                             candidates.end(),
+    return *std::max_element(scoredCandidates.begin(),
+                             scoredCandidates.end(),
                              [](const auto& lhs, const auto& rhs) {
                                  if (std::abs(lhs.jointScore - rhs.jointScore) > 1e-9)
                                  {
@@ -407,7 +599,7 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         return;
     }
 
-    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, measResults);
+    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, static_cast<uint32_t>(sourceSatIdx), ue, measResults);
     if (!selectedTarget.has_value() || selectedTarget->cellId == 0)
     {
         return;
@@ -431,8 +623,13 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
                   << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm";
         if (g_handoverMode == HandoverMode::IMPROVED)
         {
+            const double sourceLoadScore = g_satellites[sourceSatIdx].loadScore;
             std::cout << " jointScore=" << selectedTarget->jointScore
                       << " loadScore=" << selectedTarget->loadScore
+                      << " sourceLoad=" << sourceLoadScore
+                      << " sourceLoadPressure=" << ComputeLoadPressureFromScore(sourceLoadScore)
+                      << " remainVis=" << selectedTarget->remainingVisibilitySeconds << "s"
+                      << " visScore=" << selectedTarget->visibilityScore
                       << " admission=" << (selectedTarget->admissionAllowed ? "YES" : "NO");
         }
         std::cout << std::endl;
@@ -983,6 +1180,13 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_handoverMode = ParseHandoverMode(config.handoverMode);
     g_improvedSignalWeight = config.improvedSignalWeight;
     g_improvedLoadWeight = config.improvedLoadWeight;
+    g_improvedVisibilityWeight = config.improvedVisibilityWeight;
+    g_improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
+    g_improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
+    g_improvedReturnGuardSeconds = config.improvedReturnGuardSeconds;
+    g_improvedMinVisibilitySeconds = config.improvedMinVisibilitySeconds;
+    g_improvedVisibilityHorizonSeconds = config.improvedVisibilityHorizonSeconds;
+    g_improvedVisibilityPredictionStepSeconds = config.improvedVisibilityPredictionStepSeconds;
 }
 
 // ============================================================================
@@ -1111,6 +1315,17 @@ main(int argc, char* argv[])
               << " improvedSignalWeight=" << g_improvedSignalWeight
               << " improvedLoadWeight=" << g_improvedLoadWeight
               << " pingPongWindow=" << g_pingPongWindowSeconds << "s";
+    if (g_handoverMode == HandoverMode::IMPROVED)
+    {
+        std::cout << " improvedVisibilityWeight=" << g_improvedVisibilityWeight
+                  << " improvedMinVisibility=" << g_improvedMinVisibilitySeconds << "s"
+                  << " improvedVisibilityHorizon=" << g_improvedVisibilityHorizonSeconds << "s"
+                  << " improvedMinLoadScoreDelta=" << g_improvedMinLoadScoreDelta
+                  << " improvedMaxSignalGapDb=" << g_improvedMaxSignalGapDb
+                  << " improvedReturnGuard=" << g_improvedReturnGuardSeconds << "s"
+                  << " improvedVisibilityStep=" << g_improvedVisibilityPredictionStepSeconds
+                  << "s";
+    }
     std::cout << std::endl;
     std::cout << "[UserPlane] rlc="
               << (cfg.forceRlcAmForEpc ? "AM(default override)" : "helper default")

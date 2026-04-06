@@ -27,7 +27,14 @@ UpdateSatelliteLoadStats(std::vector<SatelliteRuntime>& satellites,
     for (auto& sat : satellites)
     {
         sat.offeredPacketRate = sat.attachedUeCount * offeredPacketRatePerUe;
-        sat.loadScore = std::min(1.0, static_cast<double>(sat.attachedUeCount) / safeMaxSupportedUes);
+        const double linearPressure = std::clamp(static_cast<double>(sat.attachedUeCount) / safeMaxSupportedUes,
+                                                 0.0,
+                                                 1.0);
+        const double smoothPressure = static_cast<double>(sat.attachedUeCount) /
+                                      (static_cast<double>(sat.attachedUeCount) + safeMaxSupportedUes);
+        // 当前业务模型里 offeredPacketRate 仍与接入 UE 数正相关，因此这里采用“线性容量比 + 平滑饱和”
+        // 的双分量负载分数，避免 3 UE 左右就过早打满，保留 2/3/4 UE 之间的区分度。
+        sat.loadScore = std::clamp(0.55 * linearPressure + 0.45 * smoothPressure, 0.0, 1.0);
         sat.admissionAllowed = (sat.loadScore + 1e-9 < loadCongestionThreshold);
     }
 }

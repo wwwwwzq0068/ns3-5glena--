@@ -98,6 +98,13 @@ struct BaselineSimulationConfig
     std::string handoverMode = "baseline";
     double improvedSignalWeight = 0.7;
     double improvedLoadWeight = 0.3;
+    double improvedVisibilityWeight = 0.2;
+    double improvedMinLoadScoreDelta = 0.2;
+    double improvedMaxSignalGapDb = 3.0;
+    double improvedReturnGuardSeconds = 1.5;
+    double improvedMinVisibilitySeconds = 1.0;
+    double improvedVisibilityHorizonSeconds = 8.0;
+    double improvedVisibilityPredictionStepSeconds = 0.5;
     double pingPongWindowSeconds = 1.5;
     bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
@@ -183,6 +190,13 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("handoverMode", config.handoverMode);
     addArg("improvedSignalWeight", config.improvedSignalWeight);
     addArg("improvedLoadWeight", config.improvedLoadWeight);
+    addArg("improvedVisibilityWeight", config.improvedVisibilityWeight);
+    addArg("improvedMinLoadScoreDelta", config.improvedMinLoadScoreDelta);
+    addArg("improvedMaxSignalGapDb", config.improvedMaxSignalGapDb);
+    addArg("improvedReturnGuardSeconds", config.improvedReturnGuardSeconds);
+    addArg("improvedMinVisibilitySeconds", config.improvedMinVisibilitySeconds);
+    addArg("improvedVisibilityHorizonSeconds", config.improvedVisibilityHorizonSeconds);
+    addArg("improvedVisibilityPredictionStepSeconds", config.improvedVisibilityPredictionStepSeconds);
     addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
     addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
@@ -304,8 +318,24 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "measurementMaxReportCells must be >= 1");
     NS_ABORT_MSG_IF(config.improvedSignalWeight < 0.0, "improvedSignalWeight must be >= 0");
     NS_ABORT_MSG_IF(config.improvedLoadWeight < 0.0, "improvedLoadWeight must be >= 0");
-    NS_ABORT_MSG_IF(config.improvedSignalWeight + config.improvedLoadWeight <= 0.0,
-                    "improvedSignalWeight + improvedLoadWeight must be > 0");
+    NS_ABORT_MSG_IF(config.improvedVisibilityWeight < 0.0,
+                    "improvedVisibilityWeight must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedSignalWeight + config.improvedLoadWeight +
+                            config.improvedVisibilityWeight <=
+                        0.0,
+                    "improvedSignalWeight + improvedLoadWeight + improvedVisibilityWeight must be > 0");
+    NS_ABORT_MSG_IF(config.improvedMinLoadScoreDelta < 0.0,
+                    "improvedMinLoadScoreDelta must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedMaxSignalGapDb < 0.0,
+                    "improvedMaxSignalGapDb must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedReturnGuardSeconds < 0.0,
+                    "improvedReturnGuardSeconds must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedMinVisibilitySeconds < 0.0,
+                    "improvedMinVisibilitySeconds must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedVisibilityHorizonSeconds <= 0.0,
+                    "improvedVisibilityHorizonSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.improvedVisibilityPredictionStepSeconds <= 0.0,
+                    "improvedVisibilityPredictionStepSeconds must be > 0");
     NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");
