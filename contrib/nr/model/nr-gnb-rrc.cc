@@ -1948,7 +1948,7 @@ NrGnbRrc::GetTypeId()
                           "timer should not be greater than T300 timer at UE RRC",
                           TimeValue(MilliSeconds(15)),
                           MakeTimeAccessor(&NrGnbRrc::m_connectionRequestTimeoutDuration),
-                          MakeTimeChecker(MilliSeconds(1), MilliSeconds(15)))
+                          MakeTimeChecker(MilliSeconds(1), MilliSeconds(1000)))
             .AddAttribute("ConnectionSetupTimeoutDuration",
                           "After accepting connection request, if no RRC CONNECTION "
                           "SETUP COMPLETE is received before this time, the UE "

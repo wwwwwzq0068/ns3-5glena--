@@ -31,7 +31,7 @@
 ### 2.3 门控相关量
 - `lastSuccessfulHoTimeSeconds`：UE 上次切换成功的时刻
 - `lastSuccessfulHoSourceCell`：UE 上次切换的源小区 ID
-- `improvedReturnGuardSeconds`：短时回切保护窗口长度
+- `improvedReturnGuardSeconds`：短时回切保护窗口长度，只用于限制回到上一跳来源小区
 - `improvedMaxSignalGapDb`：允许进入联合评分的最大信号差距
 - `improvedMinLoadScoreDelta`：触发负载覆写所需的最小负载优势
 - `improvedMinVisibilitySeconds`：允许候选继续参与目标选择的最小剩余可见时间
@@ -185,7 +185,8 @@ TTT 由标准 A3 测量配置管理，不再使用旧的手工 `manualHoCandidat
 ### 4.2 短时回切保护
 - **目的**：抑制 `A -> B -> A` 形式的 ping-pong
 - **回退**：若保护窗口内只有上一跳来源可选，仍允许回切
-- **参数**：`improvedReturnGuardSeconds` 默认 1.5s
+- **参数**：`improvedReturnGuardSeconds` 默认 0.5s
+- **说明**：当前实现只在窗口内优先屏蔽“回上一跳来源小区”，并不阻止 UE 在窗口内切向其它候选
 
 ### 4.3 负载覆写门槛
 - **目的**：防止"信号明显更差但仅因微小负载差异被选中"的非预期切换
@@ -203,7 +204,7 @@ TTT 由标准 A3 测量配置管理，不再使用旧的手工 `manualHoCandidat
 - **参数**：
   - `improvedMinVisibilitySeconds` 默认 1.0 s
   - `improvedVisibilityHorizonSeconds` 默认 8.0 s
-  - `improvedVisibilityPredictionStepSeconds` 默认 0.5 s
+  - `improvedVisibilityPredictionStepSeconds` 默认 0.2 s
 - **补充**：当前实现会根据源站负载压力动态增强负载项，避免低负载时过度干预，高负载时响应不够快
 
 ## 5. 与当前代码的映射
@@ -223,10 +224,10 @@ TTT 由标准 A3 测量配置管理，不再使用旧的手工 `manualHoCandidat
 | `improvedVisibilityWeight` | 0.2 | 联合评分中可见性权重 |
 | `improvedMinLoadScoreDelta` | 0.2 | 触发负载覆写所需的最小负载优势 |
 | `improvedMaxSignalGapDb` | 3.0 dB | 允许进入联合评分的最大信号差距 |
-| `improvedReturnGuardSeconds` | 1.5 s | 短时回切保护窗口 |
+| `improvedReturnGuardSeconds` | 0.5 s | 短时回切保护窗口，仅限制短时回切到上一跳来源小区 |
 | `improvedMinVisibilitySeconds` | 1.0 s | 候选切入所需的最小剩余可见时间 |
 | `improvedVisibilityHorizonSeconds` | 8.0 s | 可见性评分归一化时间窗 |
-| `improvedVisibilityPredictionStepSeconds` | 0.5 s | 可见性向前预测步长 |
+| `improvedVisibilityPredictionStepSeconds` | 0.2 s | 可见性向前预测步长 |
 
 ## 7. 当前实现建议
 - 第一版先使用 `loadScore` 作为负载代理，不直接引入 `PRB` 占用率

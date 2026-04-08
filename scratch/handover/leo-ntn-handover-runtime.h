@@ -1,5 +1,5 @@
-#ifndef MYFIRST_RUNTIME_H
-#define MYFIRST_RUNTIME_H
+#ifndef LEO_NTN_HANDOVER_RUNTIME_H
+#define LEO_NTN_HANDOVER_RUNTIME_H
 
 /*
  * 文件说明：
@@ -96,8 +96,8 @@ struct UeRuntime
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
 
-    /** UE 在场景中的部署角色，例如线性、中心簇或外围簇。 */
-    std::string placementRole = "line";
+    /** UE 在场景中的部署角色，例如中心簇或外围簇。 */
+    std::string placementRole = "center";
 
     /** UE 相对参考中心的东西向偏移，单位米。 */
     double eastOffsetMeters = 0.0;
@@ -108,8 +108,14 @@ struct UeRuntime
     /** 初始接入卫星的索引。 */
     uint32_t initialAttachIdx = std::numeric_limits<uint32_t>::max();
 
+    /** 是否已经完成一次可用于 smoke run 的首轮接入。 */
+    bool bootstrapConnectionEstablished = false;
+
     /** 当前是否已经记录到尚未闭合的 HO-START。 */
     bool hasPendingHoStart = false;
+
+    /** 当前是否存在“已决定目标、尚未真正下发 TriggerHandover”的准备阶段。 */
+    bool hasPendingHoPreparation = false;
 
     /** 最近一次切换开始时的源小区 ID。 */
     uint16_t lastHoStartSourceCell = 0;
@@ -123,23 +129,47 @@ struct UeRuntime
     /** 上一次写入服务小区变化日志时的服务小区 ID。 */
     uint16_t lastServingCellForLog = 0;
 
-    /** 上一次 KPI 日志输出时刻，单位秒。 */
-    double lastKpiReportTime = -1.0;
-
-    /** 上一次吞吐统计时看到的累计收包数。 */
-    uint64_t lastRxPackets = 0;
-
     /** 切换窗口吞吐 trace 上一次采样时看到的累计收包数。 */
     uint64_t lastThroughputTraceRxPackets = 0;
 
     /** 最近一小段稳定期内的吞吐样本，用于估计切换前参考吞吐。 */
     std::deque<double> recentThroughputSamplesMbps;
 
+    /** 已产生切换尝试的次数，起点为 measurement-driven 准备阶段。 */
+    uint32_t handoverAttemptCount = 0;
+
     /** 已观察到的切换开始次数。 */
     uint32_t handoverStartCount = 0;
 
     /** 已观察到的切换成功次数。 */
     uint32_t handoverEndOkCount = 0;
+
+    /** 已观察到的切换失败次数（已进入执行阶段）。 */
+    uint32_t handoverFailureCount = 0;
+
+    /** 已观察到的切换准备阶段失败次数（目标侧拒绝或资源不足）。 */
+    uint32_t handoverPreparationFailureCount = 0;
+
+    /** 因目标侧负载/准入门控被拦截的准备阶段失败次数。 */
+    uint32_t handoverPreparationBlockedAdmissionCount = 0;
+
+    /** 因目标可见窗口不足被拦截的准备阶段失败次数。 */
+    uint32_t handoverPreparationBlockedVisibilityCount = 0;
+
+    /** 目标侧因无可用 NC-RACH 前导而拒绝切换的次数。 */
+    uint32_t handoverFailureNoPreambleCount = 0;
+
+    /** 切换过程中因达到最大 RACH 次数而失败的次数。 */
+    uint32_t handoverFailureMaxRachCount = 0;
+
+    /** 源侧 leaving timeout 导致的切换失败次数。 */
+    uint32_t handoverFailureLeavingCount = 0;
+
+    /** 目标侧 joining timeout 导致的切换失败次数。 */
+    uint32_t handoverFailureJoiningCount = 0;
+
+    /** UE 侧 `HandoverEndError` 事件计数。 */
+    uint32_t handoverEndErrorCount = 0;
 
     /** 成功切换执行时延累加值，单位秒。 */
     double totalHandoverExecutionDelaySeconds = 0.0;
@@ -171,6 +201,15 @@ struct UeRuntime
     /** 当前尚未闭合的切换事件序号；没有 pending handover 时为 0。 */
     uint32_t activeHandoverTraceId = 0;
 
+    /** 当前准备阶段对应的源小区。 */
+    uint16_t pendingPreparationSourceCell = 0;
+
+    /** 当前准备阶段对应的目标小区。 */
+    uint16_t pendingPreparationTargetCell = 0;
+
+    /** 当前准备阶段对应的 UE RNTI。 */
+    uint16_t pendingPreparationRnti = 0;
+
     /** 当前切换的参考吞吐，取切换前短窗口平均值，单位 Mbps。 */
     double pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
 
@@ -192,12 +231,6 @@ struct UeRuntime
 
 struct UeLayoutConfig
 {
-    /** UE 部署类型：`line` 或 `seven-cell`。 */
-    std::string layoutType = "seven-cell";
-
-    /** 线性部署时相邻 UE 的东西向间距。 */
-    double lineSpacingMeters = 0.0;
-
     /** 中心小区与六个外围小区共用的 hex 半径。 */
     double hexCellRadiusMeters = 20000.0;
 
@@ -214,7 +247,7 @@ struct UePlacement
     LeoOrbitCalculator::GroundPoint groundPoint;
 
     /** 部署角色。 */
-    std::string role = "line";
+    std::string role = "center";
 
     /** 相对参考中心的东西向偏移，单位米。 */
     double eastOffsetMeters = 0.0;
@@ -230,16 +263,25 @@ inline void
 ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
 {
     ue.lastServingCellForLog = 0;
-    ue.lastKpiReportTime = -1.0;
-    ue.lastRxPackets = 0;
     ue.lastThroughputTraceRxPackets = 0;
     ue.recentThroughputSamplesMbps.clear();
     ue.hasPendingHoStart = false;
+    ue.hasPendingHoPreparation = false;
     ue.lastHoStartSourceCell = 0;
     ue.lastHoStartTargetCell = 0;
     ue.lastHoStartTimeSeconds = -1.0;
+    ue.handoverAttemptCount = 0;
     ue.handoverStartCount = 0;
     ue.handoverEndOkCount = 0;
+    ue.handoverFailureCount = 0;
+    ue.handoverPreparationFailureCount = 0;
+    ue.handoverPreparationBlockedAdmissionCount = 0;
+    ue.handoverPreparationBlockedVisibilityCount = 0;
+    ue.handoverFailureNoPreambleCount = 0;
+    ue.handoverFailureMaxRachCount = 0;
+    ue.handoverFailureLeavingCount = 0;
+    ue.handoverFailureJoiningCount = 0;
+    ue.handoverEndErrorCount = 0;
     ue.totalHandoverExecutionDelaySeconds = 0.0;
     ue.throughputRecoveryCount = 0;
     ue.totalThroughputRecoverySeconds = 0.0;
@@ -250,6 +292,10 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastSuccessfulHoTimeSeconds = -1.0;
     ue.handoverTraceSequence = 0;
     ue.activeHandoverTraceId = 0;
+    ue.bootstrapConnectionEstablished = false;
+    ue.pendingPreparationSourceCell = 0;
+    ue.pendingPreparationTargetCell = 0;
+    ue.pendingPreparationRnti = 0;
     ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.waitingForThroughputRecovery = false;
@@ -282,7 +328,7 @@ struct UePlacementOffsetSpec
 {
     double eastOffsetMeters = 0.0;
     double northOffsetMeters = 0.0;
-    std::string role = "line";
+    std::string role = "center";
 };
 
 inline void
@@ -319,19 +365,6 @@ AppendRectGridOffsetSpecs(std::vector<UePlacementOffsetSpec>& specs,
                                role);
         }
     }
-}
-
-inline std::vector<UePlacementOffsetSpec>
-BuildLineUeOffsetSpecs(uint32_t ueNum, double ueSpacingMeters)
-{
-    std::vector<UePlacementOffsetSpec> specs;
-    specs.reserve(ueNum);
-    const double center = (static_cast<double>(ueNum) - 1.0) / 2.0;
-    for (uint32_t i = 0; i < ueNum; ++i)
-    {
-        AppendUeOffsetSpec(specs, (static_cast<double>(i) - center) * ueSpacingMeters, 0.0, "line");
-    }
-    return specs;
 }
 
 inline std::vector<UePlacementOffsetSpec>
@@ -436,16 +469,7 @@ BuildUePlacements(double baseLatitudeDeg,
                   uint32_t ueNum,
                   const UeLayoutConfig& layout)
 {
-    std::vector<UePlacementOffsetSpec> offsetSpecs;
-    if (layout.layoutType == "seven-cell")
-    {
-        offsetSpecs = BuildSevenCellUeOffsetSpecs(ueNum, layout);
-    }
-    else
-    {
-        offsetSpecs = BuildLineUeOffsetSpecs(ueNum, layout.lineSpacingMeters);
-    }
-
+    const std::vector<UePlacementOffsetSpec> offsetSpecs = BuildSevenCellUeOffsetSpecs(ueNum, layout);
     return BuildUePlacementsFromOffsetSpecs(
         baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, offsetSpecs);
 }
@@ -472,4 +496,4 @@ DumpUeLayoutCsv(const std::string& path, const std::vector<UePlacement>& placeme
 
 } // namespace ns3
 
-#endif // MYFIRST_RUNTIME_H
+#endif // LEO_NTN_HANDOVER_RUNTIME_H

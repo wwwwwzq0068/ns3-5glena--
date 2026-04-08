@@ -205,7 +205,7 @@ NrUeRrc::GetTypeId()
                 TimeValue(MilliSeconds(
                     100)), // see 3GPP 36.331 UE-TimersAndConstants & RLF-TimersAndConstants
                 MakeTimeAccessor(&NrUeRrc::m_t300),
-                MakeTimeChecker(MilliSeconds(100), MilliSeconds(2000)))
+                MakeTimeChecker(MilliSeconds(100), MilliSeconds(10000)))
             .AddAttribute(
                 "T310",
                 "Timer for detecting the Radio link failure "

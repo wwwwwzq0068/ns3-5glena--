@@ -9,7 +9,8 @@ SIM_BINARY="leo-ntn-handover-baseline"
 DEFAULT_SIM_TIME="40"
 DEFAULT_REPEAT="1"
 DEFAULT_RNG_RUN_START="1"
-RESULT_BASE_DIR="scratch/results/exp/v4.1"
+DEFAULT_RESULT_BASE_DIR="scratch/results/exp/v4.1/joint"
+RESULT_BASE_DIR="$DEFAULT_RESULT_BASE_DIR"
 
 print_usage() {
     cat <<'EOF'
@@ -27,6 +28,7 @@ Options:
   --repeat N                Repeat each experiment N times. Default: 1.
   --rng-run-start N         First RngRun value. Default: 1.
   --sim-time SECONDS        Override simTime. Default: 40.
+  --result-base-dir DIR     Override the result root directory.
   --build                   Run ./ns3 build before launching experiments.
   --enable-grid-svg         Keep grid SVG generation enabled. Default is OFF.
   --dry-run                 Print commands without executing them.
@@ -34,82 +36,93 @@ Options:
   -- [EXTRA NS3 ARGS...]    Forward extra arguments to every experiment.
 
 Groups:
-  baseline-repeat           B00
-  ttt-scan                  B10 B11 B12
-  hysteresis-scan           B20 B21
-  improved-weight           I00 I01 I02
-  paper-shortlist           B00 B11 B21 I00 I02
+  baseline-core             B00 B10 B11 B20 B21
+  improved-weight           I00 I10 I11
+  improved-load-gating      I20 I21
+  improved-return-guard     I30 I31
+  improved-load-pressure    I40
+  joint-core                B00 I00 I10 I20 I30
+  paper-shortlist           B00 B11 I00 I21 I31 I40
 EOF
 }
 
 list_experiments() {
     cat <<'EOF'
 Experiment Matrix (v4.1)
-  B00  baseline validation base  handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0
+  B00  baseline default          handoverMode=baseline hoTttMs=200 hoHysteresisDb=2.0
   B10  baseline short TTT        handoverMode=baseline hoTttMs=160
-  B11  baseline medium TTT       handoverMode=baseline hoTttMs=320
-  B12  baseline long TTT         handoverMode=baseline hoTttMs=480
+  B11  baseline long TTT         handoverMode=baseline hoTttMs=320
   B20  baseline low hysteresis   handoverMode=baseline hoHysteresisDb=1.0
   B21  baseline high hysteresis  handoverMode=baseline hoHysteresisDb=3.0
-  I00  improved default weight   handoverMode=improved improvedSignalWeight=0.7 improvedLoadWeight=0.3
-  I01  improved signal-heavy     handoverMode=improved improvedSignalWeight=0.8 improvedLoadWeight=0.2
-  I02  improved balanced weight  handoverMode=improved improvedSignalWeight=0.5 improvedLoadWeight=0.5
+  I00  improved default joint    handoverMode=improved improvedSignalWeight=0.7 improvedLoadWeight=0.3 improvedVisibilityWeight=0.2
+  I10  improved visibility off   handoverMode=improved improvedVisibilityWeight=0.0 improvedMinVisibilitySeconds=0.0
+  I11  improved visibility strong handoverMode=improved improvedSignalWeight=0.6 improvedLoadWeight=0.2 improvedVisibilityWeight=0.4 improvedMinVisibilitySeconds=1.5
+  I20  improved load conservative handoverMode=improved improvedMinLoadScoreDelta=0.3 improvedMaxSignalGapDb=2.0
+  I21  improved load aggressive  handoverMode=improved improvedMinLoadScoreDelta=0.1 improvedMaxSignalGapDb=5.0
+  I30  improved guard off        handoverMode=improved improvedReturnGuardSeconds=0.0
+  I31  improved guard strong     handoverMode=improved improvedReturnGuardSeconds=1.0
+  I40  improved tighter capacity handoverMode=improved maxSupportedUesPerSatellite=2.5 loadCongestionThreshold=0.7
 
 Groups
-  baseline-repeat  B00
-  ttt-scan         B10 B11 B12
-  hysteresis-scan  B20 B21
-  improved-weight  I00 I01 I02
-  paper-shortlist  B00 B11 B21 I00 I02
+  baseline-core          B00 B10 B11 B20 B21
+  improved-weight        I00 I10 I11
+  improved-load-gating   I20 I21
+  improved-return-guard  I30 I31
+  improved-load-pressure I40
+  joint-core             B00 I00 I10 I20 I30
+  paper-shortlist        B00 B11 I00 I21 I31 I40
 EOF
 }
 
 experiment_label() {
     case "$1" in
-        B00) printf '%s\n' "baseline-e3-default" ;;
+        B00) printf '%s\n' "baseline-default" ;;
         B10) printf '%s\n' "baseline-ttt160" ;;
         B11) printf '%s\n' "baseline-ttt320" ;;
-        B12) printf '%s\n' "baseline-ttt480" ;;
         B20) printf '%s\n' "baseline-hys1" ;;
         B21) printf '%s\n' "baseline-hys3" ;;
-        I00) printf '%s\n' "improved-w73" ;;
-        I01) printf '%s\n' "improved-w82" ;;
-        I02) printf '%s\n' "improved-w55" ;;
+        I00) printf '%s\n' "improved-joint-default" ;;
+        I10) printf '%s\n' "improved-vis-off" ;;
+        I11) printf '%s\n' "improved-vis-strong" ;;
+        I20) printf '%s\n' "improved-load-conservative" ;;
+        I21) printf '%s\n' "improved-load-aggressive" ;;
+        I30) printf '%s\n' "improved-guard-off" ;;
+        I31) printf '%s\n' "improved-guard-strong" ;;
+        I40) printf '%s\n' "improved-tight-capacity" ;;
         *) return 1 ;;
     esac
 }
 
 experiment_args() {
     case "$1" in
-        B00) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0" ;;
+        B00) printf '%s\n' "--handoverMode=baseline --hoTttMs=200 --hoHysteresisDb=2.0" ;;
         B10) printf '%s\n' "--handoverMode=baseline --hoTttMs=160" ;;
         B11) printf '%s\n' "--handoverMode=baseline --hoTttMs=320" ;;
-        B12) printf '%s\n' "--handoverMode=baseline --hoTttMs=480" ;;
         B20) printf '%s\n' "--handoverMode=baseline --hoHysteresisDb=1.0" ;;
         B21) printf '%s\n' "--handoverMode=baseline --hoHysteresisDb=3.0" ;;
-        I00) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3" ;;
-        I01) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.8 --improvedLoadWeight=0.2" ;;
-        I02) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.5 --improvedLoadWeight=0.5" ;;
+        I00) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2" ;;
+        I10) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.0 --improvedMinVisibilitySeconds=0.0" ;;
+        I11) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.6 --improvedLoadWeight=0.2 --improvedVisibilityWeight=0.4 --improvedMinVisibilitySeconds=1.5" ;;
+        I20) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2 --improvedMinLoadScoreDelta=0.3 --improvedMaxSignalGapDb=2.0" ;;
+        I21) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2 --improvedMinLoadScoreDelta=0.1 --improvedMaxSignalGapDb=5.0" ;;
+        I30) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2 --improvedReturnGuardSeconds=0.0" ;;
+        I31) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2 --improvedReturnGuardSeconds=1.0" ;;
+        I40) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedVisibilityWeight=0.2 --maxSupportedUesPerSatellite=2.5 --loadCongestionThreshold=0.7" ;;
         *) return 1 ;;
     esac
 }
 
 expand_group() {
     case "$1" in
-        baseline-repeat) printf '%s\n' "B00" ;;
-        ttt-scan) printf '%s\n' "B10 B11 B12" ;;
-        hysteresis-scan) printf '%s\n' "B20 B21" ;;
-        improved-weight) printf '%s\n' "I00 I01 I02" ;;
-        paper-shortlist) printf '%s\n' "B00 B11 B21 I00 I02" ;;
+        baseline-core) printf '%s\n' "B00 B10 B11 B20 B21" ;;
+        improved-weight) printf '%s\n' "I00 I10 I11" ;;
+        improved-load-gating) printf '%s\n' "I20 I21" ;;
+        improved-return-guard) printf '%s\n' "I30 I31" ;;
+        improved-load-pressure) printf '%s\n' "I40" ;;
+        joint-core) printf '%s\n' "B00 I00 I10 I20 I30" ;;
+        paper-shortlist) printf '%s\n' "B00 B11 I00 I21 I31 I40" ;;
         *) return 1 ;;
     esac
-}
-
-run_command() {
-    printf '%s\n' "$*"
-    if [ "$DRY_RUN" = "0" ]; then
-        eval "$@"
-    fi
 }
 
 LIST_ONLY=0
@@ -159,6 +172,11 @@ while [ $# -gt 0 ]; do
             SIM_TIME="$2"
             shift 2
             ;;
+        --result-base-dir)
+            [ $# -ge 2 ] || { echo "missing value for --result-base-dir" >&2; exit 1; }
+            RESULT_BASE_DIR="$2"
+            shift 2
+            ;;
         --build)
             BUILD_FIRST=1
             shift
@@ -196,7 +214,7 @@ if [ "$LIST_ONLY" = "1" ]; then
 fi
 
 if [ "$RUN_ALL" = "1" ]; then
-    SELECTED_IDS="$SELECTED_IDS B00 B10 B11 B12 B20 B21 I00 I01 I02"
+    SELECTED_IDS="$SELECTED_IDS B00 B10 B11 B20 B21 I00 I10 I11 I20 I21 I30 I31 I40"
 fi
 
 SELECTED_IDS=$(printf '%s\n' "$SELECTED_IDS" | xargs)
@@ -231,6 +249,10 @@ if [ "$BUILD_FIRST" = "1" ]; then
     fi
 fi
 
+if [ "$DRY_RUN" = "0" ]; then
+    mkdir -p "$RESULT_BASE_DIR"
+fi
+
 for experiment_id in $SELECTED_IDS; do
     label=$(experiment_label "$experiment_id") || { echo "unknown experiment id: $experiment_id" >&2; exit 1; }
     args=$(experiment_args "$experiment_id") || { echo "unknown experiment id: $experiment_id" >&2; exit 1; }
@@ -256,6 +278,21 @@ for experiment_id in $SELECTED_IDS; do
         if [ "$DRY_RUN" = "1" ]; then
             printf '%s\n' "./ns3 run --no-build \"${full_program_args}\""
         else
+            mkdir -p "$run_dir"
+            {
+                printf 'experimentId=%s\n' "$experiment_id"
+                printf 'label=%s\n' "$label"
+                printf 'rngRun=%s\n' "$rng_run"
+                printf 'simTime=%s\n' "$SIM_TIME"
+                printf 'outputDir=%s\n' "$run_dir"
+                printf 'resultBaseDir=%s\n' "$RESULT_BASE_DIR"
+                printf 'programArgs=%s\n' "$full_program_args"
+                if [ -n "$EXTRA_NS3_ARGS" ]; then
+                    printf 'extraArgs=%s\n' "$EXTRA_NS3_ARGS"
+                fi
+                printf 'gitCommit=%s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+                printf 'timestampUtc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            } > "${run_dir}/run-meta.txt"
             ./ns3 run --no-build "${full_program_args}"
         fi
 

@@ -22,7 +22,7 @@
 - `gNbNum = 8`
 - `orbitPlaneCount = 2`
 - `ueNum = 25`
-- `ueLayoutType = seven-cell`
+- `UE` 布局固定为 `seven-cell`
 - `hexCellRadiusKm = 20`
 - `ueCenterSpacingMeters = 6000`
 - `ueRingPointOffsetMeters = 5000`
@@ -45,36 +45,62 @@
 - `measurementReportIntervalMs = 120 ms`
 - `measurementMaxReportCells = 8`
 - `handoverMode = baseline`
+- `useIdealRrc = true`
+- `s1uLinkDelayMs = 8.0 ms`
+- `s11LinkDelayMs = 8.0 ms`
+- `s5LinkDelayMs = 8.0 ms`
+- `remoteHostLinkDelayMs = 8.0 ms`
+- `x2ProcessingDelayMs = 2.0 ms`
+- `x2MinLinkDelayMs = 1.0 ms`
+- `enableIdealRrcBootstrap = true`
+- `enableDynamicHoPreparation = true`
+- `hoPreparationBaseDelayMs = 4.0 ms`
+- `hoPreparationLoadPenaltyMs = 12.0 ms`
+- `hoPreparationLowElevationPenaltyMs = 8.0 ms`
+- `hoPreparationExecutionGuardMs = 20.0 ms`
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
 - `improvedVisibilityWeight = 0.2`
 - `improvedMinLoadScoreDelta = 0.2`
 - `improvedMaxSignalGapDb = 3.0 dB`
-- `improvedReturnGuardSeconds = 1.5 s`
+- `improvedReturnGuardSeconds = 0.5 s`
 - `improvedMinVisibilitySeconds = 1.0 s`
 - `improvedVisibilityHorizonSeconds = 8.0 s`
-- `improvedVisibilityPredictionStepSeconds = 0.5 s`
+- `improvedVisibilityPredictionStepSeconds = 0.2 s`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `useWgs84HexGrid = true`
-- `forceRlcAmForEpc = false`
+- `maxSupportedUesPerSatellite = 5.0`
+- `loadCongestionThreshold = 0.8`
+- 地面锚点固定为 `WGS84 hex-grid`
 - `disableUeIpv4Forwarding = true`
 
 说明：
-- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v4.1`
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v4.1.1`
 - 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
+- 当前默认稳定口径仍使用 `ideal RRC`，但控制面链路不再视为“零时延黑盒”：
+  `S1-U/S11/S5/remote-host` 已注入非零固定链路时延，`X2` 也使用显式静态链路时延
+- 当为实验显式切到 `useIdealRrc=0` 时，脚本默认会先走一次 `ideal bootstrap transport` 完成首轮 initial attach，再切回 real RRC transport；这一步是为了避免当前 NTN 上行预算下 `Msg3 / RRC Connection Request` 在纯 real-RRC 初始接入里稳定丢失
+- 当前默认还显式建模了 measurement-driven `HO preparation` 阶段；其附加准备时延由 `X2` 几何传播、目标星地斜距、目标侧负载和仰角共同决定
+- 当前目标侧 `AdmitHandoverRequest` 只在 `handoverMode = improved` 时随 `admissionAllowed` 动态开关；baseline 保持纯信号驱动 `A3` 对照，不再因为目标侧负载准入而在 preparation 阶段被拒绝
 - 当前已移除原来的几何 `beam budget/custom A3` handover 判决链；几何计算只保留给轨道推进、地面锚点与初始接入
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 重新走上行 `NAS/TFT` 分类路径
-- 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 选择
+- 当前用户面 `RLC` 映射已收口为 helper 默认行为，不再保留额外的 `RLC AM` 强制入口
+- 当前已将 `SRS` 调度相关参数入口从 baseline 配置面移除，并固定关闭相关项，避免与 handover 主线无关的 `PHY fatal`
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
 - 判决主线为：标准 `MeasurementReport` 上报的 `RSRP` 比较、`hysteresis` 与 `TTT`
 - `handoverMode = baseline` 时，直接在 A3 上报候选中选择最强邻区
-- `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时联合考虑 `signal`、`remainingVisibility` 与 `loadScore`，并在源站接近拥塞时进一步偏向轻载候选
+- `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时联合考虑 `signal`、`remainingVisibility` 与 `loadScore`，并在源站接近拥塞时进一步偏向轻载候选；当前还会在目标选择阶段直接剔除 `admissionAllowed=false` 的拥堵候选
 - improved 允许先用最小剩余可见时间做硬门控，再在保留下来的候选中做联合评分
+- 若 improved 过滤后不存在任何可接纳候选，则本轮不发起 handover preparation，而不是回退到拥堵目标
+- 当前 `HO execution delay` 统计定义为：
+  measurement-driven `HO_PREP_START` 到 `HO_END_OK` 的时间差
+- 因此当前时延统计会覆盖 `HO_PREP_START -> HO_TRIGGER -> HO_START` 的完整控制面前段，而不再只统计 `gNB RRC` 内部的闭环尾段
+- 当前最终 `HO success rate` 以剔除 `HO_PREP_BLOCKED_ADMISSION` 后的有效 handover `attempt` 为分母；该拒绝路径当前只属于 `handoverMode = improved`
+- 当前事件 trace 已接入 `HO_PREP_START`、`HO_TRIGGER`、`HO_PREP_BLOCKED_*`、`HO_FAILURE_NO_PREAMBLE`、`HO_FAILURE_MAX_RACH`、`HO_FAILURE_LEAVING`、`HO_FAILURE_JOINING` 和 `HO_END_ERROR`
 - 只要决策依据不包含负载权重，这条路径仍属于 baseline
 
 ## baseline 验证清单

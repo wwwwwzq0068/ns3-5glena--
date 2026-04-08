@@ -2,8 +2,8 @@
 
 ## 版本定义
 - 当前研究主阶段定义为 `4.1`。
-- 最近已收敛并打 tag 的稳定节点为 `4.1`（`research-v4.1`）。
-- 当前 `4.1` 是当前 measurement-driven baseline / improved 对照主线的最新稳定收口快照。
+- 最近已收敛并打 tag 的稳定节点为 `4.1.1`（`research-v4.1.1`）。
+- 当前 `4.1.1` 是当前 measurement-driven baseline / improved 对照主线的最新稳定收口快照。
 - 这里的 `4.1 / 4.1.x` 指本仓库中的“毕设/研究工作版本”，不是 ns-3 框架本身的版本号。
 - ns-3 框架版本仍然保持为 `3.46`，不要改动根目录的 `VERSION` 文件去表达研究版本。
 
@@ -15,7 +15,7 @@
   - `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
   - 统一 `MeasurementReport` 驱动的 `A3` baseline / improved 目标选择与 `ping-pong` 统计
   - `sat_anchor_trace.csv`、`ue_layout.csv`、`hex_grid_cells.svg`、`handover_event_trace.csv` 等结果输出链
-  - `disableUeIpv4Forwarding`、`forceRlcAmForEpc` 等稳定性控制项
+  - `disableUeIpv4Forwarding` 等稳定性控制项
 - `4.1` 还纳入：
   - 移除旧的几何 `beam budget/custom A3` handover 代理链与其派生脚本输出
   - 将周期更新主循环收紧为“轨道推进 + 服务关系观测 + 负载统计”
@@ -69,7 +69,7 @@
 - `4.1` 代表当前主阶段下的稳定节点。
 - 同一主阶段内的稳定节点，推荐使用 Git tag，而不是修改 ns-3 自带版本文件。
 - 推荐 tag 形式：
-  - `research-v4.1`
+  - `research-v4.1.1`
 
 ## 当前执行原则
 - 先稳住 `4.1` 基线，再围绕传统 A3 baseline 和改进策略开展对比设计。

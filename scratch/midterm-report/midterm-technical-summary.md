@@ -23,7 +23,7 @@
 - 后续如何引入“信号质量 + 可见性 + 卫星负载”的联合决策
 
 ### 2.2 当前阶段定位
-当前研究仓库最近已发布稳定节点为 `4.1`（Git tag：`research-v4.1`）。这里的 `4.1.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区若继续补充图表、PPT 或结果总结，应视为 `4.1` 之后的主阶段内迭代。
+当前研究仓库最近已发布稳定节点为 `4.1.1`（Git tag：`research-v4.1.1`）。这里的 `4.1.x` 是研究工作版本，不是 ns-3 框架版本；底层仿真框架仍为 `ns-3.46`。当前工作区若继续补充图表、PPT 或结果总结，应视为 `4.1` 之后的主阶段内迭代。
 
 当前阶段的重点已经从“先把基础物理场景构建出来”推进到“将其整理为可用于后续毕设实验的 baseline 平台”。这意味着：
 - 不再把继续扩星作为默认主线
@@ -154,10 +154,22 @@
 - `measurementReportIntervalMs = 120 ms`
 - `measurementMaxReportCells = 8`
 - `handoverMode = baseline`
+- `useIdealRrc = true`
+- `S1-U/S11/S5/remote-host` 使用非零链路时延
+- `X2` 使用显式静态链路时延
+- 若切到 `useIdealRrc = false`，当前代码默认会先用一次 `ideal bootstrap transport` 完成首轮接入，再恢复 real RRC transport；这是为了绕开当前 NTN 上行预算下 `Msg3 / RRC Connection Request` 的初始接入失败
+- 默认显式建模 `HO preparation` 阶段
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
 - `improvedVisibilityWeight = 0.2`
 - `pingPongWindowSeconds = 1.5 s`
+
+当前 `HO execution delay` 的口径也需要说明：
+- 起点不是晚到 `gNB HandoverStart` 事件，而是 measurement-driven `HO_PREP_START`
+- 终点仍是 `HO_END_OK`
+- 当前 `HO preparation` 阶段会把 `X2` 几何传播、目标星地斜距、目标负载和低仰角惩罚折算进准备时延
+- 目标侧 `AdmitHandoverRequest` 当前只在 `handoverMode = improved` 时随运行时 `admissionAllowed` 动态开关；baseline 保持纯信号驱动 `A3` 执行
+- 因此当前时延统计已经覆盖切换执行前段的控制面准备开销，更适合解释“为什么默认不再是统一几毫秒内部尾段”
 
 ### 5.4 baseline 的意义
 当前 baseline 的目标不是证明传统 `A3` 很优，而是提供一个清楚、稳定、可统计的起点。只有 baseline 定义清楚，后续改进策略的收益才有对照意义。
@@ -170,7 +182,9 @@
 
 但关键功能已经拆分到独立头文件中，例如：
 - `leo-ntn-handover-config.h`
+- `leo-ntn-handover-decision.h`
 - `leo-ntn-handover-runtime.h`
+- `leo-ntn-handover-scenario.h`
 - `leo-ntn-handover-update.h`
 - `leo-ntn-handover-reporting.h`
 - `leo-ntn-handover-utils.h`
@@ -202,6 +216,7 @@
 ### 6.3 日志与结果输出
 当前平台已统一支持：
 - 切换开始与成功日志
+- 切换失败日志与失败原因 trace
 - 服务星变化日志
 - 周期性仿真进度输出
 - 最终吞吐统计、切换汇总和自动 `ping-pong` 计数
@@ -223,9 +238,9 @@
 - 几何共享计算优化，减少重复轨道传播
 - 多处切换后协议异常防御
 - 默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 二次转发回 `NAS/TFT` 分类链
-- 保留 `forceRlcAmForEpc` 作为可选稳定性开关，用于单独比较 `RLC AM/UM` 在切换附近的表现
+- 用户面 `RLC` 映射已收口为 helper 默认行为，不再保留额外的 `RLC AM` 强制入口
 - 关闭与当前 handover 主线无关的高噪声输出
-- 默认关闭容易触发无关 `PHY fatal` 的部分 `SRS` 项
+- 已将 `SRS` 调度相关参数入口从 baseline 配置面移除，并固定关闭相关项，避免无关 `PHY fatal`
 
 这些工作虽然不直接等于“算法创新”，但决定了平台能否稳定支撑后续实验。
 
@@ -238,7 +253,7 @@
 
 其中 `loadScore` 当前采用更平滑的容量压力近似，避免少量 UE 时过早饱和。
 
-同时，当前 improved 已开始把基于轨道几何的剩余可见时间作为目标选择辅助量接入，并在源站接近拥塞时进一步增强负载导向，但仍保持统一 `MeasurementReport` 触发入口不变。
+同时，当前 improved 已开始把基于轨道几何的剩余可见时间作为目标选择辅助量接入，并在源站接近拥塞时进一步增强负载导向；对已判定 `admissionAllowed=false` 的拥堵目标，当前 improved 会在目标选择阶段直接剔除，而不是继续进入切换准备，但仍保持统一 `MeasurementReport` 触发入口不变。
 
 这意味着后续扩展不需要推翻平台，只需要在现有切换链路中继续细化联合决策模块。
 

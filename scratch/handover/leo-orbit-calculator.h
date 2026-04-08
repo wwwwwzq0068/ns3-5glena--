@@ -65,20 +65,11 @@ class LeoOrbitCalculator
     /** 卫星相对 UE 的完整几何状态。 */
     struct OrbitState
     {
-        /** 卫星在 ECI 坐标系下的位置。 */
-        Vector eci;
-
-        /** 卫星在 ECI 坐标系下的速度。 */
-        Vector vEci;
-
         /** 卫星在 ECEF 坐标系下的位置。 */
         Vector ecef;
 
         /** 卫星在 ECEF 坐标系下的速度。 */
         Vector vEcef;
-
-        /** 从 UE 指向卫星的斜距向量（ECEF）。 */
-        Vector slantRangeEcef;
 
         /** 斜距长度，单位米。 */
         double slantRangeMeters;
@@ -195,11 +186,8 @@ class LeoOrbitCalculator
                            rotatedVEcef.z);
 
         OrbitState state;
-        state.eci = rEci;
-        state.vEci = vEci;
         state.ecef = rEcef;
         state.vEcef = vEcef;
-        state.slantRangeEcef = Vector(0.0, 0.0, 0.0);
         state.slantRangeMeters = 0.0;
         state.azimuthRad = 0.0;
         state.elevationRad = -kPi / 2.0;
@@ -239,7 +227,6 @@ class LeoOrbitCalculator
         const double dopplerHz = -(carrierFrequencyHz / kSpeedOfLight) * rangeRate;
 
         OrbitState state = satelliteState;
-        state.slantRangeEcef = slant;
         state.slantRangeMeters = slantRangeMeters;
         state.azimuthRad = azimuthRad;
         state.elevationRad = elevationRad;
