@@ -9,7 +9,7 @@ SIM_BINARY="leo-ntn-handover-baseline"
 DEFAULT_SIM_TIME="40"
 DEFAULT_REPEAT="1"
 DEFAULT_RNG_RUN_START="1"
-RESULT_BASE_DIR="scratch/results/exp/v4.1"
+RESULT_BASE_DIR="scratch/results/exp/v4.2"
 
 print_usage() {
     cat <<'EOF'
@@ -38,13 +38,16 @@ Groups:
   ttt-scan                  B10 B11 B12
   hysteresis-scan           B20 B21
   improved-weight           I00 I01 I02
+  improved-stablelead       I10 I11 I12 I13 I14
+  improved-margin           I20 I21 I22
+  improved-opt-grid         B00 I30 I31 I32 I33 I34 I35 I36 I37 I38
   paper-shortlist           B00 B11 B21 I00 I02
 EOF
 }
 
 list_experiments() {
     cat <<'EOF'
-Experiment Matrix (v4.1)
+Experiment Matrix (v4.2)
   B00  baseline validation base  handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0
   B10  baseline short TTT        handoverMode=baseline hoTttMs=160
   B11  baseline medium TTT       handoverMode=baseline hoTttMs=320
@@ -54,12 +57,32 @@ Experiment Matrix (v4.1)
   I00  improved default weight   handoverMode=improved improvedSignalWeight=0.7 improvedLoadWeight=0.3
   I01  improved signal-heavy     handoverMode=improved improvedSignalWeight=0.8 improvedLoadWeight=0.2
   I02  improved balanced weight  handoverMode=improved improvedSignalWeight=0.5 improvedLoadWeight=0.5
+  I10  improved stableLead 80ms  handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinStableLeadTimeSeconds=0.08
+  I11  improved stableLead 120ms handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinStableLeadTimeSeconds=0.12
+  I12  improved stableLead 160ms handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinStableLeadTimeSeconds=0.16
+  I13  improved stableLead 200ms handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinStableLeadTimeSeconds=0.20
+  I14  improved stableLead 240ms handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinStableLeadTimeSeconds=0.24
+  I20  improved margin 0.02      handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinJointScoreMargin=0.02
+  I21  improved margin 0.03      handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinJointScoreMargin=0.03
+  I22  improved margin 0.05      handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 improvedMinJointScoreMargin=0.05
+  I30  improved 120ms m02        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.12 margin=0.02
+  I31  improved 120ms m03        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.12 margin=0.03
+  I32  improved 120ms m05        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.12 margin=0.05
+  I33  improved 160ms m02        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.16 margin=0.02
+  I34  improved 160ms m03        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.16 margin=0.03
+  I35  improved 160ms m05        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.16 margin=0.05
+  I36  improved 240ms m02        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.24 margin=0.02
+  I37  improved 240ms m03        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.24 margin=0.03
+  I38  improved 240ms m05        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.24 margin=0.05
 
 Groups
   baseline-repeat  B00
   ttt-scan         B10 B11 B12
   hysteresis-scan  B20 B21
   improved-weight  I00 I01 I02
+  improved-stablelead I10 I11 I12 I13 I14
+  improved-margin  I20 I21 I22
+  improved-opt-grid B00 I30 I31 I32 I33 I34 I35 I36 I37 I38
   paper-shortlist  B00 B11 B21 I00 I02
 EOF
 }
@@ -75,6 +98,23 @@ experiment_label() {
         I00) printf '%s\n' "improved-w73" ;;
         I01) printf '%s\n' "improved-w82" ;;
         I02) printf '%s\n' "improved-w55" ;;
+        I10) printf '%s\n' "improved-stablelead80" ;;
+        I11) printf '%s\n' "improved-stablelead120" ;;
+        I12) printf '%s\n' "improved-stablelead160" ;;
+        I13) printf '%s\n' "improved-stablelead200" ;;
+        I14) printf '%s\n' "improved-stablelead240" ;;
+        I20) printf '%s\n' "improved-margin02" ;;
+        I21) printf '%s\n' "improved-margin03" ;;
+        I22) printf '%s\n' "improved-margin05" ;;
+        I30) printf '%s\n' "improved-s120-m02" ;;
+        I31) printf '%s\n' "improved-s120-m03" ;;
+        I32) printf '%s\n' "improved-s120-m05" ;;
+        I33) printf '%s\n' "improved-s160-m02" ;;
+        I34) printf '%s\n' "improved-s160-m03" ;;
+        I35) printf '%s\n' "improved-s160-m05" ;;
+        I36) printf '%s\n' "improved-s240-m02" ;;
+        I37) printf '%s\n' "improved-s240-m03" ;;
+        I38) printf '%s\n' "improved-s240-m05" ;;
         *) return 1 ;;
     esac
 }
@@ -90,6 +130,23 @@ experiment_args() {
         I00) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.7 --improvedLoadWeight=0.3" ;;
         I01) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.8 --improvedLoadWeight=0.2" ;;
         I02) printf '%s\n' "--handoverMode=improved --improvedSignalWeight=0.5 --improvedLoadWeight=0.5" ;;
+        I10) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.08" ;;
+        I11) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.12" ;;
+        I12) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.16" ;;
+        I13) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.20" ;;
+        I14) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24" ;;
+        I20) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinJointScoreMargin=0.02" ;;
+        I21) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinJointScoreMargin=0.03" ;;
+        I22) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinJointScoreMargin=0.05" ;;
+        I30) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.12 --improvedMinJointScoreMargin=0.02" ;;
+        I31) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.12 --improvedMinJointScoreMargin=0.03" ;;
+        I32) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.12 --improvedMinJointScoreMargin=0.05" ;;
+        I33) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.16 --improvedMinJointScoreMargin=0.02" ;;
+        I34) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.16 --improvedMinJointScoreMargin=0.03" ;;
+        I35) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.16 --improvedMinJointScoreMargin=0.05" ;;
+        I36) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.02" ;;
+        I37) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.03" ;;
+        I38) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.05" ;;
         *) return 1 ;;
     esac
 }
@@ -100,6 +157,9 @@ expand_group() {
         ttt-scan) printf '%s\n' "B10 B11 B12" ;;
         hysteresis-scan) printf '%s\n' "B20 B21" ;;
         improved-weight) printf '%s\n' "I00 I01 I02" ;;
+        improved-stablelead) printf '%s\n' "I10 I11 I12 I13 I14" ;;
+        improved-margin) printf '%s\n' "I20 I21 I22" ;;
+        improved-opt-grid) printf '%s\n' "B00 I30 I31 I32 I33 I34 I35 I36 I37 I38" ;;
         paper-shortlist) printf '%s\n' "B00 B11 B21 I00 I02" ;;
         *) return 1 ;;
     esac
@@ -196,7 +256,7 @@ if [ "$LIST_ONLY" = "1" ]; then
 fi
 
 if [ "$RUN_ALL" = "1" ]; then
-    SELECTED_IDS="$SELECTED_IDS B00 B10 B11 B12 B20 B21 I00 I01 I02"
+    SELECTED_IDS="$SELECTED_IDS B00 B10 B11 B12 B20 B21 I00 I01 I02 I10 I11 I12 I13 I14 I20 I21 I22"
 fi
 
 SELECTED_IDS=$(printf '%s\n' "$SELECTED_IDS" | xargs)

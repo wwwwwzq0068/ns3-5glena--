@@ -37,6 +37,37 @@
 namespace ns3
 {
 
+enum class HandoverFailureReason
+{
+    NONE,
+    UNKNOWN,
+    NO_PREAMBLE,
+    MAX_RACH,
+    LEAVING_TIMEOUT,
+    JOINING_TIMEOUT,
+};
+
+inline const char*
+ToString(HandoverFailureReason reason)
+{
+    switch (reason)
+    {
+    case HandoverFailureReason::NONE:
+        return "";
+    case HandoverFailureReason::UNKNOWN:
+        return "unknown";
+    case HandoverFailureReason::NO_PREAMBLE:
+        return "no_preamble";
+    case HandoverFailureReason::MAX_RACH:
+        return "max_rach";
+    case HandoverFailureReason::LEAVING_TIMEOUT:
+        return "leaving_timeout";
+    case HandoverFailureReason::JOINING_TIMEOUT:
+        return "joining_timeout";
+    }
+    return "unknown";
+}
+
 struct SatelliteRuntime
 {
     /** 卫星节点对象。 */
@@ -141,6 +172,24 @@ struct UeRuntime
     /** 已观察到的切换成功次数。 */
     uint32_t handoverEndOkCount = 0;
 
+    /** 已观察到的切换失败次数。 */
+    uint32_t handoverEndErrorCount = 0;
+
+    /** 未能分到 non-contention preamble 的失败次数。 */
+    uint32_t handoverFailureNoPreambleCount = 0;
+
+    /** 由于达到最大 RACH 尝试次数导致的失败次数。 */
+    uint32_t handoverFailureMaxRachCount = 0;
+
+    /** 由于 source 侧 leaving timeout 导致的失败次数。 */
+    uint32_t handoverFailureLeavingCount = 0;
+
+    /** 由于 target 侧 joining timeout 导致的失败次数。 */
+    uint32_t handoverFailureJoiningCount = 0;
+
+    /** 未拿到更具体 gNB 侧原因的失败次数。 */
+    uint32_t handoverFailureUnknownCount = 0;
+
     /** 成功切换执行时延累加值，单位秒。 */
     double totalHandoverExecutionDelaySeconds = 0.0;
 
@@ -165,11 +214,23 @@ struct UeRuntime
     /** 最近一次成功切换完成时刻，单位秒。 */
     double lastSuccessfulHoTimeSeconds = -1.0;
 
+    /** 当前连续领先门控跟踪的源小区 ID。 */
+    uint16_t stableLeadSourceCell = 0;
+
+    /** 当前连续领先门控跟踪的目标小区 ID。 */
+    uint16_t stableLeadTargetCell = 0;
+
+    /** 当前连续领先门控开始计时的时刻，单位秒。 */
+    double stableLeadSinceSeconds = -1.0;
+
     /** 当前 UE 已分配到的切换事件序号，用于关联事件和吞吐 trace。 */
     uint32_t handoverTraceSequence = 0;
 
     /** 当前尚未闭合的切换事件序号；没有 pending handover 时为 0。 */
     uint32_t activeHandoverTraceId = 0;
+
+    /** 当前 pending 切换已捕获到的失败原因。 */
+    HandoverFailureReason pendingFailureReason = HandoverFailureReason::NONE;
 
     /** 当前切换的参考吞吐，取切换前短窗口平均值，单位 Mbps。 */
     double pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
@@ -240,6 +301,12 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastHoStartTimeSeconds = -1.0;
     ue.handoverStartCount = 0;
     ue.handoverEndOkCount = 0;
+    ue.handoverEndErrorCount = 0;
+    ue.handoverFailureNoPreambleCount = 0;
+    ue.handoverFailureMaxRachCount = 0;
+    ue.handoverFailureLeavingCount = 0;
+    ue.handoverFailureJoiningCount = 0;
+    ue.handoverFailureUnknownCount = 0;
     ue.totalHandoverExecutionDelaySeconds = 0.0;
     ue.throughputRecoveryCount = 0;
     ue.totalThroughputRecoverySeconds = 0.0;
@@ -248,8 +315,12 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastSuccessfulHoSourceCell = 0;
     ue.lastSuccessfulHoTargetCell = 0;
     ue.lastSuccessfulHoTimeSeconds = -1.0;
+    ue.stableLeadSourceCell = 0;
+    ue.stableLeadTargetCell = 0;
+    ue.stableLeadSinceSeconds = -1.0;
     ue.handoverTraceSequence = 0;
     ue.activeHandoverTraceId = 0;
+    ue.pendingFailureReason = HandoverFailureReason::NONE;
     ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.waitingForThroughputRecovery = false;

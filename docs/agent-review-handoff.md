@@ -8,6 +8,11 @@
 
 ## 2026-04-06 improved 门控增强送审
 
+说明：
+- 本节保留的是 2026-04-06 的历史送审记录。
+- 当前主线已不再采用这里描述的 `improvedReturnGuardSeconds` 短时回切保护与切后保持思路，
+  而是改为“同一目标联合领先持续一段时间才允许切换”的稳定领先门控。
+
 ### 背景
 
 在 `E3` 高 `ping-pong` baseline（`hoTttMs=160ms`、`hoHysteresisDb=2.0dB`）上，

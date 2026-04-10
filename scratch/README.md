@@ -3,21 +3,29 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`4.1`（Git tag：`research-v4.1`）
-- 当前工作区与 `research-v4.1` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
-- 这里的 `4.1.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
+- 最近已发布稳定节点：`4.2`（Git tag：`research-v4.2`）
+- 当前工作区与 `research-v4.2` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
+- 这里的 `4.2.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
 - 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
 - 当前默认目标不是继续扩星，而是把该七小区场景作为传统 `A3 baseline` 的缺陷暴露平台
 - 当前 handover 主链已统一到标准 `PHY/RRC MeasurementReport`
-- 当前改进方向是在同一测量入口上推进“信号质量 + 剩余可见时间 + 卫星负载”联合目标选择，并逐步补上回切保护、可见性门控与源站负载感知的负载覆写门槛
+- 当前改进方向是在同一测量入口上推进“信号质量 + 剩余可见时间 + 卫星负载”联合目标选择，并逐步补上联合领先持续时间门控、可见性门控与源站负载感知的负载覆写门槛
+- 当前切换统计除 `HO start / HO success` 外，也会单独导出 `HO failure`、未闭合 `unresolved` 次数，以及底层 `RACH / timeout` 类失败原因明细
 
 ## 当前版本判断
-- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.1.x` 或 `research-v4.1` tag
-- 目前最近已发布稳定节点是 `research-v4.1`
-- 当前工作区中若继续补充结果、脚本或说明，默认按“`4.1` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.2.x` 或 `research-v4.2` tag
+- 目前最近已发布稳定节点是 `research-v4.2`
+- 当前工作区中若继续补充结果、脚本或说明，默认按“`4.2` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
+
+## 当前进度整理
+- 当前 `4.2` 已收口到统一真实测量驱动的 baseline / improved 主线，baseline 默认继续保持传统 `A3` 语义
+- 当前默认几何与业务口径已经固定为：`RAAN=-1 deg`、`planeTimeOffset=3.0 s`、`alignmentReferenceTime=15 s`、`overpassGap=3 s`、`lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
+- 最新一轮 `30 s`、`3` 个随机种子的 improved 参数矩阵已经跑完，当前最平衡的 improved 候选为 `I31`
+- 当前 improved 默认参数已经切到 `I31`：`improvedMinStableLeadTimeSeconds=0.12 s`、`improvedMinJointScoreMargin=0.03`
+- 下一步默认围绕 `I31` 继续细调权重，必要时再谨慎引入更轻的新机制，而不再回到大范围粗扫
 
 ## 当前默认口径
 场景与参数：
@@ -25,13 +33,16 @@
 - 轨道面数：`2`
 - UE 数：`25`
 - UE 主布局：`seven-cell`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-2 deg`
-- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20 s`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-1 deg`
+- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`3.0 s`
+- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`15 s`
+- `overpassGapSeconds`（同轨过境间隔）=`3 s`
 - `simTime`（仿真时长）=`40 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
-- `lambda`（业务流强度）=`1000 pkt/s/UE`
+- `lambda`（业务流强度）=`250 pkt/s/UE`
+- `maxSupportedUesPerSatellite`（每星默认容量口径）=`5`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
-- `hoTttMs`（切换触发时间）=`200 ms`
+- `hoTttMs`（切换触发时间）=`160 ms`
 - `measurementReportIntervalMs`（测量上报周期）=`120 ms`
 - `measurementMaxReportCells`（单次最多上报邻区数）=`8`
 - `handoverMode`（切换模式）默认=`baseline`
@@ -40,19 +51,21 @@
 - `improvedVisibilityWeight`（改进策略可见性权重）=`0.2`
 - `improvedMinLoadScoreDelta`（触发负载覆写所需的最小负载优势）=`0.2`
 - `improvedMaxSignalGapDb`（允许负载覆写时相对最强信号候选的最大信号差）=`3.0 dB`
-- `improvedReturnGuardSeconds`（短时回切保护窗口）=`1.5 s`
+- `improvedMinStableLeadTimeSeconds`（同一目标联合领先后需持续保持的最小时间）=`0.12 s`
 - `improvedMinVisibilitySeconds`（允许切入候选所需的最小剩余可见时间）=`1.0 s`
 - `improvedVisibilityHorizonSeconds`（可见性评分归一化时间窗）=`8.0 s`
 - `improvedVisibilityPredictionStepSeconds`（可见性向前预测步长）=`0.5 s`
+- `improvedMinJointScoreMargin`（候选联合分数相对当前服务星至少需要高出的最小分差）=`0.03`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
 - baseline 与 improved 共用同一条 `MeasurementReport -> target selection -> TriggerHandover` 主链
 - `handoverMode=baseline`：在 A3 上报候选中选择最强邻区
-- `handoverMode=improved`：在同一批真实测量候选中联合考虑 `remainingVisibility` 与 `loadScore` 选目标，并加入过载候选过滤、短时回切保护、最小剩余可见时间门控和源站负载感知的负载优势门槛
+- `handoverMode=improved`：在同一批真实测量候选中联合考虑 `remainingVisibility` 与 `loadScore` 选目标，并加入过载候选过滤、最小联合领先持续时间、最小剩余可见时间门控、源站负载感知的负载优势门槛，以及“候选联合分数必须明显优于当前服务星”的最小分差约束
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段；`loadScore` 本身采用更平滑的压力近似，避免少量 UE 时过早打满
 - 当前 PHY 信道已开启 `ShadowingEnabled`，切换判决直接读取真实 PHY/RRC 测量
+- 当前默认控制台输出已收紧为研究导向摘要；详细切换事件、恢复时间和失败原因优先写入 `handover_event_trace.csv`
 - 原来的几何 `beam budget/custom A3` handover 代理链已经移除
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不覆盖 helper 的 `RLC` 映射
@@ -265,8 +278,8 @@
 - 切换过 `debug/optimized` 后行为很混乱
 - `build` 或 `run` 反复出现难以解释的旧错误
 
-## `4.1` 实验矩阵
-本节给出当前 `research-v4.1` 主线下建议优先执行的一组实验编号表，目标是把后续研究重心集中到切换策略本身，而不是再回到旧的物理层观测入口争议。
+## `4.2` 实验矩阵
+本节给出当前 `research-v4.2` 主线下建议优先执行的一组实验编号表，目标是把后续研究重心集中到 `I31` 周边优化，而不是再回到旧的物理层观测入口争议。
 
 当前这组实验的前提是：
 - baseline 与 improved 已经统一到真实 `MeasurementReport` 入口
@@ -306,7 +319,7 @@
 - `I02`
 
 每组实验建议至少记录：
-- 版本：`research-v4.1`
+- 版本：`research-v4.2`
 - 运行命令
 - `RngRun`
 - 总切换次数
@@ -322,11 +335,14 @@
 scratch/run_handover_experiment_matrix.sh --list
 scratch/run_handover_experiment_matrix.sh --group baseline-repeat --repeat 5
 scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
+scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 --rng-run-start 11
 ```
 
 说明：
 - 这里的脚本层 `B00` 已切换到当前选定的 `E3` 参数组：`hoTttMs=160`、`hoHysteresisDb=2.0`
-- 仓库正式 baseline 口径仍保持 `research-v4.1` 的默认参数定义；这里只是为了后续算法验证，先固定一个更能暴露 `ping-pong` 的实验起点
+- 仓库正式 baseline 口径仍保持 `research-v4.2` 的默认参数定义；这里只是为了后续算法验证，先固定一个更能暴露 `ping-pong` 的实验起点
+- `improved-opt-grid` 是当前推荐的细化优化矩阵：`1` 组 baseline + `9` 组 improved，固定 `TTT=160 ms`、`Hys=2 dB`，只扫 `stableLead={0.12,0.16,0.24}` 与 `jointScoreMargin={0.02,0.03,0.05}`
+- `--repeat 3 --rng-run-start 11` 会自动跑 `RngRun=11/12/13`，适合做三次重复后再汇总均值与波动
 
 建议流程：
 
@@ -346,7 +362,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
 当前 baseline 默认就是高事件量场景：
 
 - `25 UE`
-- `lambda = 1000 pkt/s/UE`
+- `lambda = 250 pkt/s/UE`
 - `updateIntervalMs = 100`
 - 默认走 `MeasurementReport` 驱动的 `A3` 触发链
 
@@ -447,8 +463,9 @@ scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
 
 ## 日志与结果
 日志偏好：
-- 默认保留切换开始、切换成功、服务星变化、周期性进度和最终统计
-- 最终统计当前已包含整体与分 UE 的 `ping-pong` 自动计数
+- 默认只保留周期性进度和研究导向的最终摘要
+- 单次切换开始/结束、服务星变化和详细 setup 信息默认不再打印到控制台
+- 详细切换事件与吞吐恢复信息优先通过 `handover_event_trace.csv`、`handover_dl_throughput_trace.csv` 离线分析
 - 默认不强调 `OVERPASS`、`GRID-ANCHOR` 等高噪声信息
 
 结果目录：
@@ -595,7 +612,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
 - 默认口径收口
   - 明确当前默认 UE 主场景仍为 `25 UE` 的 `hotspot-boundary` 二维布局
   - 明确保留 `line` 布局作为对照入口，但默认研究场景优先使用 `hotspot-boundary`
-  - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 1000 pkt/s/UE`
+  - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 250 pkt/s/UE`、`maxSupportedUesPerSatellite = 5`
   - 明确当时默认会生成额外的候选轨迹与中间分析文件
   - 明确可在 `runGridSvgScript = true` 时继续生成 `hex_grid_cells.svg`
   - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()`、`UdpServer::HandleRead()` 的描述
@@ -637,6 +654,15 @@ scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
   - improved 目标选择支持剩余可见时间门控、平滑负载压力与源站负载导向卸载
   - 将 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的当前口径同步到 `4.1`
 
+### `4.2`
+  - 对应 tag：`research-v4.2`
+  - 对应提交：本次 `4.2` 发布提交
+  - 当前正式收口新默认几何：`RAAN=-1 deg`、`planeTimeOffset=3.0 s`、`alignmentReferenceTime=15 s`、`overpassGap=3 s`
+  - 当前正式收口中等负载默认口径：`lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
+  - 当前 improved 默认起点切到 `I31`：`stableLead=0.12 s`、`jointScoreMargin=0.03`
+  - 修复关闭吞吐 trace 时 `handover_event_trace.csv` 不再输出的问题
+  - 将 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的当前口径同步到 `4.2`
+
 ### `4.0.1`
   - 当前稳定节点
   - 对应 tag：`research-v4.0.1`
@@ -657,6 +683,16 @@ scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
 - `loadScore` 从单纯人数比提升为“线性容量比 + 平滑饱和”的平滑压力分数
 - 源站负载压力会动态增强负载项、放宽负载覆写门槛，并奖励能够减轻源站压力的候选
 - 同步 `docs/`、`scratch/` 与中期汇报文档的版本和主线口径
+
+## `4.2` 已发布包
+- `research-v4.2` 代表当前 measurement-driven baseline / improved 主线下的新稳定收口快照，重点是稳定双轨竞争几何、把业务口径收回到中等负载，并把 improved 默认起点切到 `I31`
+
+`v4.2` 已纳入的内容：
+- 默认几何调整为 `interPlaneRaanSpacingDeg=-1 deg`、`interPlaneTimeOffsetSeconds=3.0 s`、`alignmentReferenceTimeSeconds=15 s`、`overpassGapSeconds=3 s`
+- 默认业务与容量口径调整为 `lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
+- improved 默认参数调整为 `improvedMinStableLeadTimeSeconds=0.12 s`、`improvedMinJointScoreMargin=0.03`
+- `run_handover_experiment_matrix.sh` 默认结果路径推进到 `scratch/results/exp/v4.2`，并加入围绕 `I31` 的优化矩阵入口
+- `handover_event_trace.csv` 输出链从吞吐 trace 开关中解耦，避免关闭吞吐 trace 时丢失事件 trace
 
 ## `4.0.1` 已发布包
 - `research-v4.0.1` 代表当前 measurement-driven baseline / improved 主线的第一版稳定收口快照，重点是统一测量驱动切换入口、清理旧代理链，并把文档口径同步到同一条研究主线上

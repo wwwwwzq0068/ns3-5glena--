@@ -63,6 +63,12 @@ struct HandoverAggregate
     /** 全部 UE 的切换成功次数总和。 */
     uint32_t totalHoEndOk = 0;
 
+    /** 全部 UE 的切换失败次数总和。 */
+    uint32_t totalHoEndError = 0;
+
+    /** 仿真结束前尚未闭合的切换次数。 */
+    uint32_t totalHoUnresolved = 0;
+
     /** 全部成功切换的执行时延总和，单位秒。 */
     double totalHoDelaySeconds = 0.0;
 
@@ -83,6 +89,21 @@ struct HandoverAggregate
 
     /** 全部 UE 识别到的短时回切总数。 */
     uint32_t totalPingPongCount = 0;
+
+    /** 失败原因明细：无专用 preamble。 */
+    uint32_t totalFailureNoPreamble = 0;
+
+    /** 失败原因明细：达到最大 RACH 尝试次数。 */
+    uint32_t totalFailureMaxRach = 0;
+
+    /** 失败原因明细：source leaving timeout。 */
+    uint32_t totalFailureLeaving = 0;
+
+    /** 失败原因明细：target joining timeout。 */
+    uint32_t totalFailureJoining = 0;
+
+    /** 失败原因明细：未知或未捕获。 */
+    uint32_t totalFailureUnknown = 0;
 };
 
 /**
@@ -127,10 +148,20 @@ BuildHandoverAggregate(const std::vector<UeRuntime>& ues)
     {
         out.totalHoStart += ue.handoverStartCount;
         out.totalHoEndOk += ue.handoverEndOkCount;
+        out.totalHoEndError += ue.handoverEndErrorCount;
         out.totalHoDelaySeconds += ue.totalHandoverExecutionDelaySeconds;
         out.totalHoRecovered += ue.throughputRecoveryCount;
         out.totalHoRecoverySeconds += ue.totalThroughputRecoverySeconds;
         out.totalPingPongCount += ue.pingPongCount;
+        out.totalFailureNoPreamble += ue.handoverFailureNoPreambleCount;
+        out.totalFailureMaxRach += ue.handoverFailureMaxRachCount;
+        out.totalFailureLeaving += ue.handoverFailureLeavingCount;
+        out.totalFailureJoining += ue.handoverFailureJoiningCount;
+        out.totalFailureUnknown += ue.handoverFailureUnknownCount;
+    }
+    if (out.totalHoStart >= out.totalHoEndOk + out.totalHoEndError)
+    {
+        out.totalHoUnresolved = out.totalHoStart - out.totalHoEndOk - out.totalHoEndError;
     }
     if (out.totalHoStart > 0)
     {
@@ -160,16 +191,9 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
     const DlTrafficAggregate aggregate =
         BuildDlTrafficAggregate(ues, appDurationSeconds, udpPacketSizeBytes);
 
-    std::cout << "=== Final UE DL stats ===" << std::endl;
-    for (const auto& summary : aggregate.perUe)
-    {
-        std::cout << "UE" << summary.ueIndex << ": packets=" << summary.rxPackets
-                  << " avgThroughput=" << std::fixed << std::setprecision(3)
-                  << summary.averageDlThroughputMbps << " Mbps" << std::endl;
-    }
-    std::cout << "Received packets(total): " << aggregate.totalRxPackets << std::endl;
-    std::cout << "Average DL throughput: " << std::fixed << std::setprecision(3)
-              << aggregate.totalAverageDlThroughputMbps << " Mbps (total)" << std::endl;
+    std::cout << "=== Research summary ===" << std::endl;
+    std::cout << "Average DL throughput(total): " << std::fixed << std::setprecision(3)
+              << aggregate.totalAverageDlThroughputMbps << " Mbps" << std::endl;
 }
 
 /**
@@ -178,14 +202,8 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
 inline void
 PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSeconds)
 {
-    std::cout << "=== Handover summary ===" << std::endl;
     const HandoverAggregate aggregate = BuildHandoverAggregate(ues);
-    std::cout << "Total HO start: " << aggregate.totalHoStart << std::endl;
-    std::cout << "Total HO success: " << aggregate.totalHoEndOk << std::endl;
-    std::cout << "Overall HO success rate: " << std::fixed << std::setprecision(1)
-              << aggregate.overallSuccessRate << "%" << std::endl;
-    std::cout << "Average HO execution delay: " << std::fixed << std::setprecision(3)
-              << aggregate.averageDelayMs << " ms" << std::endl;
+    std::cout << "Completed handovers: " << aggregate.totalHoEndOk << std::endl;
     if (aggregate.totalHoRecovered > 0)
     {
         std::cout << "Average throughput recovery time: " << std::fixed << std::setprecision(3)
@@ -198,39 +216,6 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSec
     std::cout << "Total ping-pong events: " << aggregate.totalPingPongCount
               << " (window=" << std::fixed << std::setprecision(3) << pingPongWindowSeconds
               << "s)" << std::endl;
-
-    for (uint32_t ueIdx = 0; ueIdx < ues.size(); ++ueIdx)
-    {
-        const auto& ue = ues[ueIdx];
-        const double ueSuccessRate =
-            (ue.handoverStartCount > 0)
-                ? (100.0 * static_cast<double>(ue.handoverEndOkCount) / static_cast<double>(ue.handoverStartCount))
-                : 0.0;
-        const double ueAvgDelayMs =
-            (ue.handoverEndOkCount > 0)
-                ? (ue.totalHandoverExecutionDelaySeconds * 1000.0 / static_cast<double>(ue.handoverEndOkCount))
-                : 0.0;
-        const bool hasRecovery = ue.throughputRecoveryCount > 0;
-        const double ueAvgRecoveryMs =
-            hasRecovery
-                ? (ue.totalThroughputRecoverySeconds * 1000.0 /
-                   static_cast<double>(ue.throughputRecoveryCount))
-                : 0.0;
-
-        std::cout << "UE" << ueIdx << ": ho=" << ue.handoverEndOkCount << "/" << ue.handoverStartCount
-                  << " successRate=" << std::fixed << std::setprecision(1) << ueSuccessRate << "%"
-                  << " avgDelay=" << std::fixed << std::setprecision(3) << ueAvgDelayMs << " ms"
-                  << " avgRecovery=";
-        if (hasRecovery)
-        {
-            std::cout << std::fixed << std::setprecision(3) << ueAvgRecoveryMs << " ms";
-        }
-        else
-        {
-            std::cout << "n/a";
-        }
-        std::cout << " pingPong=" << ue.pingPongCount << std::endl;
-    }
 }
 
 } // namespace ns3

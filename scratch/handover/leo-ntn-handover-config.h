@@ -37,14 +37,14 @@ struct BaselineSimulationConfig
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
     uint32_t orbitPlaneCount = 2;
-    double interPlaneRaanSpacingDeg = -2.0;
-    double interPlaneTimeOffsetSeconds = 0.0;
+    double interPlaneRaanSpacingDeg = -1.0;
+    double interPlaneTimeOffsetSeconds = 3.0;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
-    double alignmentReferenceTimeSeconds = 20.0;
-    double overpassGapSeconds = 2.0;
+    double alignmentReferenceTimeSeconds = 15.0;
+    double overpassGapSeconds = 3.0;
     double overpassTimeOffsetSeconds = 0.0;
     double updateIntervalMs = 100.0;
     double minElevationDeg = 10.0;
@@ -80,7 +80,7 @@ struct BaselineSimulationConfig
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
-    double lambda = 1000.0;
+    double lambda = 250.0;
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
@@ -92,7 +92,7 @@ struct BaselineSimulationConfig
     double atmLossDb = 0.5;
 
     double hoHysteresisDb = 2.0;
-    uint32_t hoTttMs = 200;
+    uint32_t hoTttMs = 160;
     uint16_t measurementReportIntervalMs = 120;
     uint8_t measurementMaxReportCells = 8;
     std::string handoverMode = "baseline";
@@ -101,10 +101,11 @@ struct BaselineSimulationConfig
     double improvedVisibilityWeight = 0.2;
     double improvedMinLoadScoreDelta = 0.2;
     double improvedMaxSignalGapDb = 3.0;
-    double improvedReturnGuardSeconds = 1.5;
+    double improvedMinStableLeadTimeSeconds = 0.12;
     double improvedMinVisibilitySeconds = 1.0;
     double improvedVisibilityHorizonSeconds = 8.0;
     double improvedVisibilityPredictionStepSeconds = 0.5;
+    double improvedMinJointScoreMargin = 0.03;
     double pingPongWindowSeconds = 1.5;
     bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
@@ -122,7 +123,7 @@ struct BaselineSimulationConfig
     double throughputReportIntervalSeconds = 0.0;
     bool enableHandoverThroughputTrace = true;
     double handoverThroughputTraceIntervalSeconds = 0.005;
-    double maxSupportedUesPerSatellite = 3.0;
+    double maxSupportedUesPerSatellite = 5.0;
     double loadCongestionThreshold = 0.8;
     bool enableSrsInFSlots = false;
     bool enableSrsInUlSlots = false;
@@ -177,6 +178,12 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("outputDir", config.outputDir);
     addArg("printGridCatalog", config.printGridCatalog);
     addArg("gridCatalogPath", config.gridCatalogPath);
+    addArg("centralFrequency", config.centralFrequency);
+    addArg("bandwidth", config.bandwidth);
+    addArg("lambda", config.lambda);
+    addArg("udpPacketSize", config.udpPacketSize);
+    addArg("gnbTxPower", config.gnbTxPower);
+    addArg("ueTxPower", config.ueTxPower);
     addArg("beamMaxGainDbi", config.beamMaxGainDbi);
     addArg("scanMaxDeg", config.scanMaxDeg);
     addArg("theta3dBDeg", config.theta3dBDeg);
@@ -193,10 +200,11 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("improvedVisibilityWeight", config.improvedVisibilityWeight);
     addArg("improvedMinLoadScoreDelta", config.improvedMinLoadScoreDelta);
     addArg("improvedMaxSignalGapDb", config.improvedMaxSignalGapDb);
-    addArg("improvedReturnGuardSeconds", config.improvedReturnGuardSeconds);
+    addArg("improvedMinStableLeadTimeSeconds", config.improvedMinStableLeadTimeSeconds);
     addArg("improvedMinVisibilitySeconds", config.improvedMinVisibilitySeconds);
     addArg("improvedVisibilityHorizonSeconds", config.improvedVisibilityHorizonSeconds);
     addArg("improvedVisibilityPredictionStepSeconds", config.improvedVisibilityPredictionStepSeconds);
+    addArg("improvedMinJointScoreMargin", config.improvedMinJointScoreMargin);
     addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
     addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
@@ -328,14 +336,16 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "improvedMinLoadScoreDelta must be >= 0");
     NS_ABORT_MSG_IF(config.improvedMaxSignalGapDb < 0.0,
                     "improvedMaxSignalGapDb must be >= 0");
-    NS_ABORT_MSG_IF(config.improvedReturnGuardSeconds < 0.0,
-                    "improvedReturnGuardSeconds must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedMinStableLeadTimeSeconds < 0.0,
+                    "improvedMinStableLeadTimeSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.improvedMinVisibilitySeconds < 0.0,
                     "improvedMinVisibilitySeconds must be >= 0");
     NS_ABORT_MSG_IF(config.improvedVisibilityHorizonSeconds <= 0.0,
                     "improvedVisibilityHorizonSeconds must be > 0");
     NS_ABORT_MSG_IF(config.improvedVisibilityPredictionStepSeconds <= 0.0,
                     "improvedVisibilityPredictionStepSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.improvedMinJointScoreMargin < 0.0,
+                    "improvedMinJointScoreMargin must be >= 0");
     NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");
