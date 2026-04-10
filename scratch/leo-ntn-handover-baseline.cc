@@ -4,17 +4,15 @@
 #include "ns3/geocentric-constant-position-mobility-model.h"
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
-#include "ns3/nr-rrc-protocol-ideal.h"
+#include "ns3/nr-leo-a3-measurement-handover-algorithm.h"
 #include "ns3/nr-gnb-rrc.h"
 #include "ns3/nr-module.h"
 #include "ns3/nr-ue-rrc.h"
 #include "handover/beam-link-budget.h"
 #include "handover/leo-ntn-handover-config.h"
-#include "handover/leo-ntn-handover-decision.h"
 #include "handover/leo-orbit-calculator.h"
 #include "handover/leo-ntn-handover-reporting.h"
 #include "handover/leo-ntn-handover-runtime.h"
-#include "handover/leo-ntn-handover-scenario.h"
 #include "handover/leo-ntn-handover-update.h"
 #include "handover/leo-ntn-handover-utils.h"
 #include "handover/wgs84-hex-grid.h"
@@ -65,6 +63,8 @@ static std::map<uint64_t, uint32_t> g_imsiToUe;
 
 // 参考 UE 地面点，用于轨道自动对齐和默认几何计算。
 static LeoOrbitCalculator::GroundPoint g_ueGroundPoint;
+// 默认小区锚点地面位置；未启用六边形网格时，波束会指向该位置。
+static LeoOrbitCalculator::GroundPoint g_cellGroundPoint;
 // 仿真纪元的格林威治恒星时。
 static double g_gmstAtEpochRad = 0.0;
 // 最小可见仰角门限。
@@ -73,19 +73,10 @@ static double g_minElevationRad = LeoOrbitCalculator::DegToRad(10.0);
 static double g_carrierFrequencyHz = 2e9;
 // 简化波束与链路预算模型配置。
 static BeamModelConfig g_beamModelConfig;
-// X2 时延由固定处理时延和按卫星对几何距离折算的传播时延组成。
-static double g_x2ProcessingDelayMs = 2.0;
-static double g_x2MinLinkDelayMs = 1.0;
-static double g_x2PropagationSpeedMetersPerSecond = 299792458.0;
-static bool g_enableDynamicHoPreparation = true;
-static double g_hoPreparationBaseDelayMs = 4.0;
-static double g_hoPreparationLoadPenaltyMs = 12.0;
-static double g_hoPreparationLowElevationPenaltyMs = 8.0;
-static double g_hoPreparationExecutionGuardMs = 20.0;
-// real RRC smoke run 的 bootstrap 只用 ideal transport；首轮接入完成后再切回 real transport。
-static bool g_enableIdealRrcBootstrap = false;
-static bool g_bootstrapTransportRestored = false;
-static uint32_t g_bootstrapConnectionEstablishedCount = 0;
+// 是否启用 WGS84 六边形网格作为地面锚点。
+static bool g_useWgs84HexGrid = true;
+// 是否将六边形网格中心锁定到 UE 所在区域。
+static bool g_lockGridCenterToUe = true;
 static double g_gridCenterLatitudeDeg = 45.6;
 static double g_gridCenterLongitudeDeg = 84.9;
 static double g_gridWidthKm = 400.0;
@@ -99,10 +90,18 @@ static std::string g_gridCatalogPath = JoinOutputPath(g_outputDir, "hex_grid_cel
 // 预生成的六边形网格目录。
 static std::vector<Wgs84HexGridCell> g_hexGridCells;
 
+// 以下开关控制控制台输出详略程度。
+static bool g_compactReport = true;
+static bool g_printGridAnchorEvents = false;
+static bool g_printKpiReports = false;
+static bool g_printNrtEvents = false;
+static bool g_printOrbitCheck = false;
+static bool g_printRrcStateTransitions = false;
+static double g_kpiIntervalSeconds = 1.0;
 static bool g_printSimulationProgress = true;
 static double g_progressReportIntervalSeconds = 2.0;
 static double g_progressStopTimeSeconds = 0.0;
-static double g_offeredPacketRatePerUe = 1000.0;
+static double g_offeredPacketRatePerUe = 250.0;
 static double g_maxSupportedUesPerSatellite = 5.0;
 static double g_loadCongestionThreshold = 0.8;
 static double g_hoHysteresisDb = 2.0;
@@ -113,16 +112,24 @@ static constexpr uint32_t g_recoveryReferenceWindowSamples = 20;
 static constexpr uint32_t g_recoveryRequiredConsecutiveSamples = 3;
 static constexpr double g_recoveryThresholdRatio = 0.9;
 
+// 当前 handover 主链统一走标准 PHY/RRC MeasurementReport。
+enum class HandoverMode
+{
+    BASELINE,
+    IMPROVED,
+};
+
 static HandoverMode g_handoverMode = HandoverMode::BASELINE;
 static double g_improvedSignalWeight = 0.7;
 static double g_improvedLoadWeight = 0.3;
 static double g_improvedVisibilityWeight = 0.2;
 static double g_improvedMinLoadScoreDelta = 0.2;
 static double g_improvedMaxSignalGapDb = 3.0;
-static double g_improvedReturnGuardSeconds = 0.5;
+static double g_improvedMinStableLeadTimeSeconds = 0.12;
 static double g_improvedMinVisibilitySeconds = 1.0;
 static double g_improvedVisibilityHorizonSeconds = 8.0;
-static double g_improvedVisibilityPredictionStepSeconds = 0.2;
+static double g_improvedVisibilityPredictionStepSeconds = 0.5;
+static double g_improvedMinJointScoreMargin = 0.03;
 static uint16_t g_measurementReportIntervalMs = 120;
 static uint8_t g_measurementMaxReportCells = 8;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
@@ -133,6 +140,23 @@ static std::ofstream g_satAnchorTrace;
 static std::ofstream g_handoverThroughputTrace;
 // 精确记录 HO-START / HO-END-OK 时刻的事件导出文件。
 static std::ofstream g_handoverEventTrace;
+
+static std::string
+FormatUintList(const std::vector<uint32_t>& values)
+{
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i > 0)
+        {
+            oss << ",";
+        }
+        oss << values[i];
+    }
+    oss << "]";
+    return oss.str();
+}
 // ============================================================================
 // 运行时复位与事件回调
 // ============================================================================
@@ -147,142 +171,6 @@ ResetRuntimeState(uint32_t gNbNum)
     {
         ResetUeRuntime(ue, gNbNum);
     }
-}
-
-static void
-ResetPendingRecoveryState(UeRuntime& ue)
-{
-    ue.waitingForThroughputRecovery = false;
-    ue.waitingRecoveryHoId = 0;
-    ue.waitingRecoveryStartTimeSeconds = -1.0;
-    ue.waitingRecoverySatisfiedSamples = 0;
-    ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-    ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-}
-
-static void
-ResetPendingPreparationState(UeRuntime& ue)
-{
-    ue.hasPendingHoPreparation = false;
-    ue.pendingPreparationSourceCell = 0;
-    ue.pendingPreparationTargetCell = 0;
-    ue.pendingPreparationRnti = 0;
-}
-
-static void
-RestoreRealRrcTransport()
-{
-    if (!g_enableIdealRrcBootstrap || g_bootstrapTransportRestored)
-    {
-        return;
-    }
-
-    for (auto& ue : g_ues)
-    {
-        if (!ue.dev || !ue.dev->GetRrc())
-        {
-            continue;
-        }
-        auto realUeProtocol = ue.dev->GetRrc()->GetObject<nr::UeRrcProtocolReal>();
-        if (realUeProtocol)
-        {
-            realUeProtocol->SetNrUeRrcSapProvider(ue.dev->GetRrc()->GetNrUeRrcSapProvider());
-            ue.dev->GetRrc()->SetNrUeRrcSapUser(realUeProtocol->GetNrUeRrcSapUser());
-        }
-    }
-
-    for (auto& sat : g_satellites)
-    {
-        if (!sat.rrc)
-        {
-            continue;
-        }
-        auto realGnbProtocol = sat.rrc->GetObject<nr::NrGnbRrcProtocolReal>();
-        if (realGnbProtocol)
-        {
-            realGnbProtocol->SetNrGnbRrcSapProvider(sat.rrc->GetNrGnbRrcSapProvider());
-            sat.rrc->SetNrGnbRrcSapUser(realGnbProtocol->GetNrGnbRrcSapUser());
-        }
-    }
-
-    g_bootstrapTransportRestored = true;
-    std::cout << "[ControlPlane] restored real RRC transport after bootstrap" << std::endl;
-}
-
-static void
-MaybeRestoreRealRrcTransport()
-{
-    if (!g_enableIdealRrcBootstrap || g_bootstrapTransportRestored)
-    {
-        return;
-    }
-
-    if (g_bootstrapConnectionEstablishedCount < g_ues.size())
-    {
-        return;
-    }
-
-    Simulator::Schedule(Seconds(1.0), &RestoreRealRrcTransport);
-}
-
-static void
-EnableIdealRrcBootstrapTransport()
-{
-    if (!g_enableIdealRrcBootstrap)
-    {
-        return;
-    }
-
-    for (auto& sat : g_satellites)
-    {
-        if (!sat.rrc)
-        {
-            continue;
-        }
-        auto idealGnbProtocol = CreateObject<NrGnbRrcProtocolIdeal>();
-        idealGnbProtocol->SetNrGnbRrcSapProvider(sat.rrc->GetNrGnbRrcSapProvider());
-        sat.rrc->SetNrGnbRrcSapUser(idealGnbProtocol->GetNrGnbRrcSapUser());
-        sat.rrc->AggregateObject(idealGnbProtocol);
-    }
-}
-
-static void
-EnableIdealRrcBootstrapTransport(Ptr<NrUeNetDevice> ueDev)
-{
-    if (!g_enableIdealRrcBootstrap || !ueDev || !ueDev->GetRrc())
-    {
-        return;
-    }
-
-    auto idealUeProtocol = CreateObject<NrUeRrcProtocolIdeal>();
-    idealUeProtocol->SetUeRrc(ueDev->GetRrc());
-    idealUeProtocol->SetNrUeRrcSapProvider(ueDev->GetRrc()->GetNrUeRrcSapProvider());
-    ueDev->GetRrc()->SetNrUeRrcSapUser(idealUeProtocol->GetNrUeRrcSapUser());
-    ueDev->GetRrc()->AggregateObject(idealUeProtocol);
-}
-
-static void
-ClearPendingHandoverState(UeRuntime& ue, bool resetRecoveryState = true)
-{
-    ue.hasPendingHoStart = false;
-    ue.lastHoStartTimeSeconds = -1.0;
-    ue.activeHandoverTraceId = 0;
-    ResetPendingPreparationState(ue);
-    if (resetRecoveryState)
-    {
-        ResetPendingRecoveryState(ue);
-    }
-}
-
-static uint32_t
-AcquireFailureTraceId(UeRuntime& ue)
-{
-    if (ue.activeHandoverTraceId != 0)
-    {
-        return ue.activeHandoverTraceId;
-    }
-    ue.handoverTraceSequence++;
-    return ue.handoverTraceSequence;
 }
 
 /**
@@ -327,9 +215,9 @@ FlushSatelliteAnchorTraceRows(double nowSeconds)
  * 这个函数只在启用 WGS84 六边形网格时生效。
  */
 static void
-UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef)
+UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double nowSeconds, bool forceLog)
 {
-    if (g_hexGridCells.empty() || satIndex >= g_satellites.size())
+    if (!g_useWgs84HexGrid || g_hexGridCells.empty() || satIndex >= g_satellites.size())
     {
         return;
     }
@@ -343,25 +231,50 @@ UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef)
 
     sat.nearestGridIds = anchor.nearestGridIds;
     sat.cellAnchorEcef = anchor.anchorEcef;
+
+    if (forceLog || (g_printGridAnchorEvents && sat.currentAnchorGridId != anchor.anchorGridId))
+    {
+        std::cout << "[GRID-ANCHOR] t=" << std::fixed << std::setprecision(3) << nowSeconds << "s"
+                  << " sat" << satIndex
+                  << " cell=" << sat.dev->GetCellId()
+                  << " anchorGrid=" << anchor.anchorGridId
+                  << " nearestK=" << FormatUintList(sat.nearestGridIds) << std::endl;
+    }
+
     sat.currentAnchorGridId = anchor.anchorGridId;
 }
 
 static void
-ReportUeConnectionEstablished(std::string, uint64_t imsi, uint16_t, uint16_t)
+ReportStateTransition(std::string,
+                      uint64_t imsi,
+                      uint16_t cellId,
+                      uint16_t rnti,
+                      NrUeRrc::State oldState,
+                      NrUeRrc::State newState)
 {
+    // 默认关闭 UE RRC 状态细节，只在深度排障时打开。
+    if (!g_printRrcStateTransitions)
+    {
+        return;
+    }
+
+    if (oldState == newState)
+    {
+        return;
+    }
+
+    std::ostringstream prefix;
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
-        auto& ue = g_ues[*ueIdx];
-        if (!ue.bootstrapConnectionEstablished)
-        {
-            ue.bootstrapConnectionEstablished = true;
-            if (g_enableIdealRrcBootstrap)
-            {
-                g_bootstrapConnectionEstablishedCount++;
-                MaybeRestoreRealRrcTransport();
-            }
-        }
+        prefix << " ue=" << *ueIdx;
     }
+
+    std::cout << "[UE-RRC] t=" << std::fixed << std::setprecision(3)
+              << Simulator::Now().GetSeconds() << "s"
+              << prefix.str()
+              << " cell=" << cellId
+              << " state=" << static_cast<int>(oldState) << "->" << static_cast<int>(newState)
+              << std::endl;
 }
 
 static int32_t
@@ -375,52 +288,357 @@ ResolveSatelliteIndexFromCellId(uint16_t cellId)
     return static_cast<int32_t>(it->second);
 }
 
-static MeasurementDrivenDecisionContext
-BuildMeasurementDrivenDecisionContext()
+static HandoverMode
+ParseHandoverMode(const std::string& handoverMode)
 {
-    return MeasurementDrivenDecisionContext{g_satellites,
-                                            g_ues,
-                                            g_cellToSatellite,
-                                            g_gmstAtEpochRad,
-                                            g_carrierFrequencyHz,
-                                            g_minElevationRad,
-                                            g_improvedVisibilityHorizonSeconds,
-                                            g_improvedVisibilityPredictionStepSeconds,
-                                            g_enableDynamicHoPreparation,
-                                            g_x2ProcessingDelayMs,
-                                            g_x2MinLinkDelayMs,
-                                            g_x2PropagationSpeedMetersPerSecond,
-                                            g_hoPreparationBaseDelayMs,
-                                            g_hoPreparationLoadPenaltyMs,
-                                            g_hoPreparationLowElevationPenaltyMs,
-                                            g_loadCongestionThreshold,
-                                            g_handoverMode,
-                                            g_improvedSignalWeight,
-                                            g_improvedLoadWeight,
-                                            g_improvedVisibilityWeight,
-                                            g_improvedMinLoadScoreDelta,
-                                            g_improvedMaxSignalGapDb,
-                                            g_improvedReturnGuardSeconds,
-                                            g_improvedMinVisibilitySeconds};
+    if (handoverMode == "improved")
+    {
+        return HandoverMode::IMPROVED;
+    }
+    return HandoverMode::BASELINE;
+}
+
+static const char*
+ToString(HandoverMode handoverMode)
+{
+    return handoverMode == HandoverMode::IMPROVED ? "improved" : "baseline";
+}
+
+static std::optional<uint32_t>
+ResolveUeIndexFromServingCellAndRnti(uint16_t servingCellId, uint16_t rnti)
+{
+    for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
+    {
+        const auto& ue = g_ues[ueIdx];
+        if (!ue.dev || !ue.dev->GetRrc())
+        {
+            continue;
+        }
+
+        if (ue.dev->GetRrc()->GetCellId() == servingCellId && ue.dev->GetRrc()->GetRnti() == rnti)
+        {
+            return ueIdx;
+        }
+    }
+
+    return std::nullopt;
+}
+
+struct MeasurementCandidate
+{
+    uint32_t satIdx = std::numeric_limits<uint32_t>::max();
+    uint16_t cellId = 0;
+    double rsrpDbm = -std::numeric_limits<double>::infinity();
+    double loadScore = 1.0;
+    bool admissionAllowed = false;
+    double remainingVisibilitySeconds = 0.0;
+    double visibilityScore = 0.0;
+    double jointScore = -std::numeric_limits<double>::infinity();
+};
+
+static double
+PredictRemainingVisibilitySeconds(uint32_t satIdx,
+                                  const LeoOrbitCalculator::GroundPoint& ueGroundPoint,
+                                  double nowSeconds)
+{
+    if (satIdx >= g_satellites.size())
+    {
+        return 0.0;
+    }
+
+    const double horizonSeconds = std::max(0.0, g_improvedVisibilityHorizonSeconds);
+    if (horizonSeconds <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const auto computeVisible = [&](double sampleTimeSeconds) {
+        return LeoOrbitCalculator::Calculate(sampleTimeSeconds,
+                                             g_satellites[satIdx].orbit,
+                                             g_gmstAtEpochRad,
+                                             ueGroundPoint,
+                                             g_carrierFrequencyHz,
+                                             g_minElevationRad)
+            .visible;
+    };
+
+    if (!computeVisible(nowSeconds))
+    {
+        return 0.0;
+    }
+
+    const double stepSeconds = std::max(0.05, g_improvedVisibilityPredictionStepSeconds);
+    const double horizonEndSeconds = nowSeconds + horizonSeconds;
+    double previousVisibleTimeSeconds = nowSeconds;
+
+    for (double probeTimeSeconds = nowSeconds + stepSeconds;
+         probeTimeSeconds <= horizonEndSeconds + 1e-9;
+         probeTimeSeconds += stepSeconds)
+    {
+        const double clampedProbeTimeSeconds = std::min(probeTimeSeconds, horizonEndSeconds);
+        if (computeVisible(clampedProbeTimeSeconds))
+        {
+            previousVisibleTimeSeconds = clampedProbeTimeSeconds;
+            continue;
+        }
+
+        double lowSeconds = previousVisibleTimeSeconds;
+        double highSeconds = clampedProbeTimeSeconds;
+        for (uint32_t iter = 0; iter < 8; ++iter)
+        {
+            const double midSeconds = 0.5 * (lowSeconds + highSeconds);
+            if (computeVisible(midSeconds))
+            {
+                lowSeconds = midSeconds;
+            }
+            else
+            {
+                highSeconds = midSeconds;
+            }
+        }
+        return std::max(0.0, lowSeconds - nowSeconds);
+    }
+
+    return horizonSeconds;
+}
+
+static double
+ComputeVisibilityScore(double remainingVisibilitySeconds)
+{
+    return std::clamp(remainingVisibilitySeconds /
+                          std::max(1e-9, g_improvedVisibilityHorizonSeconds),
+                      0.0,
+                      1.0);
+}
+
+static double
+ComputeJointScore(const MeasurementCandidate& candidate,
+                  double minRsrpDbm,
+                  double signalSpanDb,
+                  double normalizedSignalWeight,
+                  double normalizedLoadWeight,
+                  double normalizedVisibilityWeight,
+                  double sourceLoadScore,
+                  double sourceLoadPressure)
+{
+    const double signalScore = (candidate.rsrpDbm - minRsrpDbm) / signalSpanDb;
+    const double loadUtility = std::clamp(1.0 - candidate.loadScore, 0.0, 1.0);
+    const double loadReliefUtility = std::clamp(sourceLoadScore - candidate.loadScore, 0.0, 1.0);
+    return normalizedSignalWeight * signalScore +
+           normalizedLoadWeight * loadUtility +
+           normalizedVisibilityWeight * candidate.visibilityScore +
+           0.25 * sourceLoadPressure * loadReliefUtility;
+}
+
+static double
+ComputeLoadPressureFromScore(double loadScore)
+{
+    // 将负载分数按当前拥塞阈值重新归一化，便于在源站接近拥塞时更快放大负载导向。
+    const double congestionSpan = std::max(1e-9, g_loadCongestionThreshold);
+    return std::clamp(loadScore / congestionSpan, 0.0, 1.0);
 }
 
 static void
-WriteHandoverEventTraceRow(double nowSeconds,
-                           uint32_t ueIdx,
-                           uint32_t handoverId,
-                           const std::string& eventName,
-                           uint16_t sourceCellId,
-                           uint16_t targetCellId,
-                           double delayMs,
-                           double recoveryMs,
-                           bool pingPongDetected);
+ClearStableLeadTracking(UeRuntime& ue)
+{
+    ue.stableLeadSourceCell = 0;
+    ue.stableLeadTargetCell = 0;
+    ue.stableLeadSinceSeconds = -1.0;
+}
 
-static void
-ExecutePreparedHandover(uint32_t ueIdx,
-                        uint16_t sourceCellId,
-                        uint16_t targetCellId,
-                        uint16_t rnti,
-                        uint32_t handoverTraceId);
+static std::optional<MeasurementCandidate>
+SelectMeasurementDrivenTarget(uint16_t servingCellId,
+                              uint32_t sourceSatIdx,
+                              const UeRuntime& ue,
+                              const NrRrcSap::MeasResults& measResults)
+{
+    std::vector<MeasurementCandidate> candidates;
+    candidates.reserve(measResults.measResultListEutra.size());
+
+    for (const auto& neighbour : measResults.measResultListEutra)
+    {
+        if (!neighbour.haveRsrpResult || neighbour.physCellId == servingCellId)
+        {
+            continue;
+        }
+
+        const auto satIt = g_cellToSatellite.find(neighbour.physCellId);
+        if (satIt == g_cellToSatellite.end() || satIt->second >= g_satellites.size())
+        {
+            continue;
+        }
+
+        const auto& satellite = g_satellites[satIt->second];
+        MeasurementCandidate candidate;
+        candidate.satIdx = satIt->second;
+        candidate.cellId = neighbour.physCellId;
+        candidate.rsrpDbm = nr::EutranMeasurementMapping::RsrpRange2Dbm(neighbour.rsrpResult);
+        candidate.loadScore = satellite.loadScore;
+        candidate.admissionAllowed = satellite.admissionAllowed;
+        candidate.remainingVisibilitySeconds =
+            PredictRemainingVisibilitySeconds(candidate.satIdx, ue.groundPoint, Simulator::Now().GetSeconds());
+        candidates.push_back(candidate);
+    }
+
+    if (candidates.empty())
+    {
+        return std::nullopt;
+    }
+
+    const double sourceLoadScore =
+        (sourceSatIdx < g_satellites.size()) ? g_satellites[sourceSatIdx].loadScore : 0.0;
+    const double sourceLoadPressure = ComputeLoadPressureFromScore(sourceLoadScore);
+    MeasurementCandidate servingCandidate;
+    servingCandidate.satIdx = sourceSatIdx;
+    servingCandidate.cellId = servingCellId;
+    servingCandidate.rsrpDbm =
+        nr::EutranMeasurementMapping::RsrpRange2Dbm(measResults.measResultPCell.rsrpResult);
+    servingCandidate.loadScore = sourceLoadScore;
+    servingCandidate.admissionAllowed = true;
+    servingCandidate.remainingVisibilitySeconds =
+        PredictRemainingVisibilitySeconds(sourceSatIdx, ue.groundPoint, Simulator::Now().GetSeconds());
+
+    if (g_handoverMode == HandoverMode::BASELINE)
+    {
+        return *std::max_element(candidates.begin(),
+                                 candidates.end(),
+                                 [](const auto& lhs, const auto& rhs) {
+                                     return lhs.rsrpDbm < rhs.rsrpDbm;
+                                 });
+    }
+
+    std::vector<MeasurementCandidate> filteredCandidates;
+    filteredCandidates.reserve(candidates.size());
+    std::copy_if(candidates.begin(),
+                 candidates.end(),
+                 std::back_inserter(filteredCandidates),
+                 [](const auto& candidate) { return candidate.admissionAllowed; });
+    if (filteredCandidates.empty())
+    {
+        filteredCandidates = candidates;
+    }
+
+    if (g_improvedMinVisibilitySeconds > 0.0)
+    {
+        std::vector<MeasurementCandidate> visibilityQualifiedCandidates;
+        visibilityQualifiedCandidates.reserve(filteredCandidates.size());
+        std::copy_if(filteredCandidates.begin(),
+                     filteredCandidates.end(),
+                     std::back_inserter(visibilityQualifiedCandidates),
+                     [](const auto& candidate) {
+                         return candidate.remainingVisibilitySeconds >=
+                                g_improvedMinVisibilitySeconds;
+                     });
+        if (!visibilityQualifiedCandidates.empty())
+        {
+            filteredCandidates = std::move(visibilityQualifiedCandidates);
+        }
+    }
+
+    const auto bestSignalIt =
+        std::max_element(filteredCandidates.begin(),
+                         filteredCandidates.end(),
+                         [](const auto& lhs, const auto& rhs) {
+                             return lhs.rsrpDbm < rhs.rsrpDbm;
+                         });
+    const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
+
+    const double dynamicMaxSignalGapDb =
+        g_improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
+    const double dynamicMinLoadScoreDelta =
+        std::max(0.05, g_improvedMinLoadScoreDelta * (1.0 - 0.5 * sourceLoadPressure));
+    const double effectiveSignalWeight =
+        std::max(0.15, g_improvedSignalWeight * (1.0 - 0.4 * sourceLoadPressure));
+    const double effectiveLoadWeight = g_improvedLoadWeight + 0.6 * sourceLoadPressure;
+    const double effectiveVisibilityWeight =
+        g_improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
+
+    std::vector<MeasurementCandidate> scoredCandidates;
+    scoredCandidates.reserve(filteredCandidates.size());
+    for (const auto& candidate : filteredCandidates)
+    {
+        const double signalGapDb = bestSignalCandidate.rsrpDbm - candidate.rsrpDbm;
+        const double loadAdvantage = bestSignalCandidate.loadScore - candidate.loadScore;
+        const bool keepCandidate = candidate.cellId == bestSignalCandidate.cellId ||
+                                   signalGapDb <= dynamicMaxSignalGapDb ||
+                                   loadAdvantage >= dynamicMinLoadScoreDelta;
+        if (!keepCandidate)
+        {
+            continue;
+        }
+        scoredCandidates.push_back(candidate);
+    }
+
+    if (scoredCandidates.empty())
+    {
+        return bestSignalCandidate;
+    }
+
+    double minRsrpDbm = std::numeric_limits<double>::infinity();
+    double maxRsrpDbm = -std::numeric_limits<double>::infinity();
+    if (std::isfinite(servingCandidate.rsrpDbm))
+    {
+        minRsrpDbm = servingCandidate.rsrpDbm;
+        maxRsrpDbm = servingCandidate.rsrpDbm;
+    }
+    for (const auto& candidate : scoredCandidates)
+    {
+        minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
+        maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
+    }
+
+    const double signalSpanDb = std::max(1e-9, maxRsrpDbm - minRsrpDbm);
+    const double totalWeight = std::max(
+        1e-9,
+        effectiveSignalWeight + effectiveLoadWeight + effectiveVisibilityWeight);
+    const double normalizedSignalWeight = effectiveSignalWeight / totalWeight;
+    const double normalizedLoadWeight = effectiveLoadWeight / totalWeight;
+    const double normalizedVisibilityWeight = effectiveVisibilityWeight / totalWeight;
+
+    for (auto& candidate : scoredCandidates)
+    {
+        candidate.visibilityScore = ComputeVisibilityScore(candidate.remainingVisibilitySeconds);
+        candidate.jointScore = ComputeJointScore(candidate,
+                                                minRsrpDbm,
+                                                signalSpanDb,
+                                                normalizedSignalWeight,
+                                                normalizedLoadWeight,
+                                                normalizedVisibilityWeight,
+                                                sourceLoadScore,
+                                                sourceLoadPressure);
+    }
+
+    const auto bestJointIt =
+        std::max_element(scoredCandidates.begin(),
+                         scoredCandidates.end(),
+                         [](const auto& lhs, const auto& rhs) {
+                             if (std::abs(lhs.jointScore - rhs.jointScore) > 1e-9)
+                             {
+                                 return lhs.jointScore < rhs.jointScore;
+                             }
+                             return lhs.rsrpDbm < rhs.rsrpDbm;
+                         });
+
+    if (std::isfinite(servingCandidate.rsrpDbm))
+    {
+        servingCandidate.visibilityScore =
+            ComputeVisibilityScore(servingCandidate.remainingVisibilitySeconds);
+        servingCandidate.jointScore = ComputeJointScore(servingCandidate,
+                                                        minRsrpDbm,
+                                                        signalSpanDb,
+                                                        normalizedSignalWeight,
+                                                        normalizedLoadWeight,
+                                                        normalizedVisibilityWeight,
+                                                        sourceLoadScore,
+                                                        sourceLoadPressure);
+        if (bestJointIt->jointScore < servingCandidate.jointScore + g_improvedMinJointScoreMargin)
+        {
+            return std::nullopt;
+        }
+    }
+
+    return *bestJointIt;
+}
 
 static void
 HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
@@ -433,62 +651,106 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         return;
     }
 
-    const auto ueIdx = ResolveUeIndexFromServingCellAndRnti(g_ues, sourceCellId, rnti);
+    const auto ueIdx = ResolveUeIndexFromServingCellAndRnti(sourceCellId, rnti);
     if (!ueIdx.has_value())
     {
         return;
     }
 
     auto& ue = g_ues[*ueIdx];
-    if (ue.hasPendingHoStart || ue.hasPendingHoPreparation)
+    if (ue.hasPendingHoStart)
     {
         return;
     }
 
-    const auto selectedTarget = SelectMeasurementDrivenTarget(BuildMeasurementDrivenDecisionContext(),
-                                                             sourceCellId,
-                                                             static_cast<uint32_t>(sourceSatIdx),
-                                                             ue,
-                                                             measResults);
+    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, static_cast<uint32_t>(sourceSatIdx), ue, measResults);
     if (!selectedTarget.has_value() || selectedTarget->cellId == 0)
     {
+        if (g_handoverMode == HandoverMode::IMPROVED)
+        {
+            ClearStableLeadTracking(ue);
+        }
         return;
     }
 
-    const double nowSeconds = Simulator::Now().GetSeconds();
-    const double preparationDelayMs = ComputeDynamicHandoverPreparationDelayMs(
-        BuildMeasurementDrivenDecisionContext(),
-        static_cast<uint32_t>(sourceSatIdx),
-        *selectedTarget,
-        ue,
-        nowSeconds);
+    if (g_handoverMode == HandoverMode::IMPROVED)
+    {
+        const double nowSeconds = Simulator::Now().GetSeconds();
+        const bool sameStableLead = ue.stableLeadSourceCell == sourceCellId &&
+                                    ue.stableLeadTargetCell == selectedTarget->cellId;
+        if (!sameStableLead)
+        {
+            ue.stableLeadSourceCell = sourceCellId;
+            ue.stableLeadTargetCell = selectedTarget->cellId;
+            ue.stableLeadSinceSeconds = nowSeconds;
+            return;
+        }
 
-    ue.handoverAttemptCount++;
-    ue.handoverTraceSequence++;
-    ue.activeHandoverTraceId = ue.handoverTraceSequence;
-    ue.hasPendingHoPreparation = true;
+        if (g_improvedMinStableLeadTimeSeconds > 0.0 &&
+            (nowSeconds - ue.stableLeadSinceSeconds + 1e-9 < g_improvedMinStableLeadTimeSeconds))
+        {
+            return;
+        }
+    }
+
+    ue.hasPendingHoStart = true;
     ue.lastHoStartSourceCell = sourceCellId;
     ue.lastHoStartTargetCell = selectedTarget->cellId;
-    ue.lastHoStartTimeSeconds = nowSeconds;
-    ue.pendingPreparationSourceCell = sourceCellId;
-    ue.pendingPreparationTargetCell = selectedTarget->cellId;
-    ue.pendingPreparationRnti = rnti;
-    WriteHandoverEventTraceRow(nowSeconds,
-                               *ueIdx,
-                               ue.activeHandoverTraceId,
-                               "HO_PREP_START",
-                               sourceCellId,
-                               selectedTarget->cellId,
-                               preparationDelayMs,
-                               std::numeric_limits<double>::quiet_NaN(),
-                               false);
-    Simulator::Schedule(MilliSeconds(preparationDelayMs),
-                        &ExecutePreparedHandover,
-                        *ueIdx,
-                        sourceCellId,
-                        selectedTarget->cellId,
-                        rnti,
-                        ue.activeHandoverTraceId);
+    ClearStableLeadTracking(ue);
+    g_satellites[sourceSatIdx].rrc->GetNrHandoverManagementSapUser()->TriggerHandover(
+        rnti,
+        selectedTarget->cellId);
+
+    if (!g_compactReport || g_printNrtEvents)
+    {
+        std::cout << "[HO-MEAS-TRIGGER] t=" << std::fixed << std::setprecision(3)
+                  << Simulator::Now().GetSeconds() << "s"
+                  << " mode=" << ToString(g_handoverMode)
+                  << " ue=" << *ueIdx
+                  << " sourceCell=" << sourceCellId
+                  << " targetCell=" << selectedTarget->cellId
+                  << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm";
+        if (g_handoverMode == HandoverMode::IMPROVED)
+        {
+            const double sourceLoadScore = g_satellites[sourceSatIdx].loadScore;
+            std::cout << " jointScore=" << selectedTarget->jointScore
+                      << " loadScore=" << selectedTarget->loadScore
+                      << " sourceLoad=" << sourceLoadScore
+                      << " sourceLoadPressure=" << ComputeLoadPressureFromScore(sourceLoadScore)
+                      << " remainVis=" << selectedTarget->remainingVisibilitySeconds << "s"
+                      << " visScore=" << selectedTarget->visibilityScore
+                      << " admission=" << (selectedTarget->admissionAllowed ? "YES" : "NO");
+        }
+        std::cout << std::endl;
+    }
+}
+
+static void
+InstallMeasurementDrivenHandoverAlgorithms(const BaselineSimulationConfig& config)
+{
+    g_handoverAlgorithms.clear();
+    g_handoverAlgorithms.reserve(g_satellites.size());
+
+    const uint8_t maxReportCells = static_cast<uint8_t>(
+        std::clamp<uint16_t>(config.measurementMaxReportCells, 1, 32));
+
+    for (auto& sat : g_satellites)
+    {
+        auto algorithm = CreateObject<NrLeoA3MeasurementHandoverAlgorithm>();
+        algorithm->SetAttribute("Hysteresis", DoubleValue(config.hoHysteresisDb));
+        algorithm->SetAttribute("TimeToTrigger", TimeValue(MilliSeconds(config.hoTttMs)));
+        algorithm->SetAttribute("ReportIntervalMs", UintegerValue(config.measurementReportIntervalMs));
+        algorithm->SetAttribute("MaxReportCells", UintegerValue(maxReportCells));
+        algorithm->SetAttribute("TriggerHandover", BooleanValue(false));
+        sat.rrc->SetNrHandoverManagementSapProvider(algorithm->GetNrHandoverManagementSapProvider());
+        algorithm->SetNrHandoverManagementSapUser(sat.rrc->GetNrHandoverManagementSapUser());
+        algorithm->TraceConnectWithoutContext("MeasurementReport",
+                                              MakeBoundCallback(&HandleMeasurementDrivenHandoverReport,
+                                                                sat.dev->GetCellId()));
+        sat.rrc->AggregateObject(algorithm);
+        algorithm->Initialize();
+        g_handoverAlgorithms.push_back(algorithm);
+    }
 }
 
 static void
@@ -548,7 +810,8 @@ WriteHandoverEventTraceRow(double nowSeconds,
                            uint16_t targetCellId,
                            double delayMs,
                            double recoveryMs,
-                           bool pingPongDetected)
+                           bool pingPongDetected,
+                           HandoverFailureReason failureReason = HandoverFailureReason::NONE)
 {
     if (!g_handoverEventTrace.is_open())
     {
@@ -568,129 +831,75 @@ WriteHandoverEventTraceRow(double nowSeconds,
     {
         g_handoverEventTrace << std::fixed << std::setprecision(3) << recoveryMs;
     }
-    g_handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << "\n";
+    g_handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << "," << ToString(failureReason)
+                         << "\n";
     g_handoverEventTrace.flush();
 }
 
 static void
-FinalizePreparationFailure(uint32_t ueIdx,
-                           const std::string& failureEvent,
-                           uint16_t sourceCellId,
-                           uint16_t targetCellId)
+RegisterHandoverFailure(UeRuntime& ue, HandoverFailureReason reason)
 {
-    if (ueIdx >= g_ues.size())
+    switch (reason)
     {
-        return;
+    case HandoverFailureReason::NO_PREAMBLE:
+        ue.handoverFailureNoPreambleCount++;
+        break;
+    case HandoverFailureReason::MAX_RACH:
+        ue.handoverFailureMaxRachCount++;
+        break;
+    case HandoverFailureReason::LEAVING_TIMEOUT:
+        ue.handoverFailureLeavingCount++;
+        break;
+    case HandoverFailureReason::JOINING_TIMEOUT:
+        ue.handoverFailureJoiningCount++;
+        break;
+    case HandoverFailureReason::UNKNOWN:
+    case HandoverFailureReason::NONE:
+        ue.handoverFailureUnknownCount++;
+        break;
     }
-
-    auto& ue = g_ues[ueIdx];
-    ue.handoverPreparationFailureCount++;
-    if (failureEvent == "HO_PREP_BLOCKED_ADMISSION")
-    {
-        ue.handoverPreparationBlockedAdmissionCount++;
-    }
-    else if (failureEvent == "HO_PREP_BLOCKED_VISIBILITY")
-    {
-        ue.handoverPreparationBlockedVisibilityCount++;
-    }
-
-    const double nowSeconds = Simulator::Now().GetSeconds();
-    const double delayMs =
-        (ue.lastHoStartTimeSeconds >= 0.0) ? (nowSeconds - ue.lastHoStartTimeSeconds) * 1000.0
-                                           : std::numeric_limits<double>::quiet_NaN();
-    const uint32_t handoverTraceId = AcquireFailureTraceId(ue);
-    WriteHandoverEventTraceRow(nowSeconds,
-                               ueIdx,
-                               handoverTraceId,
-                               failureEvent,
-                               sourceCellId,
-                               targetCellId,
-                               delayMs,
-                               std::numeric_limits<double>::quiet_NaN(),
-                               false);
-    ClearPendingHandoverState(ue);
-
-    std::cout << "[" << failureEvent << "] t=" << std::fixed << std::setprecision(3)
-              << nowSeconds << "s"
-              << " ue=" << ueIdx
-              << " sourceCell=" << sourceCellId
-              << " targetCell=" << targetCellId
-              << " stage=preparation" << std::endl;
 }
 
 static void
-ExecutePreparedHandover(uint32_t ueIdx,
-                        uint16_t sourceCellId,
-                        uint16_t targetCellId,
-                        uint16_t rnti,
-                        uint32_t handoverTraceId)
+MarkPendingHandoverFailureReason(uint64_t imsi, HandoverFailureReason reason)
 {
-    if (ueIdx >= g_ues.size())
+    const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi);
+    if (!ueIdx.has_value())
     {
         return;
     }
 
-    auto& ue = g_ues[ueIdx];
-    if (!ue.hasPendingHoPreparation || ue.activeHandoverTraceId != handoverTraceId ||
-        ue.pendingPreparationSourceCell != sourceCellId ||
-        ue.pendingPreparationTargetCell != targetCellId || ue.pendingPreparationRnti != rnti)
+    auto& ue = g_ues[*ueIdx];
+    if (!ue.hasPendingHoStart)
     {
         return;
     }
 
-    if (!ue.dev || !ue.dev->GetRrc() || ue.dev->GetRrc()->GetCellId() != sourceCellId)
-    {
-        FinalizePreparationFailure(ueIdx, "HO_PREP_ABORT_SOURCE_CHANGED", sourceCellId, targetCellId);
-        return;
-    }
+    ue.pendingFailureReason = reason;
+}
 
-    const int32_t sourceSatIdx = ResolveSatelliteIndexFromCellId(sourceCellId);
-    const int32_t targetSatIdx = ResolveSatelliteIndexFromCellId(targetCellId);
-    if (sourceSatIdx < 0 || targetSatIdx < 0 ||
-        static_cast<uint32_t>(sourceSatIdx) >= g_satellites.size() ||
-        static_cast<uint32_t>(targetSatIdx) >= g_satellites.size())
-    {
-        FinalizePreparationFailure(ueIdx, "HO_PREP_ABORT_INVALID_TARGET", sourceCellId, targetCellId);
-        return;
-    }
+static void
+ReportHandoverFailureNoPreamble(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+    MarkPendingHandoverFailureReason(imsi, HandoverFailureReason::NO_PREAMBLE);
+}
 
-    const double nowSeconds = Simulator::Now().GetSeconds();
-    const double remainingVisibilitySeconds =
-        PredictRemainingVisibilitySeconds(BuildMeasurementDrivenDecisionContext(),
-                                          static_cast<uint32_t>(targetSatIdx),
-                                          ue.groundPoint,
-                                          nowSeconds);
-    const double requiredVisibilitySeconds = g_hoPreparationExecutionGuardMs / 1000.0;
-    if (remainingVisibilitySeconds + 1e-9 < requiredVisibilitySeconds)
-    {
-        FinalizePreparationFailure(ueIdx, "HO_PREP_BLOCKED_VISIBILITY", sourceCellId, targetCellId);
-        return;
-    }
+static void
+ReportHandoverFailureMaxRach(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+    MarkPendingHandoverFailureReason(imsi, HandoverFailureReason::MAX_RACH);
+}
 
-    if (g_handoverMode == HandoverMode::IMPROVED && !g_satellites[targetSatIdx].admissionAllowed)
-    {
-        FinalizePreparationFailure(ueIdx, "HO_PREP_BLOCKED_ADMISSION", sourceCellId, targetCellId);
-        return;
-    }
+static void
+ReportHandoverFailureLeaving(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+    MarkPendingHandoverFailureReason(imsi, HandoverFailureReason::LEAVING_TIMEOUT);
+}
 
-    g_satellites[targetSatIdx].rrc->SetAttribute("AdmitHandoverRequest", BooleanValue(true));
-    ResetPendingPreparationState(ue);
-    ue.hasPendingHoStart = true;
-
-    const double prepElapsedMs =
-        (ue.lastHoStartTimeSeconds >= 0.0) ? (nowSeconds - ue.lastHoStartTimeSeconds) * 1000.0 : 0.0;
-    WriteHandoverEventTraceRow(nowSeconds,
-                               ueIdx,
-                               handoverTraceId,
-                               "HO_TRIGGER",
-                               sourceCellId,
-                               targetCellId,
-                               prepElapsedMs,
-                               std::numeric_limits<double>::quiet_NaN(),
-                               false);
-
-    g_satellites[sourceSatIdx].rrc->GetNrHandoverManagementSapUser()->TriggerHandover(rnti,
-                                                                                       targetCellId);
+static void
+ReportHandoverFailureJoining(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+    MarkPendingHandoverFailureReason(imsi, HandoverFailureReason::JOINING_TIMEOUT);
 }
 
 /**
@@ -706,23 +915,16 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
         auto& ue = g_ues[*ueIdx];
-        if (ue.activeHandoverTraceId == 0)
-        {
-            ue.handoverTraceSequence++;
-            ue.activeHandoverTraceId = ue.handoverTraceSequence;
-        }
+        ue.handoverTraceSequence++;
+        ue.activeHandoverTraceId = ue.handoverTraceSequence;
         ue.hasPendingHoStart = true;
-        ResetPendingPreparationState(ue);
         ue.waitingForThroughputRecovery = false;
         ue.waitingRecoveryHoId = 0;
         ue.waitingRecoveryStartTimeSeconds = -1.0;
         ue.waitingRecoverySatisfiedSamples = 0;
         ue.lastHoStartSourceCell = cellId;
         ue.lastHoStartTargetCell = targetCellId;
-        if (ue.lastHoStartTimeSeconds < 0.0)
-        {
-            ue.lastHoStartTimeSeconds = Simulator::Now().GetSeconds();
-        }
+        ue.lastHoStartTimeSeconds = Simulator::Now().GetSeconds();
         ue.pendingRecoveryReferenceThroughputMbps =
             ComputeMeanThroughputMbps(ue.recentThroughputSamplesMbps);
         if (std::isfinite(ue.pendingRecoveryReferenceThroughputMbps) &&
@@ -736,7 +938,7 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
             ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
         }
         ue.handoverStartCount++;
-        WriteHandoverEventTraceRow(Simulator::Now().GetSeconds(),
+        WriteHandoverEventTraceRow(ue.lastHoStartTimeSeconds,
                                    *ueIdx,
                                    ue.activeHandoverTraceId,
                                    "HO_START",
@@ -745,14 +947,18 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
                                    std::numeric_limits<double>::quiet_NaN(),
                                    std::numeric_limits<double>::quiet_NaN(),
                                    false);
+        ue.pendingFailureReason = HandoverFailureReason::NONE;
         prefix << " ue=" << *ueIdx;
     }
 
-    std::cout << "[HO-START] t=" << std::fixed << std::setprecision(3)
-              << Simulator::Now().GetSeconds() << "s"
-              << prefix.str()
-              << " sourceCell=" << cellId
-              << " targetCell=" << targetCellId << std::endl;
+    if (!g_compactReport || g_printNrtEvents)
+    {
+        std::cout << "[HO-START] t=" << std::fixed << std::setprecision(3)
+                  << Simulator::Now().GetSeconds() << "s"
+                  << prefix.str()
+                  << " sourceCell=" << cellId
+                  << " targetCell=" << targetCellId << std::endl;
+    }
 }
 
 /**
@@ -801,10 +1007,11 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
         }
         if (ue.hasPendingHoStart)
         {
-            ue.lastSuccessfulHoSourceCell = ue.lastHoStartSourceCell;
-            ue.lastSuccessfulHoTargetCell = cellId;
-            ue.lastSuccessfulHoTimeSeconds = nowSeconds;
-        }
+        ue.lastSuccessfulHoSourceCell = ue.lastHoStartSourceCell;
+        ue.lastSuccessfulHoTargetCell = cellId;
+        ue.lastSuccessfulHoTimeSeconds = nowSeconds;
+        ClearStableLeadTracking(ue);
+    }
         const bool hasRecoveryThreshold =
             std::isfinite(ue.pendingRecoveryThresholdThroughputMbps) &&
             ue.pendingRecoveryThresholdThroughputMbps > 0.0;
@@ -821,109 +1028,126 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
                                    handoverDelayMs,
                                    std::numeric_limits<double>::quiet_NaN(),
                                    pingPongDetected);
-        ue.lastHoStartSourceCell = 0;
-        ue.lastHoStartTargetCell = 0;
-        ClearPendingHandoverState(ue, false);
+        ue.hasPendingHoStart = false;
+        ue.lastHoStartTimeSeconds = -1.0;
+        ue.activeHandoverTraceId = 0;
+        ue.pendingFailureReason = HandoverFailureReason::NONE;
+        ClearStableLeadTracking(ue);
         prefix << " ue=" << *ueIdx;
     }
 
-    std::cout << "[HO-END-OK] t=" << std::fixed << std::setprecision(3)
-              << Simulator::Now().GetSeconds() << "s"
-              << prefix.str()
-              << " targetCell=" << cellId;
-    if (handoverDelayMs >= 0.0)
+    if (!g_compactReport || g_printNrtEvents)
     {
-        std::cout << " delay=" << std::fixed << std::setprecision(3) << handoverDelayMs << "ms";
-    }
-    std::cout << std::endl;
-    if (pingPongDetected)
-    {
-        std::cout << "[PING-PONG] t=" << std::fixed << std::setprecision(3)
+        std::cout << "[HO-END-OK] t=" << std::fixed << std::setprecision(3)
                   << Simulator::Now().GetSeconds() << "s"
                   << prefix.str()
-                  << " path=" << previousSourceCell
-                  << "->" << previousTargetCell
-                  << "->" << cellId
-                  << " currentReturn=" << currentSourceCell
-                  << "->" << cellId
-                  << " gap=" << std::fixed << std::setprecision(3) << pingPongGapSeconds << "s"
-                  << std::endl;
+                  << " targetCell=" << cellId;
+        if (handoverDelayMs >= 0.0)
+        {
+            std::cout << " delay=" << std::fixed << std::setprecision(3) << handoverDelayMs
+                      << "ms";
+        }
+        std::cout << std::endl;
+        if (pingPongDetected)
+        {
+            std::cout << "[PING-PONG] t=" << std::fixed << std::setprecision(3)
+                      << Simulator::Now().GetSeconds() << "s"
+                      << prefix.str()
+                      << " path=" << previousSourceCell
+                      << "->" << previousTargetCell
+                      << "->" << cellId
+                      << " currentReturn=" << currentSourceCell
+                      << "->" << cellId
+                      << " gap=" << std::fixed << std::setprecision(3) << pingPongGapSeconds
+                      << "s" << std::endl;
+        }
     }
 }
 
 static void
-ReportHandoverFailure(const std::string& failureEvent,
-                      std::string,
-                      uint64_t imsi,
-                      uint16_t cellId,
-                      uint16_t rnti)
+ReportHandoverEndError(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
     std::ostringstream prefix;
+    HandoverFailureReason failureReason = HandoverFailureReason::UNKNOWN;
     uint16_t sourceCellId = 0;
-    uint16_t targetCellId = cellId;
-    uint32_t handoverTraceId = 0;
-    bool wasExecutionFailure = false;
+    uint16_t targetCellId = 0;
+    uint32_t activeHandoverTraceId = 0;
 
     if (const auto ueIdx = ResolveUeIndexFromImsi(g_imsiToUe, imsi))
     {
         auto& ue = g_ues[*ueIdx];
-        wasExecutionFailure = ue.hasPendingHoStart;
+        ue.handoverEndErrorCount++;
+        activeHandoverTraceId = ue.activeHandoverTraceId;
         sourceCellId = ue.lastHoStartSourceCell;
-        if (ue.lastHoStartTargetCell != 0)
+        targetCellId = ue.lastHoStartTargetCell;
+        if (ue.pendingFailureReason != HandoverFailureReason::NONE)
         {
-            targetCellId = ue.lastHoStartTargetCell;
+            failureReason = ue.pendingFailureReason;
         }
-
-        if (wasExecutionFailure)
-        {
-            ue.handoverFailureCount++;
-        }
-        else
-        {
-            ue.handoverPreparationFailureCount++;
-        }
-
-        if (failureEvent == "HO_FAILURE_NO_PREAMBLE")
-        {
-            ue.handoverFailureNoPreambleCount++;
-        }
-        else if (failureEvent == "HO_FAILURE_MAX_RACH")
-        {
-            ue.handoverFailureMaxRachCount++;
-        }
-        else if (failureEvent == "HO_FAILURE_LEAVING")
-        {
-            ue.handoverFailureLeavingCount++;
-        }
-        else if (failureEvent == "HO_FAILURE_JOINING")
-        {
-            ue.handoverFailureJoiningCount++;
-        }
-        else if (failureEvent == "HO_END_ERROR")
-        {
-            ue.handoverEndErrorCount++;
-        }
-
-        handoverTraceId = AcquireFailureTraceId(ue);
+        RegisterHandoverFailure(ue, failureReason);
         WriteHandoverEventTraceRow(Simulator::Now().GetSeconds(),
                                    *ueIdx,
-                                   handoverTraceId,
-                                   failureEvent,
+                                   activeHandoverTraceId,
+                                   "HO_END_ERROR",
                                    sourceCellId,
                                    targetCellId,
                                    std::numeric_limits<double>::quiet_NaN(),
                                    std::numeric_limits<double>::quiet_NaN(),
-                                   false);
-        ClearPendingHandoverState(ue);
+                                   false,
+                                   failureReason);
+        ue.hasPendingHoStart = false;
+        ue.lastHoStartTimeSeconds = -1.0;
+        ue.activeHandoverTraceId = 0;
+        ue.pendingFailureReason = HandoverFailureReason::NONE;
+        ue.waitingForThroughputRecovery = false;
+        ue.waitingRecoveryHoId = 0;
+        ue.waitingRecoveryStartTimeSeconds = -1.0;
+        ue.waitingRecoverySatisfiedSamples = 0;
         prefix << " ue=" << *ueIdx;
     }
 
-    std::cout << "[" << failureEvent << "] t=" << std::fixed << std::setprecision(3)
-              << Simulator::Now().GetSeconds() << "s"
-              << prefix.str()
-              << " cell=" << cellId
-              << " rnti=" << rnti
-              << " stage=" << (wasExecutionFailure ? "execution" : "preparation") << std::endl;
+    if (!g_compactReport || g_printNrtEvents)
+    {
+        std::cout << "[HO-END-ERROR] t=" << std::fixed << std::setprecision(3)
+                  << Simulator::Now().GetSeconds() << "s"
+                  << prefix.str()
+                  << " sourceCell=" << sourceCellId
+                  << " targetCell=" << targetCellId
+                  << " failureReason=" << ToString(failureReason) << std::endl;
+    }
+}
+
+/**
+ * 周期性打印总下行吞吐。
+ *
+ * 这是一个可选调试输出，主要用于观察业务连续性。
+ */
+static void
+PrintDlThroughput(uint32_t packetSizeBytes, Time interval)
+{
+    const Time now = Simulator::Now();
+    uint64_t totalRxPackets = 0;
+    uint64_t deltaPackets = 0;
+    for (auto& ue : g_ues)
+    {
+        if (!ue.server)
+        {
+            continue;
+        }
+        totalRxPackets += ue.server->GetReceived();
+        const uint64_t currentRxPackets = ue.server->GetReceived();
+        deltaPackets += currentRxPackets - ue.lastRxPackets;
+        ue.lastRxPackets = currentRxPackets;
+    }
+    const double dt = interval.GetSeconds();
+    const double throughputMbps = (dt > 0.0) ? (deltaPackets * packetSizeBytes * 8.0) / dt / 1e6 : 0.0;
+
+    std::cout << std::fixed << std::setprecision(3)
+              << "[DL] t=" << now.GetSeconds() << "s"
+              << " throughput(total)=" << throughputMbps << " Mbps"
+              << " rxPackets=" << totalRxPackets << std::endl;
+
+    Simulator::Schedule(interval, &PrintDlThroughput, packetSizeBytes, interval);
 }
 
 /**
@@ -1071,7 +1295,7 @@ UpdateConstellation(Time interval, Time stopTime)
             nowSeconds, g_satellites[i].orbit, g_gmstAtEpochRad);
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
         g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
-        UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef);
+        UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
     }
     FlushSatelliteAnchorTraceRows(nowSeconds);
 
@@ -1095,9 +1319,33 @@ UpdateConstellation(Time interval, Time stopTime)
              servingCellId != ue.lastServingCellForLog);
         if (servingChanged)
         {
-            std::cout << "[SERVING] t=" << std::fixed << std::setprecision(3) << nowSeconds << "s ue="
-                      << ueIdx << " cell " << ue.lastServingCellForLog << " -> " << servingCellId
-                      << std::endl;
+            if (!g_compactReport || g_printNrtEvents)
+            {
+                std::cout << "[SERVING] t=" << std::fixed << std::setprecision(3) << nowSeconds
+                          << "s ue=" << ueIdx << " cell " << ue.lastServingCellForLog << " -> "
+                          << servingCellId << std::endl;
+            }
+        }
+
+        const bool periodic = g_printKpiReports &&
+                              ((ue.lastKpiReportTime < 0.0) ||
+                               (nowSeconds - ue.lastKpiReportTime >=
+                                g_kpiIntervalSeconds - 1e-9));
+        if (periodic)
+        {
+            std::ostringstream kpi;
+            kpi << std::fixed << std::setprecision(3);
+            kpi << "[KPI] t=" << nowSeconds << "s"
+                << " ue=" << ueIdx
+                << " servingCell=" << servingCellId;
+            if (servingSatIdx >= 0 && static_cast<uint32_t>(servingSatIdx) < g_satellites.size())
+            {
+                kpi << " servingSat=sat" << servingSatIdx
+                    << " loadScore=" << g_satellites[servingSatIdx].loadScore
+                    << " attachedUeCount=" << g_satellites[servingSatIdx].attachedUeCount;
+            }
+            std::cout << kpi.str() << std::endl;
+            ue.lastKpiReportTime = nowSeconds;
         }
 
         ue.lastServingCellForLog = servingCellId;
@@ -1109,15 +1357,6 @@ UpdateConstellation(Time interval, Time stopTime)
     }
     UpdateSatelliteLoadStats(
         g_satellites, g_offeredPacketRatePerUe, g_maxSupportedUesPerSatellite, g_loadCongestionThreshold);
-    for (auto& sat : g_satellites)
-    {
-        if (sat.rrc)
-        {
-            const bool admitHandoverRequest =
-                (g_handoverMode == HandoverMode::IMPROVED) ? sat.admissionAllowed : true;
-            sat.rrc->SetAttribute("AdmitHandoverRequest", BooleanValue(admitHandoverRequest));
-        }
-    }
 
     if (Simulator::Now() + interval <= stopTime)
     {
@@ -1133,15 +1372,8 @@ UpdateConstellation(Time interval, Time stopTime)
 static void
 ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
 {
-    g_x2ProcessingDelayMs = config.x2ProcessingDelayMs;
-    g_x2MinLinkDelayMs = config.x2MinLinkDelayMs;
-    g_x2PropagationSpeedMetersPerSecond = config.x2PropagationSpeedMetersPerSecond;
-    g_enableDynamicHoPreparation = config.enableDynamicHoPreparation;
-    g_hoPreparationBaseDelayMs = config.hoPreparationBaseDelayMs;
-    g_hoPreparationLoadPenaltyMs = config.hoPreparationLoadPenaltyMs;
-    g_hoPreparationLowElevationPenaltyMs = config.hoPreparationLowElevationPenaltyMs;
-    g_hoPreparationExecutionGuardMs = config.hoPreparationExecutionGuardMs;
-    g_enableIdealRrcBootstrap = (!config.useIdealRrc) && config.enableIdealRrcBootstrap;
+    g_useWgs84HexGrid = config.useWgs84HexGrid;
+    g_lockGridCenterToUe = config.lockGridCenterToUe;
     g_gridCenterLatitudeDeg = config.gridCenterLatitudeDeg;
     g_gridCenterLongitudeDeg = config.gridCenterLongitudeDeg;
     g_gridWidthKm = config.gridWidthKm;
@@ -1151,6 +1383,13 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_outputDir = config.outputDir;
     g_printGridCatalog = config.printGridCatalog;
     g_gridCatalogPath = config.gridCatalogPath;
+    g_compactReport = config.compactReport;
+    g_printGridAnchorEvents = config.printGridAnchorEvents;
+    g_printKpiReports = config.printKpiReports;
+    g_printNrtEvents = config.printNrtEvents;
+    g_printOrbitCheck = config.printOrbitCheck;
+    g_printRrcStateTransitions = config.printRrcStateTransitions;
+    g_kpiIntervalSeconds = config.kpiIntervalSeconds;
     g_printSimulationProgress = config.printSimulationProgress;
     g_progressReportIntervalSeconds = config.progressReportIntervalSeconds;
     g_progressStopTimeSeconds = config.simTime;
@@ -1168,10 +1407,11 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_improvedVisibilityWeight = config.improvedVisibilityWeight;
     g_improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
     g_improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
-    g_improvedReturnGuardSeconds = config.improvedReturnGuardSeconds;
+    g_improvedMinStableLeadTimeSeconds = config.improvedMinStableLeadTimeSeconds;
     g_improvedMinVisibilitySeconds = config.improvedMinVisibilitySeconds;
     g_improvedVisibilityHorizonSeconds = config.improvedVisibilityHorizonSeconds;
     g_improvedVisibilityPredictionStepSeconds = config.improvedVisibilityPredictionStepSeconds;
+    g_improvedMinJointScoreMargin = config.improvedMinJointScoreMargin;
 }
 
 // ============================================================================
@@ -1202,6 +1442,8 @@ main(int argc, char* argv[])
     // ------------------------------
     g_ueGroundPoint = LeoOrbitCalculator::CreateGroundPoint(
         cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters);
+    g_cellGroundPoint =
+        LeoOrbitCalculator::CreateGroundPoint(cfg.cellLatitudeDeg, cfg.cellLongitudeDeg, cfg.cellAltitudeMeters);
     g_gmstAtEpochRad = LeoOrbitCalculator::DegToRad(cfg.gmstAtEpochDeg);
     g_minElevationRad = LeoOrbitCalculator::DegToRad(cfg.minElevationDeg);
     g_carrierFrequencyHz = cfg.centralFrequency;
@@ -1224,72 +1466,102 @@ main(int argc, char* argv[])
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
 
     // 生成用于波束锚定和后续可视化的六边形网格。
-    g_hexGridCells = BuildWgs84HexGrid(g_gridCenterLatitudeDeg,
-                                       g_gridCenterLongitudeDeg,
-                                       g_gridWidthKm * 1000.0,
-                                       g_gridHeightKm * 1000.0,
-                                       g_hexCellRadiusKm * 1000.0);
-    NS_ABORT_MSG_IF(g_hexGridCells.empty(), "hex-grid generation produced 0 cells");
-
-    std::cout << "[Grid] enabled cells=" << g_hexGridCells.size()
-              << " K=" << g_gridNearestK << std::endl;
-
-    if (g_printGridCatalog)
+    if (g_useWgs84HexGrid)
     {
-        DumpHexGridCatalog(g_gridCatalogPath, g_hexGridCells);
+        g_hexGridCells = BuildWgs84HexGrid(g_gridCenterLatitudeDeg,
+                                           g_gridCenterLongitudeDeg,
+                                           g_gridWidthKm * 1000.0,
+                                           g_gridHeightKm * 1000.0,
+                                           g_hexCellRadiusKm * 1000.0);
+        NS_ABORT_MSG_IF(g_hexGridCells.empty(), "hex-grid generation produced 0 cells");
+
+        if (cfg.startupVerbose)
+        {
+            std::cout << std::fixed << std::setprecision(3)
+                      << "[Grid] WGS84 hex-grid enabled center=(" << g_gridCenterLatitudeDeg << "deg, "
+                      << g_gridCenterLongitudeDeg << "deg)"
+                      << " size=" << g_gridWidthKm << "x" << g_gridHeightKm << "km"
+                      << " hexRadius=" << g_hexCellRadiusKm << "km"
+                      << " cells=" << g_hexGridCells.size()
+                      << " K=" << g_gridNearestK
+                      << std::endl;
+        }
+        if (g_printGridCatalog)
+        {
+            DumpHexGridCatalog(g_gridCatalogPath, g_hexGridCells);
+            if (cfg.startupVerbose)
+            {
+                std::cout << "[Grid] catalog exported: " << g_gridCatalogPath << std::endl;
+            }
+        }
+    }
+    else
+    {
+        g_hexGridCells.clear();
     }
 
-    // 输出当前基础组的关键物理和切换配置。
-    std::cout << std::fixed << std::setprecision(3)
-              << "[BeamModel] mode=HEX_GRID"
-              << " alphaMax=" << cfg.scanMaxDeg << "deg"
-              << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
-    std::cout << "[A3-Measure] source=PHY MeasurementReport"
-              << " reportInterval=" << g_measurementReportIntervalMs << "ms"
-              << " maxReportCells=" << static_cast<uint32_t>(g_measurementMaxReportCells)
-              << std::endl;
-    std::cout << "[Constellation] satellites=" << cfg.gNbNum
-              << " planes=" << cfg.orbitPlaneCount
-              << " ue=" << cfg.ueNum
-              << " raanSpacing=" << cfg.interPlaneRaanSpacingDeg << "deg"
-              << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s" << std::endl;
-    std::cout << "[UE-Layout] type=seven-cell"
-              << " groups=center(9)+ring(16 across 6 cells)"
-              << " hexRadius=" << cfg.hexCellRadiusKm << "km"
-              << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
-              << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km"
-              << std::endl;
-    std::cout << "[Handover] a3=measurement-report"
-              << " mode=" << ToString(g_handoverMode)
-              << " hysteresis=" << g_hoHysteresisDb << "dB"
-              << " ttt=" << static_cast<double>(cfg.hoTttMs) / 1000.0 << "s"
-              << " improvedSignalWeight=" << g_improvedSignalWeight
-              << " improvedLoadWeight=" << g_improvedLoadWeight
-              << " pingPongWindow=" << g_pingPongWindowSeconds << "s";
-    if (g_handoverMode == HandoverMode::IMPROVED)
+    if (cfg.startupVerbose)
     {
-        std::cout << " improvedVisibilityWeight=" << g_improvedVisibilityWeight
-                  << " improvedMinVisibility=" << g_improvedMinVisibilitySeconds << "s"
-                  << " improvedVisibilityHorizon=" << g_improvedVisibilityHorizonSeconds << "s"
-                  << " improvedMinLoadScoreDelta=" << g_improvedMinLoadScoreDelta
-                  << " improvedMaxSignalGapDb=" << g_improvedMaxSignalGapDb
-                  << " improvedReturnGuard=" << g_improvedReturnGuardSeconds << "s"
-                  << " improvedVisibilityStep=" << g_improvedVisibilityPredictionStepSeconds
-                  << "s";
+        std::cout << std::fixed << std::setprecision(3)
+                  << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
+                  << " alphaMax=" << cfg.scanMaxDeg << "deg"
+                  << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
+        std::cout << "[A3-Measure] source=PHY MeasurementReport"
+                  << " reportInterval=" << g_measurementReportIntervalMs << "ms"
+                  << " maxReportCells=" << static_cast<uint32_t>(g_measurementMaxReportCells)
+                  << std::endl;
+        std::cout << "[Constellation] satellites=" << cfg.gNbNum
+                  << " planes=" << cfg.orbitPlaneCount
+                  << " ue=" << cfg.ueNum
+                  << " raanSpacing=" << cfg.interPlaneRaanSpacingDeg << "deg"
+                  << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s" << std::endl;
+        std::cout << "[UE-Layout] type=" << cfg.ueLayoutType;
+        if (cfg.ueLayoutType == "seven-cell")
+        {
+            std::cout << " groups=center(9)+ring(16 across 6 cells)"
+                      << " hexRadius=" << cfg.hexCellRadiusKm << "km"
+                      << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
+                      << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km";
+        }
+        else
+        {
+            std::cout << " spacing=" << cfg.ueSpacingMeters / 1000.0 << "km";
+        }
+        std::cout << std::endl;
+        std::cout << "[Handover] a3=measurement-report"
+                  << " mode=" << ToString(g_handoverMode)
+                  << " hysteresis=" << g_hoHysteresisDb << "dB"
+                  << " ttt=" << static_cast<double>(cfg.hoTttMs) / 1000.0 << "s"
+                  << " improvedSignalWeight=" << g_improvedSignalWeight
+                  << " improvedLoadWeight=" << g_improvedLoadWeight
+                  << " pingPongWindow=" << g_pingPongWindowSeconds << "s";
+        if (g_handoverMode == HandoverMode::IMPROVED)
+        {
+            std::cout << " improvedVisibilityWeight=" << g_improvedVisibilityWeight
+                      << " improvedMinVisibility=" << g_improvedMinVisibilitySeconds << "s"
+                      << " improvedVisibilityHorizon=" << g_improvedVisibilityHorizonSeconds
+                      << "s"
+                      << " improvedMinLoadScoreDelta=" << g_improvedMinLoadScoreDelta
+                      << " improvedMaxSignalGapDb=" << g_improvedMaxSignalGapDb
+                      << " improvedMinStableLead=" << g_improvedMinStableLeadTimeSeconds << "s"
+                      << " improvedVisibilityStep=" << g_improvedVisibilityPredictionStepSeconds
+                      << "s"
+                      << " improvedMinJointScoreMargin=" << g_improvedMinJointScoreMargin;
+        }
+        std::cout << std::endl;
+        std::cout << "[UserPlane] rlc="
+                  << (cfg.forceRlcAmForEpc ? "AM(default override)" : "helper default")
+                  << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
+                  << std::endl;
+        std::cout << "[Output] dir=" << g_outputDir << std::endl;
+        if (cfg.enableHandoverThroughputTrace)
+        {
+            std::cout << "[Output] handoverThroughputTrace=" << cfg.handoverThroughputTracePath
+                      << " eventTrace=" << cfg.handoverEventTracePath
+                      << " sampleInterval=" << cfg.handoverThroughputTraceIntervalSeconds << "s"
+                      << std::endl;
+        }
     }
-    std::cout << std::endl;
-    std::cout << "[UserPlane] rlc=helper default"
-              << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
-              << std::endl;
-    std::cout << "[ControlPlane] rrc=" << (cfg.useIdealRrc ? "ideal" : "real")
-              << " dynPrep=" << (cfg.enableDynamicHoPreparation ? "ON" : "OFF")
-              << " prepBase=" << cfg.hoPreparationBaseDelayMs << "ms"
-              << " prepExecGuard=" << cfg.hoPreparationExecutionGuardMs << "ms"
-              << " x2MinDelay=" << cfg.x2MinLinkDelayMs << "ms"
-              << " bootstrap=" << ((!cfg.useIdealRrc && cfg.enableIdealRrcBootstrap) ? "ideal-init"
-                                                                                     : "off")
-              << std::endl;
-    std::cout << "[Output] dir=" << g_outputDir << std::endl;
 
     const double semiMajorAxisMeters =
         LeoOrbitCalculator::kWgs84SemiMajorAxisMeters + cfg.satAltitudeMeters;
@@ -1321,11 +1593,15 @@ main(int argc, char* argv[])
         orbitRaanDeg = LeoOrbitCalculator::RadToDeg(raanRad);
         baseTrueAnomalyDeg = LeoOrbitCalculator::RadToDeg(baseTrueAnomalyRad);
 
-        std::cout << "[Setup] autoAlign=ON branch="
-                  << (cfg.descendingPass ? "descending" : "ascending")
-                  << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad) << "deg" << std::endl;
+        if (cfg.startupVerbose)
+        {
+            std::cout << "[Setup] autoAlign=ON branch="
+                      << (cfg.descendingPass ? "descending" : "ascending")
+                      << " peakEl=" << LeoOrbitCalculator::RadToDeg(aligned.peakElevationRad)
+                      << "deg" << std::endl;
+        }
     }
-    if (cfg.orbitPlaneCount > 1)
+    if (cfg.startupVerbose && cfg.orbitPlaneCount > 1)
     {
         std::cout << "[Setup] multi-plane mode: plane0 keeps the aligned reference orbit, "
                   << "additional planes use RAAN/time offsets" << std::endl;
@@ -1337,26 +1613,48 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(10)));
     Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod", TimeValue(MilliSeconds(50)));
     Config::SetDefault("ns3::NrAnr::Threshold", UintegerValue(0));
+    if (cfg.forceRlcAmForEpc)
+    {
+        Config::SetDefault("ns3::NrGnbRrc::EpsBearerToRlcMapping",
+                           EnumValue(NrGnbRrc::RLC_AM_ALWAYS));
+    }
+
+    if (g_printOrbitCheck)
+    {
+        std::cout << "=== Orbit math check: Kepler/ECI/ECEF/ENU (0~100s, step 10s) ===" << std::endl;
+    }
+    LeoOrbitCalculator::KeplerElements checkOrbit;
+    checkOrbit.semiMajorAxisMeters = semiMajorAxisMeters;
+    checkOrbit.eccentricity = cfg.orbitEccentricity;
+    checkOrbit.inclinationRad = inclinationRad;
+    checkOrbit.raanRad = raanRad;
+    checkOrbit.argPerigeeRad = argPerigeeRad;
+    checkOrbit.trueAnomalyAtEpochRad = baseTrueAnomalyRad;
+
+    for (uint32_t t = 0; t <= 100; t += 10)
+    {
+        const auto state = LeoOrbitCalculator::Calculate(static_cast<double>(t),
+                                                         checkOrbit,
+                                                         g_gmstAtEpochRad,
+                                                         g_ueGroundPoint,
+                                                         cfg.centralFrequency,
+                                                         g_minElevationRad);
+        if (g_printOrbitCheck)
+        {
+            std::cout << std::fixed << std::setprecision(3)
+                      << "[OrbitCheck] t=" << t << "s"
+                      << " ECEF=(" << state.ecef.x << ", " << state.ecef.y << ", " << state.ecef.z
+                      << ") m"
+                      << " el=" << LeoOrbitCalculator::RadToDeg(state.elevationRad) << "deg"
+                      << " fd=" << state.dopplerHz / 1e3 << "kHz"
+                      << std::endl;
+        }
+    }
 
     Ptr<NrHelper> nrHelper = CreateObject<NrHelper>();
     Ptr<NrPointToPointEpcHelper> nrEpcHelper = CreateObject<NrPointToPointEpcHelper>();
-    nrHelper->SetAttribute("UseIdealRrc", BooleanValue(cfg.useIdealRrc));
-    nrEpcHelper->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(cfg.s1uLinkDelayMs)));
-    nrEpcHelper->SetAttribute("S11LinkDelay", TimeValue(MilliSeconds(cfg.s11LinkDelayMs)));
-    nrEpcHelper->SetAttribute("S5LinkDelay", TimeValue(MilliSeconds(cfg.s5LinkDelayMs)));
+    nrEpcHelper->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(0)));
     nrHelper->SetEpcHelper(nrEpcHelper);
-
-    if (!cfg.useIdealRrc)
-    {
-        // Real RRC needs the initial connection timers to be relaxed before the
-        // gNB RRC objects are instantiated; setting them later on the instances
-        // can fail in this script path.
-        Config::SetDefault("ns3::NrUeRrc::T300", TimeValue(MilliSeconds(cfg.realRrcT300Ms)));
-        Config::SetDefault("ns3::NrGnbRrc::ConnectionRequestTimeoutDuration",
-                           TimeValue(MilliSeconds(cfg.realRrcConnectionRequestTimeoutMs)));
-        Config::SetDefault("ns3::NrGnbRrc::ConnectionSetupTimeoutDuration",
-                           TimeValue(MilliSeconds(cfg.realRrcConnectionSetupTimeoutMs)));
-    }
 
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
     channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
@@ -1372,10 +1670,9 @@ main(int argc, char* argv[])
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(cfg.ueTxPower));
 
     nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
-    // Keep SRS fully disabled in the baseline path to avoid unrelated PHY fatal branches.
-    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(false));
-    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(false));
-    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(0));
+    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
+    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
+    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(cfg.srsSymbols));
     nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(1));
     nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(2));
     nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
@@ -1404,6 +1701,8 @@ main(int argc, char* argv[])
     ueMobility.Install(ueNodes);
 
     UeLayoutConfig ueLayout;
+    ueLayout.layoutType = cfg.ueLayoutType;
+    ueLayout.lineSpacingMeters = cfg.ueSpacingMeters;
     ueLayout.hexCellRadiusMeters = cfg.hexCellRadiusKm * 1000.0;
     ueLayout.centerSpacingMeters = cfg.ueCenterSpacingMeters;
     ueLayout.ringPointOffsetMeters = cfg.ueRingPointOffsetMeters;
@@ -1423,6 +1722,15 @@ main(int argc, char* argv[])
     randomStream += nrHelper->AssignStreams(gNbNetDev, randomStream);
     randomStream += nrHelper->AssignStreams(ueNetDev, randomStream);
 
+    // 先一次性建立完整 X2 网格；随后为每个 gNB 安装静态邻区关系。
+    for (uint32_t i = 0; i < gNbNodes.GetN(); ++i)
+    {
+        for (uint32_t j = i + 1; j < gNbNodes.GetN(); ++j)
+        {
+            nrEpcHelper->AddX2Interface(gNbNodes.Get(i), gNbNodes.Get(j));
+        }
+    }
+
     g_satellites.clear();
     g_cellToSatellite.clear();
     g_satellites.reserve(cfg.gNbNum);
@@ -1441,6 +1749,7 @@ main(int argc, char* argv[])
         const double planeRaanRad =
             LeoOrbitCalculator::NormalizeAngle(raanRad +
                                                LeoOrbitCalculator::DegToRad(cfg.interPlaneRaanSpacingDeg) * planeIdx);
+        const double planeRaanDeg = LeoOrbitCalculator::RadToDeg(planeRaanRad);
         const double planeTimeOffset = cfg.interPlaneTimeOffsetSeconds * planeIdx;
 
         for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
@@ -1476,41 +1785,47 @@ main(int argc, char* argv[])
             sat.orbit = orbit;
             sat.orbitPlaneIndex = planeIdx;
             sat.orbitSlotIndex = slotIdx;
-            const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, initState.ecef, g_gridNearestK);
-            NS_ABORT_MSG_IF(!anchor.found, "failed to resolve initial hex-grid anchor");
-            sat.currentAnchorGridId = anchor.anchorGridId;
-            sat.cellAnchorEcef = anchor.anchorEcef;
-            sat.nearestGridIds = anchor.nearestGridIds;
+            sat.cellAnchorEcef = g_cellGroundPoint.ecef;
+
+            if (g_useWgs84HexGrid && !g_hexGridCells.empty())
+            {
+                const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, initState.ecef, g_gridNearestK);
+                if (anchor.found)
+                {
+                    sat.currentAnchorGridId = anchor.anchorGridId;
+                    sat.cellAnchorEcef = anchor.anchorEcef;
+                    sat.nearestGridIds = anchor.nearestGridIds;
+                }
+            }
             g_cellToSatellite[dev->GetCellId()] = globalSatIdx;
             g_satellites.push_back(sat);
 
-            std::cout << "[Setup] sat" << globalSatIdx << " plane=" << planeIdx << " slot=" << slotIdx
-                      << " cell=" << dev->GetCellId() << std::endl;
+            if (cfg.startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
+            {
+                UpdateSatelliteAnchorFromGrid(globalSatIdx, initState.ecef, 0.0, true);
+            }
+
+            if (cfg.startupVerbose)
+            {
+                std::cout << "[Setup] sat" << globalSatIdx << " plane=" << planeIdx
+                          << " slot=" << slotIdx << " cell=" << dev->GetCellId()
+                          << " nu0=" << LeoOrbitCalculator::RadToDeg(orbit.trueAnomalyAtEpochRad)
+                          << "deg"
+                          << " i=" << cfg.orbitInclinationDeg << "deg"
+                          << " RAAN=" << planeRaanDeg << "deg";
+                if (g_useWgs84HexGrid && g_satellites[globalSatIdx].currentAnchorGridId != 0)
+                {
+                    std::cout << " anchorGrid=" << g_satellites[globalSatIdx].currentAnchorGridId;
+                }
+                std::cout << std::endl;
+            }
         }
     }
-
-    // 根据卫星对的初始几何距离为每条 X2 链路设置更接近 NTN 的静态传播时延。
-    for (uint32_t i = 0; i < gNbNodes.GetN(); ++i)
-    {
-        for (uint32_t j = i + 1; j < gNbNodes.GetN(); ++j)
-        {
-            nrEpcHelper->SetAttribute("X2LinkDelay",
-                                      TimeValue(ComputeSatellitePairX2Delay(
-                                          BuildMeasurementDrivenDecisionContext(),
-                                          gNbNodes.Get(i),
-                                          gNbNodes.Get(j))));
-            nrEpcHelper->AddX2Interface(gNbNodes.Get(i), gNbNodes.Get(j));
-        }
-    }
-
-    EnableIdealRrcBootstrapTransport();
 
     InstallStaticNeighbourRelations();
-    InstallMeasurementDrivenHandoverAlgorithms(
-        g_satellites, g_handoverAlgorithms, cfg, &HandleMeasurementDrivenHandoverReport);
+    InstallMeasurementDrivenHandoverAlgorithms(cfg);
 
-    auto remoteHostWithAddr =
-        nrEpcHelper->SetupRemoteHost("100Gb/s", 2500, MilliSeconds(cfg.remoteHostLinkDelayMs));
+    auto remoteHostWithAddr = nrEpcHelper->SetupRemoteHost("100Gb/s", 2500, Seconds(0.0));
     Ptr<Node> remoteHost = remoteHostWithAddr.first;
 
     InternetStackHelper internet;
@@ -1518,27 +1833,145 @@ main(int argc, char* argv[])
 
     Ipv4InterfaceContainer ueIpIface = nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
     Ipv4StaticRoutingHelper routingHelper;
-    DisableUeIpv4ForwardingIfRequested(cfg, ueNodes);
+    if (cfg.disableUeIpv4Forwarding)
+    {
+        for (uint32_t ueIdx = 0; ueIdx < ueNodes.GetN(); ++ueIdx)
+        {
+            Ptr<Ipv4> ueIpv4 = ueNodes.Get(ueIdx)->GetObject<Ipv4>();
+            if (!ueIpv4)
+            {
+                continue;
+            }
+            for (uint32_t ifIdx = 0; ifIdx < ueIpv4->GetNInterfaces(); ++ifIdx)
+            {
+                ueIpv4->SetForwarding(ifIdx, false);
+            }
+        }
+    }
+
+    g_ues.clear();
+    g_ues.reserve(cfg.ueNum);
+    g_imsiToUe.clear();
 
     // ------------------------------
     // 7. UE 初始接入与业务安装
     // ------------------------------
-    UeScenarioInstallContext ueInstallContext{
-        g_satellites, g_ues, g_imsiToUe, g_gmstAtEpochRad, g_minElevationRad, g_beamModelConfig};
-    InstallUeInitialAttachAndTraffic(ueInstallContext,
-                                     cfg,
-                                     ueNodes,
-                                     ueNetDev,
-                                     gNbNetDev,
-                                     uePlacements,
-                                     ueIpIface,
-                                     remoteHost,
-                                     nrHelper,
-                                     nrEpcHelper,
-                                     routingHelper,
-                                     [](Ptr<NrUeNetDevice> ueDev) {
-                                         EnableIdealRrcBootstrapTransport(ueDev);
-                                     });
+    // 为每个 UE 单独选择初始服务星和业务端口。
+    for (uint32_t ueIdx = 0; ueIdx < cfg.ueNum; ++ueIdx)
+    {
+        UeRuntime ue;
+        ue.node = ueNodes.Get(ueIdx);
+        ue.dev = DynamicCast<NrUeNetDevice>(ueNetDev.Get(ueIdx));
+        ue.groundPoint = uePlacements[ueIdx].groundPoint;
+        ue.placementRole = uePlacements[ueIdx].role;
+        ue.eastOffsetMeters = uePlacements[ueIdx].eastOffsetMeters;
+        ue.northOffsetMeters = uePlacements[ueIdx].northOffsetMeters;
+        ResetUeRuntime(ue, cfg.gNbNum);
+
+        uint32_t initialAttachIdx = 0;
+        uint32_t bestVisibleIdx = 0;
+        uint32_t bestAnyIdx = 0;
+        uint32_t bestEligibleIdx = 0;
+        double bestEligibleRsrp = -std::numeric_limits<double>::infinity();
+        double bestVisibleElevation = -std::numeric_limits<double>::infinity();
+        double bestAnyElevation = -std::numeric_limits<double>::infinity();
+        for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+        {
+            const auto state = LeoOrbitCalculator::Calculate(0.0,
+                                                             g_satellites[satIdx].orbit,
+                                                             g_gmstAtEpochRad,
+                                                             ue.groundPoint,
+                                                             cfg.centralFrequency,
+                                                             g_minElevationRad);
+            const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
+                                                              ue.groundPoint.ecef,
+                                                              g_satellites[satIdx].cellAnchorEcef,
+                                                              g_beamModelConfig);
+
+            if (state.elevationRad > bestAnyElevation)
+            {
+                bestAnyElevation = state.elevationRad;
+                bestAnyIdx = satIdx;
+            }
+            if (state.visible && state.elevationRad > bestVisibleElevation)
+            {
+                bestVisibleElevation = state.elevationRad;
+                bestVisibleIdx = satIdx;
+            }
+            if (state.visible && budget.beamLocked && budget.rsrpDbm > bestEligibleRsrp)
+            {
+                bestEligibleRsrp = budget.rsrpDbm;
+                bestEligibleIdx = satIdx;
+            }
+        }
+
+        if (std::isfinite(bestEligibleRsrp))
+        {
+            initialAttachIdx = bestEligibleIdx;
+        }
+        else if (std::isfinite(bestVisibleElevation))
+        {
+            initialAttachIdx = bestVisibleIdx;
+            if (cfg.startupVerbose)
+            {
+                std::cout << "[Setup] warning: ue" << ueIdx
+                          << " visible satellites exist but none satisfy alpha<alphaMax at t=0, "
+                          << "fallback to highest-elevation visible sat" << initialAttachIdx
+                          << std::endl;
+            }
+        }
+        else
+        {
+            initialAttachIdx = bestAnyIdx;
+            if (cfg.startupVerbose)
+            {
+                std::cout << "[Setup] warning: ue" << ueIdx
+                          << " no visible satellite at t=0, attaching to "
+                          << "highest-elevation sat" << initialAttachIdx
+                          << " (el=" << LeoOrbitCalculator::RadToDeg(bestAnyElevation) << "deg)"
+                          << std::endl;
+            }
+        }
+
+        ue.initialAttachIdx = initialAttachIdx;
+
+        nrHelper->AttachToGnb(ueNetDev.Get(ueIdx), gNbNetDev.Get(initialAttachIdx));
+
+        Ptr<Ipv4StaticRouting> ueStaticRouting =
+            routingHelper.GetStaticRouting(ueNodes.Get(ueIdx)->GetObject<Ipv4>());
+        ueStaticRouting->SetDefaultRoute(nrEpcHelper->GetUeDefaultGatewayAddress(), 1);
+
+        const uint16_t dlPort = static_cast<uint16_t>(1234 + ueIdx);
+        UdpServerHelper ueUdpServer(dlPort);
+        ApplicationContainer serverApps = ueUdpServer.Install(ueNodes.Get(ueIdx));
+
+        UdpClientHelper dlClient(ueIpIface.GetAddress(ueIdx), dlPort);
+        dlClient.SetAttribute("PacketSize", UintegerValue(cfg.udpPacketSize));
+        dlClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        dlClient.SetAttribute("Interval", TimeValue(Seconds(1.0 / cfg.lambda)));
+        ApplicationContainer clientApps = dlClient.Install(remoteHost);
+
+        // 为每个 UE 建立独立的专用承载，确保业务流和切换统计可区分。
+        NrEpsBearer bearer(NrEpsBearer::GBR_CONV_VOICE);
+        Ptr<NrEpcTft> tft = Create<NrEpcTft>();
+        NrEpcTft::PacketFilter dlpf;
+        dlpf.localPortStart = dlPort;
+        dlpf.localPortEnd = dlPort;
+        tft->Add(dlpf);
+        nrHelper->ActivateDedicatedEpsBearer(ueNetDev.Get(ueIdx), bearer, tft);
+
+        serverApps.Start(Seconds(cfg.appStartTime));
+        clientApps.Start(Seconds(cfg.appStartTime));
+        serverApps.Stop(Seconds(cfg.simTime));
+        clientApps.Stop(Seconds(cfg.simTime));
+
+        ue.server = serverApps.Get(0)->GetObject<UdpServer>();
+        if (ue.dev)
+        {
+            g_imsiToUe[ue.dev->GetImsi()] = ueIdx;
+        }
+        g_ues.push_back(ue);
+    }
 
     // ------------------------------
     // 8. 运行时复位、回调注册与周期事件调度
@@ -1562,6 +1995,13 @@ main(int argc, char* argv[])
     g_satAnchorTrace
         << "time_s,sat,plane,slot,cell,anchor_grid_id,anchor_latitude_deg,anchor_longitude_deg,"
         << "anchor_east_m,anchor_north_m\n";
+    g_handoverEventTrace.open(cfg.handoverEventTracePath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
+                    "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
+    g_handoverEventTrace
+        << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,recovery_ms,"
+        << "ping_pong_detected,failure_reason\n";
+    g_handoverEventTrace.flush();
     if (cfg.enableHandoverThroughputTrace)
     {
         g_handoverThroughputTrace.open(cfg.handoverThroughputTracePath,
@@ -1574,37 +2014,35 @@ main(int argc, char* argv[])
             << "total_rx_packets,in_handover,active_ho_id,pending_source_cell,pending_target_cell\n";
     }
 
-    g_handoverEventTrace.open(cfg.handoverEventTracePath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
-                    "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
-    g_handoverEventTrace
-        << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,recovery_ms,"
-        << "ping_pong_detected\n";
-    g_handoverEventTrace.flush();
-
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverStart",
                     MakeCallback(&ReportHandoverStart));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverEndOk",
                     MakeCallback(&ReportHandoverEndOk));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverFailureNoPreamble",
-                    MakeBoundCallback(&ReportHandoverFailure,
-                                      std::string("HO_FAILURE_NO_PREAMBLE")));
+                    MakeCallback(&ReportHandoverFailureNoPreamble));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverFailureMaxRach",
-                    MakeBoundCallback(&ReportHandoverFailure,
-                                      std::string("HO_FAILURE_MAX_RACH")));
+                    MakeCallback(&ReportHandoverFailureMaxRach));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverFailureLeaving",
-                    MakeBoundCallback(&ReportHandoverFailure,
-                                      std::string("HO_FAILURE_LEAVING")));
+                    MakeCallback(&ReportHandoverFailureLeaving));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverFailureJoining",
-                    MakeBoundCallback(&ReportHandoverFailure,
-                                      std::string("HO_FAILURE_JOINING")));
+                    MakeCallback(&ReportHandoverFailureJoining));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrUeNetDevice/NrUeRrc/HandoverEndError",
-                    MakeBoundCallback(&ReportHandoverFailure, std::string("HO_END_ERROR")));
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrUeNetDevice/NrUeRrc/ConnectionEstablished",
-                    MakeCallback(&ReportUeConnectionEstablished));
+                    MakeCallback(&ReportHandoverEndError));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrUeNetDevice/NrUeRrc/StateTransition",
+                    MakeCallback(&ReportStateTransition));
+
+    // 可选的周期吞吐输出，默认关闭，避免压过切换日志。
     for (auto& ue : g_ues)
     {
+        ue.lastRxPackets = 0;
         ue.lastThroughputTraceRxPackets = 0;
+    }
+    if (cfg.throughputReportIntervalSeconds > 0.0)
+    {
+        Simulator::Schedule(Seconds(cfg.appStartTime + cfg.throughputReportIntervalSeconds),
+                            &PrintDlThroughput,
+                            cfg.udpPacketSize,
+                            Seconds(cfg.throughputReportIntervalSeconds));
     }
     if (cfg.enableHandoverThroughputTrace)
     {
@@ -1619,13 +2057,15 @@ main(int argc, char* argv[])
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
     {
         const auto& ue = g_ues[ueIdx];
-        std::cout << "[Setup] ue" << ueIdx << " start attach=sat" << ue.initialAttachIdx
-                  << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")"
-                  << " role=" << ue.placementRole
-                  << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
-                  << ue.northOffsetMeters / 1000.0 << "kmN)"
-                  << " handoverMode=" << ToString(g_handoverMode);
-        std::cout << std::endl;
+        if (cfg.startupVerbose)
+        {
+            std::cout << "[Setup] ue" << ueIdx << " start attach=sat" << ue.initialAttachIdx
+                      << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")"
+                      << " role=" << ue.placementRole
+                      << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
+                      << ue.northOffsetMeters / 1000.0 << "kmN)"
+                      << " handoverMode=" << ToString(g_handoverMode) << std::endl;
+        }
     }
 
     // `UpdateConstellation` 是整个场景的时变主循环。
@@ -1665,9 +2105,13 @@ main(int argc, char* argv[])
 
     if (cfg.runGridSvgScript)
     {
-        if (!g_printGridCatalog)
+        if (!g_useWgs84HexGrid || !g_printGridCatalog)
         {
-            std::cout << "[GridSvg] skipped because hex-grid catalog export is disabled" << std::endl;
+            if (cfg.startupVerbose)
+            {
+                std::cout << "[GridSvg] skipped because hex-grid catalog export is disabled"
+                          << std::endl;
+            }
         }
         else
         {
@@ -1679,7 +2123,10 @@ main(int argc, char* argv[])
             const int scriptRc = std::system(cmdline.str().c_str());
             if (scriptRc == 0)
             {
-                std::cout << "[GridSvg] SVG generated successfully" << std::endl;
+                if (cfg.startupVerbose)
+                {
+                    std::cout << "[GridSvg] SVG generated successfully" << std::endl;
+                }
             }
             else
             {

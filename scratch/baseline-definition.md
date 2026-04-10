@@ -22,85 +22,61 @@
 - `gNbNum = 8`
 - `orbitPlaneCount = 2`
 - `ueNum = 25`
-- `UE` 布局固定为 `seven-cell`
+- `ueLayoutType = seven-cell`
 - `hexCellRadiusKm = 20`
 - `ueCenterSpacingMeters = 6000`
 - `ueRingPointOffsetMeters = 5000`
 - `satAltitudeMeters = 600000`
 - `orbitInclinationDeg = 53`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-2`
-- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`0.0`
-- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`20`
-- `overpassGapSeconds`（同轨过境间隔）=`2`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-1`
+- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`3.0`
+- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`15`
+- `overpassGapSeconds`（同轨过境间隔）=`3`
 
 运行与切换：
 - `simTime`（仿真时长）=`40 s`
 - `appStartTime = 1 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `minElevationDeg`（最小仰角）=`10`
-- `lambda`（业务流强度）=`1000 pkt/s/UE`
+- `lambda`（业务流强度）=`250 pkt/s/UE`
+- `maxSupportedUesPerSatellite = 5`
 - `bandwidth = 40 MHz`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
-- `hoTttMs`（切换触发时间）=`200 ms`
+- `hoTttMs`（切换触发时间）=`160 ms`
 - `measurementReportIntervalMs = 120 ms`
 - `measurementMaxReportCells = 8`
 - `handoverMode = baseline`
-- `useIdealRrc = true`
-- `s1uLinkDelayMs = 8.0 ms`
-- `s11LinkDelayMs = 8.0 ms`
-- `s5LinkDelayMs = 8.0 ms`
-- `remoteHostLinkDelayMs = 8.0 ms`
-- `x2ProcessingDelayMs = 2.0 ms`
-- `x2MinLinkDelayMs = 1.0 ms`
-- `enableIdealRrcBootstrap = true`
-- `enableDynamicHoPreparation = true`
-- `hoPreparationBaseDelayMs = 4.0 ms`
-- `hoPreparationLoadPenaltyMs = 12.0 ms`
-- `hoPreparationLowElevationPenaltyMs = 8.0 ms`
-- `hoPreparationExecutionGuardMs = 20.0 ms`
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
 - `improvedVisibilityWeight = 0.2`
 - `improvedMinLoadScoreDelta = 0.2`
 - `improvedMaxSignalGapDb = 3.0 dB`
-- `improvedReturnGuardSeconds = 0.5 s`
+- `improvedMinStableLeadTimeSeconds = 0.12 s`
 - `improvedMinVisibilitySeconds = 1.0 s`
 - `improvedVisibilityHorizonSeconds = 8.0 s`
-- `improvedVisibilityPredictionStepSeconds = 0.2 s`
+- `improvedVisibilityPredictionStepSeconds = 0.5 s`
+- `improvedMinJointScoreMargin = 0.03`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
-- `maxSupportedUesPerSatellite = 5.0`
-- `loadCongestionThreshold = 0.8`
-- 地面锚点固定为 `WGS84 hex-grid`
+- `useWgs84HexGrid = true`
+- `forceRlcAmForEpc = false`
 - `disableUeIpv4Forwarding = true`
 
 说明：
-- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v4.1.1`
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v4.2`
 - 当前先不通过继续扩星来放大现象，而是优先通过七小区 `UE` 占位来增强跨小区竞争与空间代表性
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
-- 当前默认稳定口径仍使用 `ideal RRC`，但控制面链路不再视为“零时延黑盒”：
-  `S1-U/S11/S5/remote-host` 已注入非零固定链路时延，`X2` 也使用显式静态链路时延
-- 当为实验显式切到 `useIdealRrc=0` 时，脚本默认会先走一次 `ideal bootstrap transport` 完成首轮 initial attach，再切回 real RRC transport；这一步是为了避免当前 NTN 上行预算下 `Msg3 / RRC Connection Request` 在纯 real-RRC 初始接入里稳定丢失
-- 当前默认还显式建模了 measurement-driven `HO preparation` 阶段；其附加准备时延由 `X2` 几何传播、目标星地斜距、目标侧负载和仰角共同决定
-- 当前目标侧 `AdmitHandoverRequest` 只在 `handoverMode = improved` 时随 `admissionAllowed` 动态开关；baseline 保持纯信号驱动 `A3` 对照，不再因为目标侧负载准入而在 preparation 阶段被拒绝
 - 当前已移除原来的几何 `beam budget/custom A3` handover 判决链；几何计算只保留给轨道推进、地面锚点与初始接入
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 重新走上行 `NAS/TFT` 分类路径
-- 当前用户面 `RLC` 映射已收口为 helper 默认行为，不再保留额外的 `RLC AM` 强制入口
-- 当前已将 `SRS` 调度相关参数入口从 baseline 配置面移除，并固定关闭相关项，避免与 handover 主线无关的 `PHY fatal`
+- 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 选择
 
 ## 当前切换语义
 - 当前 baseline 仍属于传统 `A3` 风格切换
 - 判决主线为：标准 `MeasurementReport` 上报的 `RSRP` 比较、`hysteresis` 与 `TTT`
 - `handoverMode = baseline` 时，直接在 A3 上报候选中选择最强邻区
-- `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时联合考虑 `signal`、`remainingVisibility` 与 `loadScore`，并在源站接近拥塞时进一步偏向轻载候选；当前还会在目标选择阶段直接剔除 `admissionAllowed=false` 的拥堵候选
-- improved 允许先用最小剩余可见时间做硬门控，再在保留下来的候选中做联合评分
-- 若 improved 过滤后不存在任何可接纳候选，则本轮不发起 handover preparation，而不是回退到拥堵目标
-- 当前 `HO execution delay` 统计定义为：
-  measurement-driven `HO_PREP_START` 到 `HO_END_OK` 的时间差
-- 因此当前时延统计会覆盖 `HO_PREP_START -> HO_TRIGGER -> HO_START` 的完整控制面前段，而不再只统计 `gNB RRC` 内部的闭环尾段
-- 当前最终 `HO success rate` 以剔除 `HO_PREP_BLOCKED_ADMISSION` 后的有效 handover `attempt` 为分母；该拒绝路径当前只属于 `handoverMode = improved`
-- 当前事件 trace 已接入 `HO_PREP_START`、`HO_TRIGGER`、`HO_PREP_BLOCKED_*`、`HO_FAILURE_NO_PREAMBLE`、`HO_FAILURE_MAX_RACH`、`HO_FAILURE_LEAVING`、`HO_FAILURE_JOINING` 和 `HO_END_ERROR`
+- `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时联合考虑 `signal`、`remainingVisibility` 与 `loadScore`，并在源站接近拥塞时进一步偏向轻载候选
+- improved 允许先用最小剩余可见时间做硬门控，再在保留下来的候选中做联合评分；只有当同一目标的联合领先状态持续至少 `improvedMinStableLeadTimeSeconds`，且最佳候选的联合分数相对当前服务星至少高出 `improvedMinJointScoreMargin` 时，才触发切换
 - 只要决策依据不包含负载权重，这条路径仍属于 baseline
 
 ## baseline 验证清单
@@ -113,17 +89,19 @@
 - 程序能启动、推进并正常结束
 - 无断言、fatal 或异常退出
 - `scratch/results/` 能生成基础输出
-- 能看到 `Progress`、`HO` 或最终 summary
+- 能看到 `Progress` 或最终研究摘要
+- 若需检查失败切换、失败原因或未闭合事件，优先查看 `handover_event_trace.csv`
 
 ### 2. 研究行为验证
 目标：确认当前 baseline 是否具备研究分析价值。
 
 重点检查：
 - 是否出现非零切换，而不是全程无切换
-- 切换流程是否可正常闭环，成功率和执行时延是否可统计
+- 切换流程是否可正常闭环，以及切换次数与吞吐恢复是否可统计
+- 若有失败，是否能在 `handover_event_trace.csv` 中区分 `noPreamble / maxRach / leaving / joining / unknown` 等失败原因
 - 切换附近是否能观察吞吐扰动，并优先结合 `handover_dl_throughput_trace.csv` 与 `handover_event_trace.csv` 对齐 `HO Start / HO Success`
 - 外围小区 UE 是否出现频繁切换或潜在 `ping-pong`
-- 最终 summary 中的自动 `ping-pong` 计数是否为非零，且与实时日志中的短时回切现象一致
+- 最终摘要中的自动 `ping-pong` 计数是否为非零，且与事件 trace 中的短时回切现象一致
 - 星间 `attachedUeCount`、`offeredPacketRate`、`loadScore` 是否出现可观察的不均衡
 - 若启用轨迹可视化，`sat_anchor_trace.csv` 是否能正确反映两轨波束锚点的小区变化路径
 
@@ -140,7 +118,7 @@
 - `commit id`
 - 运行命令
 - 是否保持默认参数
-- 总切换次数、成功率、平均时延
+- 总切换次数
 - 是否观察到 `ping-pong`
 - 自动 `ping-pong` 计数及其判定窗口
 - 是否观察到明显负载失衡
@@ -151,7 +129,7 @@
 当前 baseline 不使用负载做决策，但运行时已经保留最小接口：
 - 观测量：`attachedUeCount`、`offeredPacketRate`
 - 决策辅助量：`loadScore`、`admissionAllowed`
-- 当前 `loadScore` 采用更平滑的压力近似，避免少量 UE 时过早饱和，便于区分 `2/3/4 UE` 的负载差异
+- 当前 `loadScore` 采用更平滑的压力近似，避免在每星 `5 UE` 容量口径下过早饱和，便于区分 `2/3/4/5 UE` 的负载差异
 - 扩展方向：后续可继续加入 `estimatedPrbUsage`、`loadState` 等量
 
 当前实现状态：

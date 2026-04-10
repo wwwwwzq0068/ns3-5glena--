@@ -1,5 +1,5 @@
-#ifndef LEO_NTN_HANDOVER_REPORTING_H
-#define LEO_NTN_HANDOVER_REPORTING_H
+#ifndef MYFIRST_REPORTING_H
+#define MYFIRST_REPORTING_H
 
 /*
  * 文件说明：
@@ -57,26 +57,20 @@ struct DlTrafficAggregate
  */
 struct HandoverAggregate
 {
-    /** 全部 UE 的切换尝试次数总和。 */
-    uint32_t totalHoAttempt = 0;
-
     /** 全部 UE 的切换开始次数总和。 */
     uint32_t totalHoStart = 0;
 
     /** 全部 UE 的切换成功次数总和。 */
     uint32_t totalHoEndOk = 0;
 
+    /** 全部 UE 的切换失败次数总和。 */
+    uint32_t totalHoEndError = 0;
+
+    /** 仿真结束前尚未闭合的切换次数。 */
+    uint32_t totalHoUnresolved = 0;
+
     /** 全部成功切换的执行时延总和，单位秒。 */
     double totalHoDelaySeconds = 0.0;
-
-    /** 已进入执行阶段后失败的切换总数。 */
-    uint32_t totalHoFailure = 0;
-
-    /** 在准备阶段即被拒绝或失败的切换总数。 */
-    uint32_t totalHoPreparationFailure = 0;
-
-    /** 因目标侧 admission 门控被挡掉、且从最终失败/成功率统计中剔除的次数。 */
-    uint32_t totalHoPreparationBlockedAdmissionExcluded = 0;
 
     /** 已完成吞吐恢复判定的切换次数。 */
     uint32_t totalHoRecovered = 0;
@@ -95,6 +89,21 @@ struct HandoverAggregate
 
     /** 全部 UE 识别到的短时回切总数。 */
     uint32_t totalPingPongCount = 0;
+
+    /** 失败原因明细：无专用 preamble。 */
+    uint32_t totalFailureNoPreamble = 0;
+
+    /** 失败原因明细：达到最大 RACH 尝试次数。 */
+    uint32_t totalFailureMaxRach = 0;
+
+    /** 失败原因明细：source leaving timeout。 */
+    uint32_t totalFailureLeaving = 0;
+
+    /** 失败原因明细：target joining timeout。 */
+    uint32_t totalFailureJoining = 0;
+
+    /** 失败原因明细：未知或未捕获。 */
+    uint32_t totalFailureUnknown = 0;
 };
 
 /**
@@ -137,31 +146,27 @@ BuildHandoverAggregate(const std::vector<UeRuntime>& ues)
     HandoverAggregate out;
     for (const auto& ue : ues)
     {
-        const uint32_t effectiveHoAttempt =
-            (ue.handoverAttemptCount >= ue.handoverPreparationBlockedAdmissionCount)
-                ? (ue.handoverAttemptCount - ue.handoverPreparationBlockedAdmissionCount)
-                : 0;
-        const uint32_t effectivePreparationFailure =
-            (ue.handoverPreparationFailureCount >= ue.handoverPreparationBlockedAdmissionCount)
-                ? (ue.handoverPreparationFailureCount - ue.handoverPreparationBlockedAdmissionCount)
-                : 0;
-
-        out.totalHoAttempt += effectiveHoAttempt;
         out.totalHoStart += ue.handoverStartCount;
         out.totalHoEndOk += ue.handoverEndOkCount;
+        out.totalHoEndError += ue.handoverEndErrorCount;
         out.totalHoDelaySeconds += ue.totalHandoverExecutionDelaySeconds;
-        out.totalHoFailure += ue.handoverFailureCount;
-        out.totalHoPreparationFailure += effectivePreparationFailure;
-        out.totalHoPreparationBlockedAdmissionExcluded +=
-            ue.handoverPreparationBlockedAdmissionCount;
         out.totalHoRecovered += ue.throughputRecoveryCount;
         out.totalHoRecoverySeconds += ue.totalThroughputRecoverySeconds;
         out.totalPingPongCount += ue.pingPongCount;
+        out.totalFailureNoPreamble += ue.handoverFailureNoPreambleCount;
+        out.totalFailureMaxRach += ue.handoverFailureMaxRachCount;
+        out.totalFailureLeaving += ue.handoverFailureLeavingCount;
+        out.totalFailureJoining += ue.handoverFailureJoiningCount;
+        out.totalFailureUnknown += ue.handoverFailureUnknownCount;
     }
-    if (out.totalHoAttempt > 0)
+    if (out.totalHoStart >= out.totalHoEndOk + out.totalHoEndError)
+    {
+        out.totalHoUnresolved = out.totalHoStart - out.totalHoEndOk - out.totalHoEndError;
+    }
+    if (out.totalHoStart > 0)
     {
         out.overallSuccessRate =
-            100.0 * static_cast<double>(out.totalHoEndOk) / static_cast<double>(out.totalHoAttempt);
+            100.0 * static_cast<double>(out.totalHoEndOk) / static_cast<double>(out.totalHoStart);
     }
     if (out.totalHoEndOk > 0)
     {
@@ -186,11 +191,9 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
     const DlTrafficAggregate aggregate =
         BuildDlTrafficAggregate(ues, appDurationSeconds, udpPacketSizeBytes);
 
-    std::cout << "=== Final UE DL stats ===" << std::endl;
-    std::cout << "UE count: " << aggregate.perUe.size() << std::endl;
-    std::cout << "Received packets(total): " << aggregate.totalRxPackets << std::endl;
-    std::cout << "Average DL throughput: " << std::fixed << std::setprecision(3)
-              << aggregate.totalAverageDlThroughputMbps << " Mbps (total)" << std::endl;
+    std::cout << "=== Research summary ===" << std::endl;
+    std::cout << "Average DL throughput(total): " << std::fixed << std::setprecision(3)
+              << aggregate.totalAverageDlThroughputMbps << " Mbps" << std::endl;
 }
 
 /**
@@ -199,20 +202,8 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
 inline void
 PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSeconds)
 {
-    std::cout << "=== Handover summary ===" << std::endl;
     const HandoverAggregate aggregate = BuildHandoverAggregate(ues);
-    std::cout << "Total HO attempt: " << aggregate.totalHoAttempt << std::endl;
-    std::cout << "Total HO start: " << aggregate.totalHoStart << std::endl;
-    std::cout << "Total HO success: " << aggregate.totalHoEndOk << std::endl;
-    std::cout << "Total HO execution failure: " << aggregate.totalHoFailure << std::endl;
-    std::cout << "Total HO preparation failure: " << aggregate.totalHoPreparationFailure
-              << std::endl;
-    std::cout << "Total HO prep blocked by admission (excluded from failure/success-rate stats): "
-              << aggregate.totalHoPreparationBlockedAdmissionExcluded << std::endl;
-    std::cout << "Overall HO success rate: " << std::fixed << std::setprecision(1)
-              << aggregate.overallSuccessRate << "%" << std::endl;
-    std::cout << "Average HO execution delay: " << std::fixed << std::setprecision(3)
-              << aggregate.averageDelayMs << " ms" << std::endl;
+    std::cout << "Completed handovers: " << aggregate.totalHoEndOk << std::endl;
     if (aggregate.totalHoRecovered > 0)
     {
         std::cout << "Average throughput recovery time: " << std::fixed << std::setprecision(3)
@@ -229,4 +220,4 @@ PrintHandoverSummary(const std::vector<UeRuntime>& ues, double pingPongWindowSec
 
 } // namespace ns3
 
-#endif // LEO_NTN_HANDOVER_REPORTING_H
+#endif // MYFIRST_REPORTING_H

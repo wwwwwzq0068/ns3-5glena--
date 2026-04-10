@@ -5,7 +5,7 @@
 当前口径与本方案保持一致：
 - 研究主线：`LEO-NTN` 切换研究
 - 当前 baseline：`2x4` 双轨、`25 UE`、`seven-cell`
-- 当前最新稳定节点：`research-v4.1.1`
+- 当前最新稳定节点：`research-v4.2`
 - 当前阶段定位：完成三维物理建模、`Earth-fixed` 覆盖建模与统一真实测量驱动的 `A3 baseline / improved` 平台收口
 - 当前重点：在同一 `MeasurementReport` 入口下比较 baseline 与 improved
 
@@ -476,11 +476,11 @@
 - `gNbNum = 8`
 - `orbitPlaneCount = 2`
 - `ueNum = 25`
-- `UE` 布局固定为 `seven-cell`
+- `ueLayoutType = seven-cell`
 - `simTime = 40 s`
 - `updateIntervalMs = 100`
 - `hoHysteresisDb = 2.0 dB`
-- `hoTttMs = 200 ms`
+- `hoTttMs = 160 ms`
 
 ### 用途说明
 - 本页不一定需要在正式汇报中展示

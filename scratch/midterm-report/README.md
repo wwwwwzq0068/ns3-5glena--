@@ -13,7 +13,7 @@ Current default scenario focus:
 - `2x4` dual-plane constellation
 - `25 UE` across a seven-cell footprint
 - UE layout generation is now organized as local offset templates plus a unified geographic conversion step
-- Current slide and figure materials are aligned with the measurement-driven baseline / improved snapshot at `research-v4.1.1`
+- Current slide and figure materials are aligned with the measurement-driven baseline / improved snapshot at `research-v4.2`
 
 Cleanup note:
 - Derived figures, draft assets, scripts, tables, and speaking notes were removed

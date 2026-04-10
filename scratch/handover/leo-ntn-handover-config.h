@@ -26,6 +26,8 @@ struct BaselineSimulationConfig
 
     uint16_t gNbNum = 8;
     uint32_t ueNum = 25;
+    std::string ueLayoutType = "seven-cell";
+    double ueSpacingMeters = 40000.0;
     double ueCenterSpacingMeters = 6000.0;
     double ueRingPointOffsetMeters = 5000.0;
 
@@ -35,14 +37,14 @@ struct BaselineSimulationConfig
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
     uint32_t orbitPlaneCount = 2;
-    double interPlaneRaanSpacingDeg = -2.0;
-    double interPlaneTimeOffsetSeconds = 0.0;
+    double interPlaneRaanSpacingDeg = -1.0;
+    double interPlaneTimeOffsetSeconds = 3.0;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
-    double alignmentReferenceTimeSeconds = 20.0;
-    double overpassGapSeconds = 2.0;
+    double alignmentReferenceTimeSeconds = 15.0;
+    double overpassGapSeconds = 3.0;
     double overpassTimeOffsetSeconds = 0.0;
     double updateIntervalMs = 100.0;
     double minElevationDeg = 10.0;
@@ -50,6 +52,12 @@ struct BaselineSimulationConfig
     double ueLatitudeDeg = 45.6;
     double ueLongitudeDeg = 84.9;
     double ueAltitudeMeters = 0.0;
+    bool lockCellAnchorToUe = true;
+    double cellLatitudeDeg = 45.6;
+    double cellLongitudeDeg = 84.9;
+    double cellAltitudeMeters = 0.0;
+
+    bool useWgs84HexGrid = true;
     bool lockGridCenterToUe = true;
     double gridCenterLatitudeDeg = 45.6;
     double gridCenterLongitudeDeg = 84.9;
@@ -72,7 +80,7 @@ struct BaselineSimulationConfig
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
-    double lambda = 1000.0;
+    double lambda = 250.0;
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
@@ -82,26 +90,9 @@ struct BaselineSimulationConfig
     double sideLobeAttenuationDb = 30.0;
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
-    bool useIdealRrc = true;
-    double s1uLinkDelayMs = 8.0;
-    double s11LinkDelayMs = 8.0;
-    double s5LinkDelayMs = 8.0;
-    double remoteHostLinkDelayMs = 8.0;
-    double x2ProcessingDelayMs = 2.0;
-    double x2MinLinkDelayMs = 1.0;
-    double x2PropagationSpeedMetersPerSecond = 299792458.0;
-    bool enableDynamicHoPreparation = true;
-    double hoPreparationBaseDelayMs = 4.0;
-    double hoPreparationLoadPenaltyMs = 12.0;
-    double hoPreparationLowElevationPenaltyMs = 8.0;
-    double hoPreparationExecutionGuardMs = 20.0;
-    double realRrcConnectionRequestTimeoutMs = 120.0;
-    double realRrcConnectionSetupTimeoutMs = 5000.0;
-    double realRrcT300Ms = 5000.0;
-    bool enableIdealRrcBootstrap = true;
 
     double hoHysteresisDb = 2.0;
-    uint32_t hoTttMs = 200;
+    uint32_t hoTttMs = 160;
     uint16_t measurementReportIntervalMs = 120;
     uint8_t measurementMaxReportCells = 8;
     std::string handoverMode = "baseline";
@@ -110,19 +101,33 @@ struct BaselineSimulationConfig
     double improvedVisibilityWeight = 0.2;
     double improvedMinLoadScoreDelta = 0.2;
     double improvedMaxSignalGapDb = 3.0;
-    double improvedReturnGuardSeconds = 0.5;
+    double improvedMinStableLeadTimeSeconds = 0.12;
     double improvedMinVisibilitySeconds = 1.0;
     double improvedVisibilityHorizonSeconds = 8.0;
-    double improvedVisibilityPredictionStepSeconds = 0.2;
+    double improvedVisibilityPredictionStepSeconds = 0.5;
+    double improvedMinJointScoreMargin = 0.03;
     double pingPongWindowSeconds = 1.5;
+    bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
+    bool compactReport = true;
+    bool printGridAnchorEvents = false;
+    bool printKpiReports = false;
+    bool printNrtEvents = false;
+    bool printOrbitCheck = false;
+    bool printRrcStateTransitions = false;
+    bool startupVerbose = false;
+    double kpiIntervalSeconds = 2.0;
     bool printSimulationProgress = true;
     double progressReportIntervalSeconds = 2.0;
     bool runGridSvgScript = true;
+    double throughputReportIntervalSeconds = 0.0;
     bool enableHandoverThroughputTrace = true;
     double handoverThroughputTraceIntervalSeconds = 0.005;
     double maxSupportedUesPerSatellite = 5.0;
     double loadCongestionThreshold = 0.8;
+    bool enableSrsInFSlots = false;
+    bool enableSrsInUlSlots = false;
+    uint32_t srsSymbols = 0;
 };
 
 inline void
@@ -134,6 +139,8 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("appStartTime", config.appStartTime);
     addArg("gNbNum", config.gNbNum);
     addArg("ueNum", config.ueNum);
+    addArg("ueLayoutType", config.ueLayoutType);
+    addArg("ueSpacingMeters", config.ueSpacingMeters);
     addArg("ueCenterSpacingMeters", config.ueCenterSpacingMeters);
     addArg("ueRingPointOffsetMeters", config.ueRingPointOffsetMeters);
     addArg("satAltitudeMeters", config.satAltitudeMeters);
@@ -156,6 +163,11 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("ueLatitudeDeg", config.ueLatitudeDeg);
     addArg("ueLongitudeDeg", config.ueLongitudeDeg);
     addArg("ueAltitudeMeters", config.ueAltitudeMeters);
+    addArg("lockCellAnchorToUe", config.lockCellAnchorToUe);
+    addArg("cellLatitudeDeg", config.cellLatitudeDeg);
+    addArg("cellLongitudeDeg", config.cellLongitudeDeg);
+    addArg("cellAltitudeMeters", config.cellAltitudeMeters);
+    addArg("useWgs84HexGrid", config.useWgs84HexGrid);
     addArg("lockGridCenterToUe", config.lockGridCenterToUe);
     addArg("gridCenterLatitudeDeg", config.gridCenterLatitudeDeg);
     addArg("gridCenterLongitudeDeg", config.gridCenterLongitudeDeg);
@@ -166,29 +178,18 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("outputDir", config.outputDir);
     addArg("printGridCatalog", config.printGridCatalog);
     addArg("gridCatalogPath", config.gridCatalogPath);
+    addArg("centralFrequency", config.centralFrequency);
+    addArg("bandwidth", config.bandwidth);
+    addArg("lambda", config.lambda);
+    addArg("udpPacketSize", config.udpPacketSize);
+    addArg("gnbTxPower", config.gnbTxPower);
+    addArg("ueTxPower", config.ueTxPower);
     addArg("beamMaxGainDbi", config.beamMaxGainDbi);
     addArg("scanMaxDeg", config.scanMaxDeg);
     addArg("theta3dBDeg", config.theta3dBDeg);
     addArg("sideLobeAttenuationDb", config.sideLobeAttenuationDb);
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
-    addArg("useIdealRrc", config.useIdealRrc);
-    addArg("s1uLinkDelayMs", config.s1uLinkDelayMs);
-    addArg("s11LinkDelayMs", config.s11LinkDelayMs);
-    addArg("s5LinkDelayMs", config.s5LinkDelayMs);
-    addArg("remoteHostLinkDelayMs", config.remoteHostLinkDelayMs);
-    addArg("x2ProcessingDelayMs", config.x2ProcessingDelayMs);
-    addArg("x2MinLinkDelayMs", config.x2MinLinkDelayMs);
-    addArg("x2PropagationSpeedMetersPerSecond", config.x2PropagationSpeedMetersPerSecond);
-    addArg("enableDynamicHoPreparation", config.enableDynamicHoPreparation);
-    addArg("hoPreparationBaseDelayMs", config.hoPreparationBaseDelayMs);
-    addArg("hoPreparationLoadPenaltyMs", config.hoPreparationLoadPenaltyMs);
-    addArg("hoPreparationLowElevationPenaltyMs", config.hoPreparationLowElevationPenaltyMs);
-    addArg("hoPreparationExecutionGuardMs", config.hoPreparationExecutionGuardMs);
-    addArg("realRrcConnectionRequestTimeoutMs", config.realRrcConnectionRequestTimeoutMs);
-    addArg("realRrcConnectionSetupTimeoutMs", config.realRrcConnectionSetupTimeoutMs);
-    addArg("realRrcT300Ms", config.realRrcT300Ms);
-    addArg("enableIdealRrcBootstrap", config.enableIdealRrcBootstrap);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
     addArg("measurementReportIntervalMs", config.measurementReportIntervalMs);
@@ -199,12 +200,22 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("improvedVisibilityWeight", config.improvedVisibilityWeight);
     addArg("improvedMinLoadScoreDelta", config.improvedMinLoadScoreDelta);
     addArg("improvedMaxSignalGapDb", config.improvedMaxSignalGapDb);
-    addArg("improvedReturnGuardSeconds", config.improvedReturnGuardSeconds);
+    addArg("improvedMinStableLeadTimeSeconds", config.improvedMinStableLeadTimeSeconds);
     addArg("improvedMinVisibilitySeconds", config.improvedMinVisibilitySeconds);
     addArg("improvedVisibilityHorizonSeconds", config.improvedVisibilityHorizonSeconds);
     addArg("improvedVisibilityPredictionStepSeconds", config.improvedVisibilityPredictionStepSeconds);
+    addArg("improvedMinJointScoreMargin", config.improvedMinJointScoreMargin);
     addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
+    addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
+    addArg("compactReport", config.compactReport);
+    addArg("printGridAnchorEvents", config.printGridAnchorEvents);
+    addArg("printKpiReports", config.printKpiReports);
+    addArg("printNrtEvents", config.printNrtEvents);
+    addArg("printOrbitCheck", config.printOrbitCheck);
+    addArg("printRrcStateTransitions", config.printRrcStateTransitions);
+    addArg("startupVerbose", config.startupVerbose);
+    addArg("kpiIntervalSeconds", config.kpiIntervalSeconds);
     addArg("printSimulationProgress", config.printSimulationProgress);
     addArg("progressReportIntervalSeconds", config.progressReportIntervalSeconds);
     addArg("runGridSvgScript", config.runGridSvgScript);
@@ -212,12 +223,16 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("satAnchorTracePath", config.satAnchorTracePath);
     addArg("ueLayoutPath", config.ueLayoutPath);
     addArg("gridSvgPath", config.gridSvgPath);
+    addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
     addArg("handoverEventTracePath", config.handoverEventTracePath);
     addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
     addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
     addArg("loadCongestionThreshold", config.loadCongestionThreshold);
+    addArg("enableSrsInFSlots", config.enableSrsInFSlots);
+    addArg("enableSrsInUlSlots", config.enableSrsInUlSlots);
+    addArg("srsSymbols", config.srsSymbols);
 }
 
 inline void
@@ -267,6 +282,13 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
 inline void
 ApplyBaselineDerivedLocationConfig(BaselineSimulationConfig& config)
 {
+    if (config.lockCellAnchorToUe)
+    {
+        config.cellLatitudeDeg = config.ueLatitudeDeg;
+        config.cellLongitudeDeg = config.ueLongitudeDeg;
+        config.cellAltitudeMeters = config.ueAltitudeMeters;
+    }
+
     if (config.lockGridCenterToUe)
     {
         config.gridCenterLatitudeDeg = config.ueLatitudeDeg;
@@ -279,10 +301,14 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
 {
     NS_ABORT_MSG_IF(config.gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
+    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell",
+                    "ueLayoutType must be either 'line' or 'seven-cell'");
+    NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueCenterSpacingMeters <= 0.0, "ueCenterSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueRingPointOffsetMeters <= 0.0,
                     "ueRingPointOffsetMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueNum != 25, "current seven-cell baseline requires ueNum == 25");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "seven-cell" && config.ueNum != 25,
+                    "seven-cell layout currently requires ueNum == 25");
     NS_ABORT_MSG_IF(config.orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(config.orbitEccentricity < 0.0 || config.orbitEccentricity >= 1.0,
@@ -294,28 +320,6 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
-    NS_ABORT_MSG_IF(config.s1uLinkDelayMs < 0.0, "s1uLinkDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.s11LinkDelayMs < 0.0, "s11LinkDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.s5LinkDelayMs < 0.0, "s5LinkDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.remoteHostLinkDelayMs < 0.0,
-                    "remoteHostLinkDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.x2ProcessingDelayMs < 0.0, "x2ProcessingDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.x2MinLinkDelayMs < 0.0, "x2MinLinkDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.x2PropagationSpeedMetersPerSecond <= 0.0,
-                    "x2PropagationSpeedMetersPerSecond must be > 0");
-    NS_ABORT_MSG_IF(config.hoPreparationBaseDelayMs < 0.0,
-                    "hoPreparationBaseDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.hoPreparationLoadPenaltyMs < 0.0,
-                    "hoPreparationLoadPenaltyMs must be >= 0");
-    NS_ABORT_MSG_IF(config.hoPreparationLowElevationPenaltyMs < 0.0,
-                    "hoPreparationLowElevationPenaltyMs must be >= 0");
-    NS_ABORT_MSG_IF(config.hoPreparationExecutionGuardMs < 0.0,
-                    "hoPreparationExecutionGuardMs must be >= 0");
-    NS_ABORT_MSG_IF(config.realRrcConnectionRequestTimeoutMs <= 0.0,
-                    "realRrcConnectionRequestTimeoutMs must be > 0");
-    NS_ABORT_MSG_IF(config.realRrcConnectionSetupTimeoutMs <= 0.0,
-                    "realRrcConnectionSetupTimeoutMs must be > 0");
-    NS_ABORT_MSG_IF(config.realRrcT300Ms <= 0.0, "realRrcT300Ms must be > 0");
     NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved",
                     "handoverMode must be either 'baseline' or 'improved'");
     NS_ABORT_MSG_IF(config.measurementMaxReportCells == 0,
@@ -332,14 +336,17 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "improvedMinLoadScoreDelta must be >= 0");
     NS_ABORT_MSG_IF(config.improvedMaxSignalGapDb < 0.0,
                     "improvedMaxSignalGapDb must be >= 0");
-    NS_ABORT_MSG_IF(config.improvedReturnGuardSeconds < 0.0,
-                    "improvedReturnGuardSeconds must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedMinStableLeadTimeSeconds < 0.0,
+                    "improvedMinStableLeadTimeSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.improvedMinVisibilitySeconds < 0.0,
                     "improvedMinVisibilitySeconds must be >= 0");
     NS_ABORT_MSG_IF(config.improvedVisibilityHorizonSeconds <= 0.0,
                     "improvedVisibilityHorizonSeconds must be > 0");
     NS_ABORT_MSG_IF(config.improvedVisibilityPredictionStepSeconds <= 0.0,
                     "improvedVisibilityPredictionStepSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.improvedMinJointScoreMargin < 0.0,
+                    "improvedMinJointScoreMargin must be >= 0");
+    NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");
     NS_ABORT_MSG_IF(config.hexCellRadiusKm <= 0.0, "hexCellRadiusKm must be > 0");
