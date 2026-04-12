@@ -77,6 +77,8 @@ struct BaselineSimulationConfig
     std::string handoverThroughputTracePath =
         JoinOutputPath(outputDir, "handover_dl_throughput_trace.csv");
     std::string handoverEventTracePath = JoinOutputPath(outputDir, "handover_event_trace.csv");
+    std::string e2eFlowMetricsPath = JoinOutputPath(outputDir, "e2e_flow_metrics.csv");
+    std::string phyDlTbMetricsPath = JoinOutputPath(outputDir, "phy_dl_tb_metrics.csv");
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -90,6 +92,15 @@ struct BaselineSimulationConfig
     double sideLobeAttenuationDb = 30.0;
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
+    uint32_t ueAntennaRows = 1;
+    uint32_t ueAntennaColumns = 2;
+    uint32_t gnbAntennaRows = 8;
+    uint32_t gnbAntennaColumns = 8;
+    std::string ueAntennaElement = "isotropic";
+    std::string gnbAntennaElement = "isotropic";
+    std::string beamformingMode = "ideal-direct-path";
+    double beamformingPeriodicityMs = 100.0;
+    bool shadowingEnabled = true;
 
     double hoHysteresisDb = 2.0;
     uint32_t hoTttMs = 160;
@@ -190,6 +201,15 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("sideLobeAttenuationDb", config.sideLobeAttenuationDb);
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
+    addArg("ueAntennaRows", config.ueAntennaRows);
+    addArg("ueAntennaColumns", config.ueAntennaColumns);
+    addArg("gnbAntennaRows", config.gnbAntennaRows);
+    addArg("gnbAntennaColumns", config.gnbAntennaColumns);
+    addArg("ueAntennaElement", config.ueAntennaElement);
+    addArg("gnbAntennaElement", config.gnbAntennaElement);
+    addArg("beamformingMode", config.beamformingMode);
+    addArg("beamformingPeriodicityMs", config.beamformingPeriodicityMs);
+    addArg("shadowingEnabled", config.shadowingEnabled);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
     addArg("measurementReportIntervalMs", config.measurementReportIntervalMs);
@@ -226,6 +246,8 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
     addArg("handoverEventTracePath", config.handoverEventTracePath);
+    addArg("e2eFlowMetricsPath", config.e2eFlowMetricsPath);
+    addArg("phyDlTbMetricsPath", config.phyDlTbMetricsPath);
     addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
     addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
@@ -248,6 +270,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "handover_dl_throughput_trace.csv");
     const std::string defaultHandoverEventTracePath =
         JoinOutputPath(defaultOutputDir, "handover_event_trace.csv");
+    const std::string defaultE2eFlowMetricsPath =
+        JoinOutputPath(defaultOutputDir, "e2e_flow_metrics.csv");
+    const std::string defaultPhyDlTbMetricsPath =
+        JoinOutputPath(defaultOutputDir, "phy_dl_tb_metrics.csv");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
@@ -275,6 +301,15 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         config.outputDir != defaultOutputDir)
     {
         config.handoverEventTracePath = JoinOutputPath(config.outputDir, "handover_event_trace.csv");
+    }
+    if (config.e2eFlowMetricsPath == defaultE2eFlowMetricsPath && config.outputDir != defaultOutputDir)
+    {
+        config.e2eFlowMetricsPath = JoinOutputPath(config.outputDir, "e2e_flow_metrics.csv");
+    }
+    if (config.phyDlTbMetricsPath == defaultPhyDlTbMetricsPath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.phyDlTbMetricsPath = JoinOutputPath(config.outputDir, "phy_dl_tb_metrics.csv");
     }
 
 }
@@ -320,6 +355,24 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
+    NS_ABORT_MSG_IF(config.ueAntennaRows == 0, "ueAntennaRows must be >= 1");
+    NS_ABORT_MSG_IF(config.ueAntennaColumns == 0, "ueAntennaColumns must be >= 1");
+    NS_ABORT_MSG_IF(config.gnbAntennaRows == 0, "gnbAntennaRows must be >= 1");
+    NS_ABORT_MSG_IF(config.gnbAntennaColumns == 0, "gnbAntennaColumns must be >= 1");
+    NS_ABORT_MSG_IF(config.ueAntennaElement != "isotropic" &&
+                        config.ueAntennaElement != "three-gpp",
+                    "ueAntennaElement must be either 'isotropic' or 'three-gpp'");
+    NS_ABORT_MSG_IF(config.gnbAntennaElement != "isotropic" &&
+                        config.gnbAntennaElement != "three-gpp",
+                    "gnbAntennaElement must be either 'isotropic' or 'three-gpp'");
+    NS_ABORT_MSG_IF(config.beamformingMode != "ideal-direct-path" &&
+                        config.beamformingMode != "ideal-cell-scan" &&
+                        config.beamformingMode != "ideal-direct-path-quasi-omni" &&
+                        config.beamformingMode != "ideal-cell-scan-quasi-omni" &&
+                        config.beamformingMode != "ideal-quasi-omni-direct-path",
+                    "beamformingMode must be one of: ideal-direct-path, ideal-cell-scan, ideal-direct-path-quasi-omni, ideal-cell-scan-quasi-omni, ideal-quasi-omni-direct-path");
+    NS_ABORT_MSG_IF(config.beamformingPeriodicityMs < 0.0,
+                    "beamformingPeriodicityMs must be >= 0");
     NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved",
                     "handoverMode must be either 'baseline' or 'improved'");
     NS_ABORT_MSG_IF(config.measurementMaxReportCells == 0,

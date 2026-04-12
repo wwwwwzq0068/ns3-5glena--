@@ -15,8 +15,12 @@
  */
 
 #include "leo-ntn-handover-runtime.h"
+#include "ns3/flow-monitor-module.h"
+#include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <vector>
 
 namespace ns3
@@ -50,6 +54,75 @@ struct DlTrafficAggregate
 
     /** 所有 UE 汇总后的平均总吞吐，单位 Mbps。 */
     double totalAverageDlThroughputMbps = 0.0;
+};
+
+/**
+ * 单个 UE 的端到端业务流统计结果。
+ */
+struct UeE2eFlowSummary
+{
+    uint32_t ueIndex = 0;
+    uint16_t dlPort = 0;
+    bool hasMatchedFlow = false;
+    uint64_t txPackets = 0;
+    uint64_t rxPackets = 0;
+    uint64_t lostPackets = 0;
+    uint64_t txBytes = 0;
+    uint64_t rxBytes = 0;
+    double meanDelayMs = std::numeric_limits<double>::quiet_NaN();
+    double meanJitterMs = std::numeric_limits<double>::quiet_NaN();
+    double packetLossRatePercent = 0.0;
+    double averageOfferedMbps = 0.0;
+    double averageThroughputMbps = 0.0;
+    double delaySumSeconds = 0.0;
+    double jitterSumSeconds = 0.0;
+};
+
+/**
+ * 所有 UE 的端到端业务流聚合结果。
+ */
+struct E2eFlowAggregate
+{
+    std::vector<UeE2eFlowSummary> perUe;
+    uint32_t matchedFlowCount = 0;
+    uint64_t totalTxPackets = 0;
+    uint64_t totalRxPackets = 0;
+    uint64_t totalLostPackets = 0;
+    uint64_t totalTxBytes = 0;
+    uint64_t totalRxBytes = 0;
+    double meanDelayMs = std::numeric_limits<double>::quiet_NaN();
+    double meanJitterMs = std::numeric_limits<double>::quiet_NaN();
+    double packetLossRatePercent = 0.0;
+    double totalAverageOfferedMbps = 0.0;
+    double totalAverageThroughputMbps = 0.0;
+};
+
+/**
+ * 单个 UE 的 PHY 下行传输块统计结果。
+ */
+struct UePhyDlTbSummary
+{
+    uint32_t ueIndex = 0;
+    uint64_t tbCount = 0;
+    uint64_t corruptTbCount = 0;
+    double corruptTbRatePercent = 0.0;
+    double meanTbler = std::numeric_limits<double>::quiet_NaN();
+    double meanSinrDb = std::numeric_limits<double>::quiet_NaN();
+    double minSinrDb = std::numeric_limits<double>::quiet_NaN();
+};
+
+/**
+ * 所有 UE 的 PHY 下行传输块聚合结果。
+ */
+struct PhyDlTbAggregate
+{
+    std::vector<UePhyDlTbSummary> perUe;
+    uint64_t totalTbCount = 0;
+    uint64_t totalCorruptTbCount = 0;
+    double corruptTbRatePercent = 0.0;
+    double meanTbler = std::numeric_limits<double>::quiet_NaN();
+    double meanSinrDb = std::numeric_limits<double>::quiet_NaN();
+    double minSinrDb = std::numeric_limits<double>::quiet_NaN();
 };
 
 /**
@@ -138,6 +211,133 @@ BuildDlTrafficAggregate(const std::vector<UeRuntime>& ues,
 }
 
 /**
+ * 根据 FlowMonitor 结果生成每个 UE 的端到端时延与丢包统计。
+ */
+inline E2eFlowAggregate
+BuildE2eFlowAggregate(const std::vector<UeRuntime>& ues,
+                      const FlowMonitor::FlowStatsContainer& stats,
+                      const Ptr<Ipv4FlowClassifier>& classifier,
+                      double appDurationSeconds,
+                      uint32_t udpPacketSizeBytes)
+{
+    E2eFlowAggregate out;
+    out.perUe.reserve(ues.size());
+
+    std::map<uint16_t, uint32_t> portToUe;
+    for (uint32_t ueIdx = 0; ueIdx < ues.size(); ++ueIdx)
+    {
+        UeE2eFlowSummary summary;
+        summary.ueIndex = ueIdx;
+        summary.dlPort = ues[ueIdx].dlPort;
+        out.perUe.push_back(summary);
+        if (summary.dlPort != 0)
+        {
+            portToUe[summary.dlPort] = ueIdx;
+        }
+    }
+
+    if (!classifier)
+    {
+        return out;
+    }
+
+    double totalDelaySeconds = 0.0;
+    double totalJitterSeconds = 0.0;
+
+    for (const auto& flowEntry : stats)
+    {
+        const auto tuple = classifier->FindFlow(flowEntry.first);
+        if (tuple.protocol != 17)
+        {
+            continue;
+        }
+
+        const auto portIt = portToUe.find(tuple.destinationPort);
+        if (portIt == portToUe.end())
+        {
+            continue;
+        }
+
+        auto& summary = out.perUe[portIt->second];
+        const auto& stat = flowEntry.second;
+        summary.hasMatchedFlow = true;
+        summary.txPackets += stat.txPackets;
+        summary.rxPackets += stat.rxPackets;
+        summary.txBytes += stat.txBytes;
+        summary.rxBytes += stat.rxBytes;
+        summary.delaySumSeconds += stat.delaySum.GetSeconds();
+        summary.jitterSumSeconds += stat.jitterSum.GetSeconds();
+    }
+
+    for (auto& summary : out.perUe)
+    {
+        if (!summary.hasMatchedFlow)
+        {
+            continue;
+        }
+
+        out.matchedFlowCount++;
+        summary.lostPackets =
+            (summary.txPackets >= summary.rxPackets) ? (summary.txPackets - summary.rxPackets) : 0;
+        if (summary.rxPackets > 0)
+        {
+            summary.meanDelayMs =
+                summary.delaySumSeconds * 1000.0 / static_cast<double>(summary.rxPackets);
+            totalDelaySeconds += summary.delaySumSeconds;
+        }
+        if (summary.rxPackets > 1)
+        {
+            summary.meanJitterMs =
+                summary.jitterSumSeconds * 1000.0 / static_cast<double>(summary.rxPackets - 1);
+            totalJitterSeconds += summary.jitterSumSeconds;
+        }
+        if (summary.txPackets > 0)
+        {
+            summary.packetLossRatePercent =
+                100.0 * static_cast<double>(summary.lostPackets) /
+                static_cast<double>(summary.txPackets);
+        }
+        if (appDurationSeconds > 0.0)
+        {
+            summary.averageOfferedMbps =
+                summary.txPackets * udpPacketSizeBytes * 8.0 / appDurationSeconds / 1e6;
+            summary.averageThroughputMbps =
+                summary.rxPackets * udpPacketSizeBytes * 8.0 / appDurationSeconds / 1e6;
+        }
+
+        out.totalTxPackets += summary.txPackets;
+        out.totalRxPackets += summary.rxPackets;
+        out.totalLostPackets += summary.lostPackets;
+        out.totalTxBytes += summary.txBytes;
+        out.totalRxBytes += summary.rxBytes;
+    }
+
+    if (out.totalTxPackets > 0)
+    {
+        out.packetLossRatePercent =
+            100.0 * static_cast<double>(out.totalLostPackets) /
+            static_cast<double>(out.totalTxPackets);
+    }
+    if (out.totalRxPackets > 0)
+    {
+        out.meanDelayMs = totalDelaySeconds * 1000.0 / static_cast<double>(out.totalRxPackets);
+    }
+    if (out.totalRxPackets > 1)
+    {
+        out.meanJitterMs = totalJitterSeconds * 1000.0 /
+                           static_cast<double>(out.totalRxPackets - out.matchedFlowCount);
+    }
+    if (appDurationSeconds > 0.0)
+    {
+        out.totalAverageOfferedMbps =
+            out.totalTxPackets * udpPacketSizeBytes * 8.0 / appDurationSeconds / 1e6;
+        out.totalAverageThroughputMbps =
+            out.totalRxPackets * udpPacketSizeBytes * 8.0 / appDurationSeconds / 1e6;
+    }
+    return out;
+}
+
+/**
  * 汇总所有 UE 的切换次数、成功率与平均执行时延。
  */
 inline HandoverAggregate
@@ -194,6 +394,234 @@ PrintDlTrafficSummary(const std::vector<UeRuntime>& ues,
     std::cout << "=== Research summary ===" << std::endl;
     std::cout << "Average DL throughput(total): " << std::fixed << std::setprecision(3)
               << aggregate.totalAverageDlThroughputMbps << " Mbps" << std::endl;
+}
+
+/**
+ * 打印端到端时延与丢包汇总。
+ */
+inline void
+PrintE2eFlowSummary(const E2eFlowAggregate& aggregate)
+{
+    if (aggregate.matchedFlowCount == 0)
+    {
+        std::cout << "Average E2E delay(rx packets): n/a" << std::endl;
+        std::cout << "Packet loss rate(total): n/a" << std::endl;
+        return;
+    }
+
+    if (std::isfinite(aggregate.meanDelayMs))
+    {
+        std::cout << "Average E2E delay(rx packets): " << std::fixed << std::setprecision(3)
+                  << aggregate.meanDelayMs << " ms" << std::endl;
+    }
+    else
+    {
+        std::cout << "Average E2E delay(rx packets): n/a" << std::endl;
+    }
+
+    std::cout << "Packet loss rate(total): " << std::fixed << std::setprecision(3)
+              << aggregate.packetLossRatePercent << " %"
+              << " (tx=" << aggregate.totalTxPackets
+              << ", rx=" << aggregate.totalRxPackets
+              << ", lost=" << aggregate.totalLostPackets << ")" << std::endl;
+}
+
+/**
+ * 导出每个 UE 的端到端业务流统计。
+ */
+inline bool
+WriteE2eFlowMetricsCsv(const std::string& path, const E2eFlowAggregate& aggregate)
+{
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out.is_open())
+    {
+        return false;
+    }
+
+    out << "ue,dl_port,matched_flow,tx_packets,rx_packets,lost_packets,loss_rate_percent,tx_bytes,"
+        << "rx_bytes,offered_mbps,throughput_mbps,mean_delay_ms,mean_jitter_ms\n";
+
+    out << std::fixed << std::setprecision(3);
+    for (const auto& summary : aggregate.perUe)
+    {
+        out << summary.ueIndex << "," << summary.dlPort << "," << (summary.hasMatchedFlow ? 1 : 0)
+            << "," << summary.txPackets << "," << summary.rxPackets << "," << summary.lostPackets
+            << "," << summary.packetLossRatePercent << "," << summary.txBytes << ","
+            << summary.rxBytes << "," << summary.averageOfferedMbps << ","
+            << summary.averageThroughputMbps << ",";
+        if (std::isfinite(summary.meanDelayMs))
+        {
+            out << summary.meanDelayMs;
+        }
+        out << ",";
+        if (std::isfinite(summary.meanJitterMs))
+        {
+            out << summary.meanJitterMs;
+        }
+        out << "\n";
+    }
+
+    out << "TOTAL,,," << aggregate.totalTxPackets << "," << aggregate.totalRxPackets << ","
+        << aggregate.totalLostPackets << "," << aggregate.packetLossRatePercent << ","
+        << aggregate.totalTxBytes << "," << aggregate.totalRxBytes << ","
+        << aggregate.totalAverageOfferedMbps << "," << aggregate.totalAverageThroughputMbps << ",";
+    if (std::isfinite(aggregate.meanDelayMs))
+    {
+        out << aggregate.meanDelayMs;
+    }
+    out << ",";
+    if (std::isfinite(aggregate.meanJitterMs))
+    {
+        out << aggregate.meanJitterMs;
+    }
+    out << "\n";
+    return true;
+}
+
+/**
+ * 根据 UE 运行时对象生成 PHY 下行传输块聚合统计。
+ */
+inline PhyDlTbAggregate
+BuildPhyDlTbAggregate(const std::vector<UeRuntime>& ues)
+{
+    PhyDlTbAggregate out;
+    out.perUe.reserve(ues.size());
+
+    double totalTblerSum = 0.0;
+    double totalSinrDbSum = 0.0;
+    double globalMinSinrDb = std::numeric_limits<double>::infinity();
+
+    for (uint32_t ueIdx = 0; ueIdx < ues.size(); ++ueIdx)
+    {
+        const auto& ue = ues[ueIdx];
+        UePhyDlTbSummary summary;
+        summary.ueIndex = ueIdx;
+        summary.tbCount = ue.phyDlTbCount;
+        summary.corruptTbCount = ue.phyDlCorruptTbCount;
+
+        if (summary.tbCount > 0)
+        {
+            summary.corruptTbRatePercent =
+                100.0 * static_cast<double>(summary.corruptTbCount) /
+                static_cast<double>(summary.tbCount);
+            summary.meanTbler = ue.phyDlTblerSum / static_cast<double>(summary.tbCount);
+            summary.meanSinrDb = ue.phyDlSinrDbSum / static_cast<double>(summary.tbCount);
+            summary.minSinrDb = ue.phyDlMinSinrDb;
+
+            totalTblerSum += ue.phyDlTblerSum;
+            totalSinrDbSum += ue.phyDlSinrDbSum;
+            globalMinSinrDb = std::min(globalMinSinrDb, ue.phyDlMinSinrDb);
+        }
+
+        out.totalTbCount += summary.tbCount;
+        out.totalCorruptTbCount += summary.corruptTbCount;
+        out.perUe.push_back(summary);
+    }
+
+    if (out.totalTbCount > 0)
+    {
+        out.corruptTbRatePercent =
+            100.0 * static_cast<double>(out.totalCorruptTbCount) /
+            static_cast<double>(out.totalTbCount);
+        out.meanTbler = totalTblerSum / static_cast<double>(out.totalTbCount);
+        out.meanSinrDb = totalSinrDbSum / static_cast<double>(out.totalTbCount);
+        out.minSinrDb = globalMinSinrDb;
+    }
+
+    return out;
+}
+
+/**
+ * 打印 PHY 下行传输块摘要。
+ */
+inline void
+PrintPhyDlTbSummary(const PhyDlTbAggregate& aggregate)
+{
+    std::cout << "PHY DL TB error rate(total): " << std::fixed << std::setprecision(3)
+              << aggregate.corruptTbRatePercent << " %"
+              << " (tb=" << aggregate.totalTbCount
+              << ", corrupt=" << aggregate.totalCorruptTbCount << ")" << std::endl;
+
+    if (std::isfinite(aggregate.meanTbler))
+    {
+        std::cout << "PHY DL mean TBler(total): " << std::fixed << std::setprecision(6)
+                  << aggregate.meanTbler << std::endl;
+    }
+    else
+    {
+        std::cout << "PHY DL mean TBler(total): n/a" << std::endl;
+    }
+
+    if (std::isfinite(aggregate.meanSinrDb))
+    {
+        std::cout << "PHY DL mean SINR(total): " << std::fixed << std::setprecision(3)
+                  << aggregate.meanSinrDb << " dB";
+        if (std::isfinite(aggregate.minSinrDb))
+        {
+            std::cout << " (min=" << aggregate.minSinrDb << " dB)";
+        }
+        std::cout << std::endl;
+    }
+    else
+    {
+        std::cout << "PHY DL mean SINR(total): n/a" << std::endl;
+    }
+}
+
+/**
+ * 导出每个 UE 的 PHY 下行传输块统计。
+ */
+inline bool
+WritePhyDlTbMetricsCsv(const std::string& path, const PhyDlTbAggregate& aggregate)
+{
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out.is_open())
+    {
+        return false;
+    }
+
+    out << "ue,tb_count,corrupt_tb_count,corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
+
+    out << std::fixed << std::setprecision(6);
+    for (const auto& summary : aggregate.perUe)
+    {
+        out << summary.ueIndex << "," << summary.tbCount << "," << summary.corruptTbCount << ","
+            << summary.corruptTbRatePercent << ",";
+        if (std::isfinite(summary.meanTbler))
+        {
+            out << summary.meanTbler;
+        }
+        out << ",";
+        if (std::isfinite(summary.meanSinrDb))
+        {
+            out << summary.meanSinrDb;
+        }
+        out << ",";
+        if (std::isfinite(summary.minSinrDb))
+        {
+            out << summary.minSinrDb;
+        }
+        out << "\n";
+    }
+
+    out << "TOTAL," << aggregate.totalTbCount << "," << aggregate.totalCorruptTbCount << ","
+        << aggregate.corruptTbRatePercent << ",";
+    if (std::isfinite(aggregate.meanTbler))
+    {
+        out << aggregate.meanTbler;
+    }
+    out << ",";
+    if (std::isfinite(aggregate.meanSinrDb))
+    {
+        out << aggregate.meanSinrDb;
+    }
+    out << ",";
+    if (std::isfinite(aggregate.minSinrDb))
+    {
+        out << aggregate.minSinrDb;
+    }
+    out << "\n";
+    return true;
 }
 
 /**

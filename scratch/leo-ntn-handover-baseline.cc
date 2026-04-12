@@ -1,6 +1,7 @@
 #include "ns3/antenna-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
+#include "ns3/flow-monitor-module.h"
 #include "ns3/geocentric-constant-position-mobility-model.h"
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
@@ -304,6 +305,107 @@ ToString(HandoverMode handoverMode)
     return handoverMode == HandoverMode::IMPROVED ? "improved" : "baseline";
 }
 
+enum class AntennaElementMode
+{
+    ISOTROPIC,
+    THREE_GPP,
+};
+
+static AntennaElementMode
+ParseAntennaElementMode(const std::string& mode)
+{
+    if (mode == "three-gpp")
+    {
+        return AntennaElementMode::THREE_GPP;
+    }
+    return AntennaElementMode::ISOTROPIC;
+}
+
+static const char*
+ToString(AntennaElementMode mode)
+{
+    return mode == AntennaElementMode::THREE_GPP ? "three-gpp" : "isotropic";
+}
+
+static Ptr<AntennaModel>
+CreateAntennaElement(AntennaElementMode mode)
+{
+    if (mode == AntennaElementMode::THREE_GPP)
+    {
+        return CreateObject<ThreeGppAntennaModel>();
+    }
+    return CreateObject<IsotropicAntennaModel>();
+}
+
+enum class BeamformingMode
+{
+    IDEAL_DIRECT_PATH,
+    IDEAL_CELL_SCAN,
+    IDEAL_DIRECT_PATH_QUASI_OMNI,
+    IDEAL_CELL_SCAN_QUASI_OMNI,
+    IDEAL_QUASI_OMNI_DIRECT_PATH,
+};
+
+static BeamformingMode
+ParseBeamformingMode(const std::string& mode)
+{
+    if (mode == "ideal-cell-scan")
+    {
+        return BeamformingMode::IDEAL_CELL_SCAN;
+    }
+    if (mode == "ideal-direct-path-quasi-omni")
+    {
+        return BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI;
+    }
+    if (mode == "ideal-cell-scan-quasi-omni")
+    {
+        return BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI;
+    }
+    if (mode == "ideal-quasi-omni-direct-path")
+    {
+        return BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH;
+    }
+    return BeamformingMode::IDEAL_DIRECT_PATH;
+}
+
+static const char*
+ToString(BeamformingMode mode)
+{
+    switch (mode)
+    {
+    case BeamformingMode::IDEAL_CELL_SCAN:
+        return "ideal-cell-scan";
+    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
+        return "ideal-direct-path-quasi-omni";
+    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
+        return "ideal-cell-scan-quasi-omni";
+    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
+        return "ideal-quasi-omni-direct-path";
+    case BeamformingMode::IDEAL_DIRECT_PATH:
+    default:
+        return "ideal-direct-path";
+    }
+}
+
+static TypeId
+GetIdealBeamformingMethodTypeId(BeamformingMode mode)
+{
+    switch (mode)
+    {
+    case BeamformingMode::IDEAL_CELL_SCAN:
+        return CellScanBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
+        return DirectPathQuasiOmniBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
+        return CellScanQuasiOmniBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
+        return QuasiOmniDirectPathBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_DIRECT_PATH:
+    default:
+        return DirectPathBeamforming::GetTypeId();
+    }
+}
+
 static std::optional<uint32_t>
 ResolveUeIndexFromServingCellAndRnti(uint16_t servingCellId, uint16_t rnti)
 {
@@ -322,6 +424,30 @@ ResolveUeIndexFromServingCellAndRnti(uint16_t servingCellId, uint16_t rnti)
     }
 
     return std::nullopt;
+}
+
+static void
+ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
+{
+    const auto ueIdx = ResolveUeIndexFromServingCellAndRnti(params.m_cellId, params.m_rnti);
+    if (!ueIdx || *ueIdx >= g_ues.size())
+    {
+        return;
+    }
+
+    auto& ue = g_ues[*ueIdx];
+    ue.phyDlTbCount++;
+    ue.phyDlTblerSum += params.m_tbler;
+    if (params.m_corrupt)
+    {
+        ue.phyDlCorruptTbCount++;
+    }
+    if (params.m_sinr > 0.0)
+    {
+        const double sinrDb = 10.0 * std::log10(params.m_sinr);
+        ue.phyDlSinrDbSum += sinrDb;
+        ue.phyDlMinSinrDb = std::min(ue.phyDlMinSinrDb, sinrDb);
+    }
 }
 
 struct MeasurementCandidate
@@ -1436,6 +1562,9 @@ main(int argc, char* argv[])
     const auto& cfg = config;
     double orbitRaanDeg = cfg.orbitRaanDeg;
     double baseTrueAnomalyDeg = cfg.baseTrueAnomalyDeg;
+    const auto gnbAntennaElementMode = ParseAntennaElementMode(cfg.gnbAntennaElement);
+    const auto ueAntennaElementMode = ParseAntennaElementMode(cfg.ueAntennaElement);
+    const auto beamformingMode = ParseBeamformingMode(cfg.beamformingMode);
 
     // ------------------------------
     // 3. 几何场景与链路预算参数初始化
@@ -1461,6 +1590,8 @@ main(int argc, char* argv[])
                                  EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverThroughputTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverEventTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.e2eFlowMetricsPath) &&
+                                 EnsureParentDirectoryForFile(cfg.phyDlTbMetricsPath) &&
                                  EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
                                  EnsureParentDirectoryForFile(cfg.gridSvgPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
@@ -1505,7 +1636,13 @@ main(int argc, char* argv[])
         std::cout << std::fixed << std::setprecision(3)
                   << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
                   << " alphaMax=" << cfg.scanMaxDeg << "deg"
-                  << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
+                  << " theta3dB=" << cfg.theta3dBDeg << "deg"
+                  << " gnbArray=" << cfg.gnbAntennaRows << "x" << cfg.gnbAntennaColumns
+                  << " ueArray=" << cfg.ueAntennaRows << "x" << cfg.ueAntennaColumns
+                  << " gnbElem=" << ToString(gnbAntennaElementMode)
+                  << " ueElem=" << ToString(ueAntennaElementMode)
+                  << " beamforming=" << ToString(beamformingMode)
+                  << " shadowing=" << (cfg.shadowingEnabled ? "on" : "off") << std::endl;
         std::cout << "[A3-Measure] source=PHY MeasurementReport"
                   << " reportInterval=" << g_measurementReportIntervalMs << "ms"
                   << " maxReportCells=" << static_cast<uint32_t>(g_measurementMaxReportCells)
@@ -1658,7 +1795,7 @@ main(int argc, char* argv[])
 
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
     channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
-    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(cfg.shadowingEnabled));
 
     CcBwpCreator ccBwpCreator;
     CcBwpCreator::SimpleOperationBandConf bandConf(cfg.centralFrequency, cfg.bandwidth, 1);
@@ -1673,15 +1810,20 @@ main(int argc, char* argv[])
     nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
     nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
     nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(cfg.srsSymbols));
-    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(1));
-    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(2));
-    nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
-    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(8));
-    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
-    nrHelper->SetGnbAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
+    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(cfg.ueAntennaRows));
+    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(cfg.ueAntennaColumns));
+    nrHelper->SetUeAntennaAttribute("AntennaElement",
+                                    PointerValue(CreateAntennaElement(ueAntennaElementMode)));
+    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(cfg.gnbAntennaRows));
+    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(cfg.gnbAntennaColumns));
+    nrHelper->SetGnbAntennaAttribute("AntennaElement",
+                                     PointerValue(CreateAntennaElement(gnbAntennaElementMode)));
 
     Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
-    idealBeamformingHelper->SetAttribute("BeamformingMethod", TypeIdValue(DirectPathBeamforming::GetTypeId()));
+    idealBeamformingHelper->SetAttribute("BeamformingMethod",
+                                         TypeIdValue(GetIdealBeamformingMethodTypeId(beamformingMode)));
+    idealBeamformingHelper->SetAttribute("BeamformingPeriodicity",
+                                         TimeValue(MilliSeconds(cfg.beamformingPeriodicityMs)));
     nrHelper->SetBeamformingHelper(idealBeamformingHelper);
 
     // ------------------------------
@@ -1965,6 +2107,7 @@ main(int argc, char* argv[])
         serverApps.Stop(Seconds(cfg.simTime));
         clientApps.Stop(Seconds(cfg.simTime));
 
+        ue.dlPort = dlPort;
         ue.server = serverApps.Get(0)->GetObject<UdpServer>();
         if (ue.dev)
         {
@@ -1973,10 +2116,22 @@ main(int argc, char* argv[])
         g_ues.push_back(ue);
     }
 
+    FlowMonitorHelper flowMonitorHelper;
+    NodeContainer flowMonitorNodes;
+    flowMonitorNodes.Add(remoteHost);
+    flowMonitorNodes.Add(ueNodes);
+    Ptr<FlowMonitor> flowMonitor = flowMonitorHelper.Install(flowMonitorNodes);
+    flowMonitor->SetAttribute("DelayBinWidth", DoubleValue(0.001));
+    flowMonitor->SetAttribute("JitterBinWidth", DoubleValue(0.001));
+    flowMonitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
+
     // ------------------------------
     // 8. 运行时复位、回调注册与周期事件调度
     // ------------------------------
     ResetRuntimeState(cfg.gNbNum);
+    Config::Connect(
+        "/NodeList/*/DeviceList/*/ComponentCarrierMapUe/*/NrUePhy/SpectrumPhy/RxPacketTraceUe",
+        MakeCallback(&ReportDlPhyTbTrace));
     if (g_satAnchorTrace.is_open())
     {
         g_satAnchorTrace.close();
@@ -2087,8 +2242,23 @@ main(int argc, char* argv[])
     Simulator::Run();
 
     const double appDuration = std::max(0.0, cfg.simTime - cfg.appStartTime);
+    flowMonitor->CheckForLostPackets();
+    const auto flowClassifier = DynamicCast<Ipv4FlowClassifier>(flowMonitorHelper.GetClassifier());
+    const E2eFlowAggregate e2eAggregate =
+        BuildE2eFlowAggregate(g_ues,
+                              flowMonitor->GetFlowStats(),
+                              flowClassifier,
+                              appDuration,
+                              cfg.udpPacketSize);
+    const PhyDlTbAggregate phyDlTbAggregate = BuildPhyDlTbAggregate(g_ues);
     PrintDlTrafficSummary(g_ues, appDuration, cfg.udpPacketSize);
+    PrintE2eFlowSummary(e2eAggregate);
+    PrintPhyDlTbSummary(phyDlTbAggregate);
     PrintHandoverSummary(g_ues, g_pingPongWindowSeconds);
+    NS_ABORT_MSG_IF(!WriteE2eFlowMetricsCsv(cfg.e2eFlowMetricsPath, e2eAggregate),
+                    "Failed to write E2E flow metrics CSV: " << cfg.e2eFlowMetricsPath);
+    NS_ABORT_MSG_IF(!WritePhyDlTbMetricsCsv(cfg.phyDlTbMetricsPath, phyDlTbAggregate),
+                    "Failed to write PHY DL TB metrics CSV: " << cfg.phyDlTbMetricsPath);
 
     if (g_satAnchorTrace.is_open())
     {

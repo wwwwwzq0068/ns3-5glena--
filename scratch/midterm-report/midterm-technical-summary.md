@@ -155,6 +155,11 @@
 - `measurementMaxReportCells = 8`
 - `lambda = 250 pkt/s/UE`
 - `maxSupportedUesPerSatellite = 5`
+- `gnbAntennaRows/Columns = 8x8`
+- `ueAntennaRows/Columns = 1x2`
+- `gnbAntennaElement = isotropic`
+- `ueAntennaElement = isotropic`
+- `beamformingMode = ideal-direct-path`
 - `handoverMode = baseline`
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
@@ -207,16 +212,23 @@
 当前平台已统一支持：
 - 周期性仿真进度输出
 - 面向研究主线的最终吞吐统计、切换汇总和自动 `ping-pong` 计数
+- 基于 `FlowMonitor` 的下行业务端到端时延与丢包率统计
+- 按 `UE` 聚合的 PHY 下行 `TB` 误块率、`TBler` 与 `SINR` 统计
 - 详细切换事件、恢复时间和失败原因通过事件/吞吐 trace 导出
 - `ue_layout`、`sat_anchor_trace`、`grid svg` 以及切换窗口吞吐/事件 trace 等逐时刻导出
 
 结果目录统一为：
 - `scratch/results/`
 
+当前默认结果中，除 `handover_event_trace.csv` 与 `handover_dl_throughput_trace.csv` 外，还会导出：
+- `e2e_flow_metrics.csv`
+- `phy_dl_tb_metrics.csv`
+
 这样可以减少结果散落，便于后续做 baseline 与改进算法对照。
 
 需要说明的一点是：
 - 当前 `PHY` 信道已保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`
+- 当前真实 `NR PHY` 默认阵列为 `gNB 8x8`、`UE 1x2`，并已暴露 `gnbAntennaElement`、`ueAntennaElement` 与 `beamformingMode` 作为诊断入口
 - baseline 与 improved 都直接消费标准 `MeasurementReport`
 - 原来的几何 `beam budget/custom A3` handover 判决链已经从主线移除；几何计算只保留给轨道推进、地面锚点与初始接入
 

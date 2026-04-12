@@ -41,6 +41,13 @@
 - `lambda`（业务流强度）=`250 pkt/s/UE`
 - `maxSupportedUesPerSatellite = 5`
 - `bandwidth = 40 MHz`
+- `gnbAntennaRows/Columns = 8x8`
+- `ueAntennaRows/Columns = 1x2`
+- `gnbAntennaElement = isotropic`
+- `ueAntennaElement = isotropic`
+- `beamformingMode = ideal-direct-path`
+- `beamformingPeriodicityMs = 100 ms`
+- `shadowingEnabled = true`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`160 ms`
 - `measurementReportIntervalMs = 120 ms`
@@ -67,6 +74,7 @@
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个相邻小区共 `16 UE`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
+- 当前默认 NR 阵列配置为 `gNB 8x8`、`UE 1x2`，并开放 `gnbAntennaElement`、`ueAntennaElement` 与 `beamformingMode` 作为诊断参数；默认仍保持 `isotropic + ideal-direct-path`
 - 当前已移除原来的几何 `beam budget/custom A3` handover 判决链；几何计算只保留给轨道推进、地面锚点与初始接入
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常包被 UE 重新走上行 `NAS/TFT` 分类路径
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不改变 helper 的 `RLC` 选择
@@ -91,6 +99,8 @@
 - `scratch/results/` 能生成基础输出
 - 能看到 `Progress` 或最终研究摘要
 - 若需检查失败切换、失败原因或未闭合事件，优先查看 `handover_event_trace.csv`
+- 若需检查下行业务端到端时延与丢包率，优先查看 `e2e_flow_metrics.csv`
+- 若需检查 PHY 下行误块表现，优先查看 `phy_dl_tb_metrics.csv`
 
 ### 2. 研究行为验证
 目标：确认当前 baseline 是否具备研究分析价值。
@@ -100,6 +110,8 @@
 - 切换流程是否可正常闭环，以及切换次数与吞吐恢复是否可统计
 - 若有失败，是否能在 `handover_event_trace.csv` 中区分 `noPreamble / maxRach / leaving / joining / unknown` 等失败原因
 - 切换附近是否能观察吞吐扰动，并优先结合 `handover_dl_throughput_trace.csv` 与 `handover_event_trace.csv` 对齐 `HO Start / HO Success`
+- 下行业务流的 `E2E delay` 与 `packet loss rate` 是否能在 `e2e_flow_metrics.csv` 中形成可比较差异
+- PHY 下行 `corrupt TB rate`、`mean TBler` 与 `SINR` 是否能在 `phy_dl_tb_metrics.csv` 中形成可比较差异
 - 外围小区 UE 是否出现频繁切换或潜在 `ping-pong`
 - 最终摘要中的自动 `ping-pong` 计数是否为非零，且与事件 trace 中的短时回切现象一致
 - 星间 `attachedUeCount`、`offeredPacketRate`、`loadScore` 是否出现可观察的不均衡

@@ -41,6 +41,13 @@
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `lambda`（业务流强度）=`250 pkt/s/UE`
 - `maxSupportedUesPerSatellite`（每星默认容量口径）=`5`
+- `gnbAntennaRows/Columns`（gNB 阵列规模）=`8x8`
+- `ueAntennaRows/Columns`（UE 阵列规模）=`1x2`
+- `gnbAntennaElement`（gNB 阵元模型）默认=`isotropic`
+- `ueAntennaElement`（UE 阵元模型）默认=`isotropic`
+- `beamformingMode`（阵列波束方法）默认=`ideal-direct-path`
+- `beamformingPeriodicityMs`（ideal beamforming 更新周期）=`100`
+- `shadowingEnabled`（是否启用阴影衰落）=`true`
 - `hoHysteresisDb`（切换迟滞门限）=`2.0 dB`
 - `hoTttMs`（切换触发时间）=`160 ms`
 - `measurementReportIntervalMs`（测量上报周期）=`120 ms`
@@ -65,7 +72,10 @@
 - `handoverMode=improved`：在同一批真实测量候选中联合考虑 `remainingVisibility` 与 `loadScore` 选目标，并加入过载候选过滤、最小联合领先持续时间、最小剩余可见时间门控、源站负载感知的负载优势门槛，以及“候选联合分数必须明显优于当前服务星”的最小分差约束
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段；`loadScore` 本身采用更平滑的压力近似，避免少量 UE 时过早打满
 - 当前 PHY 信道已开启 `ShadowingEnabled`，切换判决直接读取真实 PHY/RRC 测量
+- 当前真实 NR PHY 默认阵列为 `gNB 8x8`、`UE 1x2`，并已暴露 `gnbAntennaElement`、`ueAntennaElement` 与 `beamformingMode` 作为诊断入口；默认仍保持 `isotropic + ideal-direct-path`
 - 当前默认控制台输出已收紧为研究导向摘要；详细切换事件、恢复时间和失败原因优先写入 `handover_event_trace.csv`
+- 当前默认结果目录中还会额外导出 `e2e_flow_metrics.csv`，记录每个 `UE` 的下行业务端到端时延、抖动与丢包率
+- 当前默认结果目录中还会额外导出 `phy_dl_tb_metrics.csv`，记录每个 `UE` 的 PHY 下行 `TB` 总数、损坏块率、平均 `TBler` 与 `SINR`
 - 原来的几何 `beam budget/custom A3` handover 代理链已经移除
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不覆盖 helper 的 `RLC` 映射

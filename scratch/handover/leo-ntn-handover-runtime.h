@@ -127,6 +127,9 @@ struct UeRuntime
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
 
+    /** 当前 UE 下行业务流使用的 UDP 目标端口。 */
+    uint16_t dlPort = 0;
+
     /** UE 在场景中的部署角色，例如线性、中心簇或外围簇。 */
     std::string placementRole = "line";
 
@@ -232,6 +235,21 @@ struct UeRuntime
     /** 当前 pending 切换已捕获到的失败原因。 */
     HandoverFailureReason pendingFailureReason = HandoverFailureReason::NONE;
 
+    /** PHY 下行已统计到的传输块总数。 */
+    uint64_t phyDlTbCount = 0;
+
+    /** PHY 下行被判定为损坏的传输块总数。 */
+    uint64_t phyDlCorruptTbCount = 0;
+
+    /** PHY 下行 TBler 累加值，用于计算平均 TBler。 */
+    double phyDlTblerSum = 0.0;
+
+    /** PHY 下行 SINR(dB) 累加值，用于计算平均 SINR。 */
+    double phyDlSinrDbSum = 0.0;
+
+    /** PHY 下行观测到的最小 SINR(dB)。 */
+    double phyDlMinSinrDb = std::numeric_limits<double>::infinity();
+
     /** 当前切换的参考吞吐，取切换前短窗口平均值，单位 Mbps。 */
     double pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
 
@@ -321,6 +339,11 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverTraceSequence = 0;
     ue.activeHandoverTraceId = 0;
     ue.pendingFailureReason = HandoverFailureReason::NONE;
+    ue.phyDlTbCount = 0;
+    ue.phyDlCorruptTbCount = 0;
+    ue.phyDlTblerSum = 0.0;
+    ue.phyDlSinrDbSum = 0.0;
+    ue.phyDlMinSinrDb = std::numeric_limits<double>::infinity();
     ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
     ue.waitingForThroughputRecovery = false;
