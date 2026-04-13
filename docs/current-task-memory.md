@@ -2,7 +2,7 @@
 
 ## 当前版本状态
 - 最近已发布稳定节点：`4.2`（Git tag：`research-v4.2`）
-- 当前工作区已收口到 `4.2` 快照，底层框架仍为 `ns-3.46`
+- 当前工作区正在准备 `v4.3` 天线迁移版本，待 Codex 最终审核通过后发布
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
 ## 当前 baseline 快照
@@ -44,6 +44,11 @@
 - `pingPongWindowSeconds = 1.5 s`
 - `forceRlcAmForEpc = false`
 - `disableUeIpv4Forwarding = true`
+- `gnbAntennaElement = b00-custom`（v4.3 新默认）
+- `ueAntennaElement = three-gpp`（v4.3 新默认）
+- `b00MaxGainDb = 20.0`
+- `b00BeamwidthDeg = 15.0`
+- `b00MaxAttenuationDb = 30.0`
 
 ## 当前已确认实现
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
@@ -91,6 +96,7 @@
 - 当前不把“继续扩大星座规模”作为默认主线，除非现有 `2x4` 场景已无法体现算法差异
 - 当前不再把“代码结构整理”作为第一优先级，除非算法实现需要新的结构调整
 - 当前 baseline 的 `UE` 场景口径已经固定为 `seven-cell`
+- 当前协作约定：当用户要求审阅 Claude/子代理结果时，默认直接把审阅结论、返工要求和必要更正写入 `docs/agent-review-handoff.md`，不再额外等待用户确认
 - 修改 `scratch/` 目录下的重要代码后，同步检查：
   - `scratch/README.md`
   - `scratch/baseline-definition.md`

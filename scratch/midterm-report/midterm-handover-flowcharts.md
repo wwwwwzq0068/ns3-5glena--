@@ -70,8 +70,8 @@ sequenceDiagram
 
     rect rgb(245,255,245)
         Note over RT,REP: 阶段 5：运行时统计与结果输出
-        RT->>REP: 输出 throughput / handover summary
-        RT->>REP: 导出 ue_layout / sat_anchor_trace / grid catalog / grid svg / handover traces
+        RT->>REP: 输出 throughput / handover / E2E delay-loss summary
+        RT->>REP: 导出 ue_layout / sat_anchor_trace / grid catalog / grid svg / handover traces / e2e flow metrics
     end
 
     Note over UE,TGT: 结束状态：UE 在新服务卫星下继续传输，等待下一轮周期更新
@@ -101,7 +101,7 @@ flowchart TD
     F --> I[统一切换执行器<br/>TriggerHandover]
     H --> I
 
-    I --> K[切换结果统计<br/>HO success / delay / throughput]
+    I --> K[切换结果统计<br/>HO success / delay / throughput / E2E delay-loss]
     K --> L[对比实验输出<br/>Baseline vs Improved]
 
     style A fill:#eef6ff,stroke:#4a90e2,stroke-width:1.5px

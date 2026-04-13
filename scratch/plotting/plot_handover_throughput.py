@@ -86,7 +86,6 @@ def load_handover_events(path: str):
                     "source_sat": safe_int(row.get("source_sat", ""), -1),
                     "target_sat": safe_int(row.get("target_sat", ""), -1),
                     "delay_ms": safe_float(row.get("delay_ms", "")),
-                    "recovery_ms": safe_float(row.get("recovery_ms", "")),
                     "ping_pong_detected": safe_int(row.get("ping_pong_detected", "")) == 1,
                 }
             )
@@ -110,10 +109,7 @@ def select_handover(events, ue: int, ho_id: Optional[int]):
     if selected_id not in starts or selected_id not in ends:
         raise RuntimeError(f"handover ho_id={selected_id} not found for ue={ue}")
 
-    recoveries = {
-        event["ho_id"]: event for event in ue_events if event["event"] == "THROUGHPUT_RECOVERED"
-    }
-    return starts[selected_id], ends[selected_id], recoveries.get(selected_id)
+    return starts[selected_id], ends[selected_id]
 
 
 def sat_label(sat_idx: int) -> str:
@@ -174,7 +170,6 @@ def plot_handover_window(
     samples,
     start_event,
     end_event,
-    recovery_event,
     output_path: str,
     window_before: float,
     window_after: float,
@@ -183,11 +178,8 @@ def plot_handover_window(
 ):
     ho_start = start_event["time_s"]
     ho_end = end_event["time_s"]
-    recovery_time = recovery_event["time_s"] if recovery_event else math.nan
     window_start = ho_start - window_before
     window_end = ho_end + window_after
-    if math.isfinite(recovery_time):
-        window_end = max(window_end, recovery_time + max(0.05, window_after * 0.2))
 
     window_samples = [
         sample
@@ -237,8 +229,6 @@ def plot_handover_window(
     ax.plot(times, smooth_throughput, color="#134a84", linewidth=2.8, zorder=3)
     ax.axvline(ho_start, color="#c62828", linestyle="--", linewidth=2.0, zorder=4)
     ax.axvline(ho_end, color="#c62828", linestyle="--", linewidth=2.0, zorder=4)
-    if math.isfinite(recovery_time):
-        ax.axvline(recovery_time, color="#2e7d32", linestyle="-.", linewidth=2.0, zorder=4)
 
     if math.isfinite(pre_avg):
         ax.hlines(pre_avg, window_start, ho_start, colors="#4e7ca6", linestyles=":", linewidth=1.6, zorder=1)
@@ -253,17 +243,6 @@ def plot_handover_window(
     else:
         add_marker_label(ax, ho_start, label_anchor_y, "HO Start", "#7a1616", 4, -4, "left")
         add_marker_label(ax, ho_end, label_anchor_y, "HO Success", "#7a1616", 4, -18, "left")
-    if math.isfinite(recovery_time):
-        add_marker_label(
-            ax,
-            recovery_time,
-            ymax * 0.90,
-            "Throughput Recovered",
-            "#1b5e20",
-            4,
-            -4,
-            "left",
-        )
 
     band_transform = transforms.blended_transform_factory(ax.transData, ax.transAxes)
     band_y = 1.01
@@ -325,8 +304,6 @@ def plot_handover_window(
         stats_lines.append(f"HO-window avg: {in_avg:.2f} Mbps")
     if math.isfinite(post_avg):
         stats_lines.append(f"Post-HO avg: {post_avg:.2f} Mbps")
-    if recovery_event and math.isfinite(recovery_event["recovery_ms"]):
-        stats_lines.append(f"Recovery: {recovery_event['recovery_ms']:.1f} ms")
     if smooth_window_samples > 1 and math.isfinite(sample_interval_seconds):
         stats_lines.append(f"Smoothing: {smooth_window_samples} samples ({smooth_window_ms:.0f} ms)")
     if stats_lines:
@@ -420,7 +397,7 @@ def main():
 
     throughput_samples = load_throughput_trace(args.throughput_trace)
     handover_events = load_handover_events(args.event_trace)
-    start_event, end_event, recovery_event = select_handover(handover_events, args.ue, args.ho_id)
+    start_event, end_event = select_handover(handover_events, args.ue, args.ho_id)
     ue_samples = [sample for sample in throughput_samples if sample["ue"] == args.ue]
     if not ue_samples:
         raise RuntimeError(f"no throughput samples found for ue={args.ue}")
@@ -437,7 +414,6 @@ def main():
         ue_samples,
         start_event,
         end_event,
-        recovery_event,
         output_path,
         args.window_before,
         args.window_after,
@@ -451,11 +427,6 @@ def main():
         f"[Plot] start={start_event['time_s']:.3f}s end={end_event['time_s']:.3f}s "
         f"delay={end_event['delay_ms']:.3f}ms"
     )
-    if recovery_event and math.isfinite(recovery_event["recovery_ms"]):
-        print(
-            f"[Plot] recovered={recovery_event['time_s']:.3f}s "
-            f"recovery={recovery_event['recovery_ms']:.3f}ms"
-        )
     print(
         f"[Plot] path={sat_label(start_event['source_sat'])} -> {sat_label(end_event['target_sat'])}"
     )

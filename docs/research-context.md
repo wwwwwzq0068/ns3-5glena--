@@ -23,7 +23,7 @@
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
-- Use the current `2x4` dual-plane local scenario as a controllable baseline before any further constellation scaling.
+- Use the current `2x4` dual-plane local scenario as the fixed near-term baseline, with `B00` as the current control group for baseline / improved comparison.
 - Implement a clean traditional A3-style baseline in NS-3 C++.
 - Use signal quality metrics such as RSRP and RSRQ.
 - Design a custom strategy that combines signal quality with load or cost-function based decision rules.

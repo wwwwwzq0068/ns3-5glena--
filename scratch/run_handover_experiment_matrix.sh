@@ -41,14 +41,16 @@ Groups:
   improved-stablelead       I10 I11 I12 I13 I14
   improved-margin           I20 I21 I22
   improved-opt-grid         B00 I30 I31 I32 I33 I34 I35 I36 I37 I38
-  paper-shortlist           B00 B11 B21 I00 I02
+  paper-shortlist           B00 I00 I02 I31
+  carrier-reuse-diagnosis   R10 R20 R40 (PHY/carrier reuse diagnosis, NOT formal baseline)
+  carrier-reuse-phase2      R21 R22 R41 R42 (inter-frequency HO support)
 EOF
 }
 
 list_experiments() {
     cat <<'EOF'
 Experiment Matrix (v4.2)
-  B00  baseline validation base  handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0
+  B00  fixed baseline control    handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0
   B10  baseline short TTT        handoverMode=baseline hoTttMs=160
   B11  baseline medium TTT       handoverMode=baseline hoTttMs=320
   B12  baseline long TTT         handoverMode=baseline hoTttMs=480
@@ -75,6 +77,15 @@ Experiment Matrix (v4.2)
   I37  improved 240ms m03        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.24 margin=0.03
   I38  improved 240ms m05        handoverMode=improved hoTttMs=160 hoHysteresisDb=2.0 stableLead=0.24 margin=0.05
 
+  R10  carrier reuse1 (baseline) carrierReuseMode=reuse1 (PHY diagnosis)
+  R20  carrier reuse2-plane      carrierReuseMode=reuse2-plane carrierFrequencySpacingHz=60e6 (PHY diagnosis)
+  R40  carrier reuse4            carrierReuseMode=reuse4 carrierFrequencySpacingHz=60e6 (PHY diagnosis)
+
+  R21  reuse2-plane inter-freq OFF  carrierReuseMode=reuse2-plane interFrequencyHandoverEnabled=false (Phase2)
+  R22  reuse2-plane inter-freq ON   carrierReuseMode=reuse2-plane interFrequencyHandoverEnabled=true (Phase2)
+  R41  reuse4 inter-freq OFF        carrierReuseMode=reuse4 interFrequencyHandoverEnabled=false (Phase2)
+  R42  reuse4 inter-freq ON         carrierReuseMode=reuse4 interFrequencyHandoverEnabled=true (Phase2)
+
 Groups
   baseline-repeat  B00
   ttt-scan         B10 B11 B12
@@ -83,13 +94,15 @@ Groups
   improved-stablelead I10 I11 I12 I13 I14
   improved-margin  I20 I21 I22
   improved-opt-grid B00 I30 I31 I32 I33 I34 I35 I36 I37 I38
-  paper-shortlist  B00 B11 B21 I00 I02
+  paper-shortlist  B00 I00 I02 I31
+  carrier-reuse-diagnosis R10 R20 R40
+  carrier-reuse-phase2 R21 R22 R41 R42
 EOF
 }
 
 experiment_label() {
     case "$1" in
-        B00) printf '%s\n' "baseline-e3-default" ;;
+        B00) printf '%s\n' "baseline-b00-control" ;;
         B10) printf '%s\n' "baseline-ttt160" ;;
         B11) printf '%s\n' "baseline-ttt320" ;;
         B12) printf '%s\n' "baseline-ttt480" ;;
@@ -115,6 +128,13 @@ experiment_label() {
         I36) printf '%s\n' "improved-s240-m02" ;;
         I37) printf '%s\n' "improved-s240-m03" ;;
         I38) printf '%s\n' "improved-s240-m05" ;;
+        R10) printf '%s\n' "carrier-reuse1" ;;
+        R20) printf '%s\n' "carrier-reuse2-plane" ;;
+        R40) printf '%s\n' "carrier-reuse4" ;;
+        R21) printf '%s\n' "reuse2-plane-inter-freq-off" ;;
+        R22) printf '%s\n' "reuse2-plane-inter-freq-on" ;;
+        R41) printf '%s\n' "reuse4-inter-freq-off" ;;
+        R42) printf '%s\n' "reuse4-inter-freq-on" ;;
         *) return 1 ;;
     esac
 }
@@ -147,6 +167,13 @@ experiment_args() {
         I36) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.02" ;;
         I37) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.03" ;;
         I38) printf '%s\n' "--handoverMode=improved --hoTttMs=160 --hoHysteresisDb=2.0 --improvedSignalWeight=0.7 --improvedLoadWeight=0.3 --improvedMinStableLeadTimeSeconds=0.24 --improvedMinJointScoreMargin=0.05" ;;
+        R10) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse1 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp" ;;
+        R20) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse2-plane --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp" ;;
+        R40) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse4 --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp" ;;
+        R21) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse2-plane --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp --interFrequencyHandoverEnabled=false" ;;
+        R22) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse2-plane --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp --interFrequencyHandoverEnabled=true" ;;
+        R41) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse4 --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp --interFrequencyHandoverEnabled=false" ;;
+        R42) printf '%s\n' "--handoverMode=baseline --hoTttMs=160 --hoHysteresisDb=2.0 --carrierReuseMode=reuse4 --carrierFrequencySpacingHz=60e6 --gnbAntennaElement=three-gpp --ueAntennaElement=three-gpp --interFrequencyHandoverEnabled=true" ;;
         *) return 1 ;;
     esac
 }
@@ -160,7 +187,9 @@ expand_group() {
         improved-stablelead) printf '%s\n' "I10 I11 I12 I13 I14" ;;
         improved-margin) printf '%s\n' "I20 I21 I22" ;;
         improved-opt-grid) printf '%s\n' "B00 I30 I31 I32 I33 I34 I35 I36 I37 I38" ;;
-        paper-shortlist) printf '%s\n' "B00 B11 B21 I00 I02" ;;
+        paper-shortlist) printf '%s\n' "B00 I00 I02 I31" ;;
+        carrier-reuse-diagnosis) printf '%s\n' "R10 R20 R40" ;;
+        carrier-reuse-phase2) printf '%s\n' "R21 R22 R41 R42" ;;
         *) return 1 ;;
     esac
 }

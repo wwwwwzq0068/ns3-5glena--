@@ -6,6 +6,7 @@
 说明：
 - 本文件是“审核问题清单”，不是当前默认参数的正式来源
 - 精确默认值请以 `scratch/handover/leo-ntn-handover-config.h` 和 `scratch/baseline-definition.md` 为准
+- 本文件中的部分“现状”数值和附录表来自较早的审核快照，保留它们是为了说明当时为什么会提出这些审核问题，不应将其理解为当前默认口径
 
 ## 审核依据
 - LEO 卫星运动速度：约 7.5 km/s
@@ -15,11 +16,46 @@
 
 ---
 
+## 业务连续性分析框架
+
+这一节现在只保留一个更稳的判断框架：
+
+> 当前 `B00` 高竞争场景下，业务连续性变差，到底主要来自切换执行链本身，还是来自切后几何和负载条件不理想？
+
+当前代码已经不再统计“吞吐恢复时间”。后续分析业务连续性时，建议优先看下面这些量：
+
+- `HO_START / HO_END_OK / HO_END_ERROR / unresolved`
+- `delay_ms`
+- `packet loss rate`
+- `Average E2E delay`
+- `ping-pong`
+- 目标星 `loadScore`
+- 目标星 `remainingVisibility`
+
+建议的解释顺序：
+
+1. 先看切换是否成功闭环  
+   如果 `HO_END_ERROR` 或 `unresolved` 多，先怀疑执行链和目标稳定性。
+
+2. 再看执行时延 `delay_ms`  
+   如果成功切换很多，但 `delay_ms` 普遍偏大，说明切换准备链本身就慢。
+
+3. 再看 `packet loss rate` 和 `Average E2E delay`  
+   如果 `HO_END_OK` 很快，但丢包和时延仍明显恶化，更可能是切后几何、负载或业务起停口径的问题。
+
+4. 最后结合 `loadScore` 与 `remainingVisibility` 做归因  
+   如果目标星切后更拥塞、剩余可见时间更短，那么更合理的结论通常是“目标不够稳”，而不是“切换执行链本身一定有问题”。
+
+当前这套框架更适合和现在的结果导出接口保持一致，也更方便和 `e2e_flow_metrics.csv`、`handover_event_trace.csv` 直接对齐。
+
+---
+
 ## 问题清单
 
 ### P1: 测量上报周期与TTT关系不合理
 
 **现状**：
+- 以下数值对应本审核问题形成时的快照，不代表当前 `B00` 默认值
 - `measurementReportIntervalMs = 120 ms`
 - `hoTttMs = 200 ms`
 
@@ -43,6 +79,7 @@
 ### P2: 可见性预测步长过粗
 
 **现状**：
+- 以下数值对应本审核问题形成时的快照，不代表当前 improved 默认值
 - `improvedVisibilityPredictionStepSeconds = 0.2 s`
 - `improvedMinVisibilitySeconds = 1.0 s`
 
@@ -65,6 +102,7 @@
 ### P3: 回切保护时间配置混乱
 
 **现状**：
+- 本项保留的是历史审核语境；当前主线已不再把该机制当作默认改进入口
 - 当前代码与当前主文档都已统一为 `improvedReturnGuardSeconds = 0.5 s`
 - `pingPongWindowSeconds = 1.5 s`
 
@@ -160,23 +198,27 @@ LEO-NTN 切换决策窗口通常在 **秒级**，参数设置应与此匹配。
 
 ---
 
-## 附录：当前全部参数
+## 附录：历史审核快照参数
 
-| 参数 | 代码值 | 文档值 | 状态 |
-|------|--------|--------|------|
+说明：
+- 下表是本审核清单形成时引用过的一组参数快照，目的是帮助理解问题来源
+- 它不是当前默认值总表；当前默认口径请回到 `scratch/baseline-definition.md`、`docs/current-task-memory.md` 和 `scratch/handover/leo-ntn-handover-config.h`
+
+| 参数 | 审核快照值 | 当时文档值 | 备注 |
+|------|------------|------------|------|
 | `updateIntervalMs` | 100 | 100 | 一致 |
 | `measurementReportIntervalMs` | 120 | 120 | 一致 |
 | `hoHysteresisDb` | 2.0 | 2.0 | 一致 |
-| `hoTttMs` | 200 | 200 | 一致 |
+| `hoTttMs` | 200 | 200 | 历史审核快照，不代表当前 `B00` 默认值 |
 | `improvedSignalWeight` | 0.7 | 0.7 | 一致 |
 | `improvedLoadWeight` | 0.3 | 0.3 | 一致 |
 | `improvedVisibilityWeight` | 0.2 | 0.2 | 一致 |
 | `improvedMinLoadScoreDelta` | 0.2 | 0.2 | 一致 |
 | `improvedMaxSignalGapDb` | 3.0 | 3.0 | 一致 |
-| `improvedReturnGuardSeconds` | 0.5 | 0.5 | 一致 |
+| `improvedReturnGuardSeconds` | 0.5 | 0.5 | 历史审核项，非当前主线默认入口 |
 | `improvedMinVisibilitySeconds` | 1.0 | 1.0 | 一致 |
 | `improvedVisibilityHorizonSeconds` | 8.0 | 8.0 | 一致 |
-| `improvedVisibilityPredictionStepSeconds` | 0.2 | 0.2 | 一致 |
+| `improvedVisibilityPredictionStepSeconds` | 0.2 | 0.2 | 历史审核快照，不代表当前 improved 默认值 |
 | `pingPongWindowSeconds` | 1.5 | 1.5 | 一致 |
 | `loadCongestionThreshold` | 0.8 | 0.8 | 一致 |
 | `maxSupportedUesPerSatellite` | 5.0 | 5.0 | 一致 |
