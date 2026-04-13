@@ -1,6 +1,7 @@
 #include "ns3/antenna-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
+#include "ns3/flow-monitor-module.h"
 #include "ns3/geocentric-constant-position-mobility-model.h"
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
@@ -14,6 +15,7 @@
 #include "handover/leo-ntn-handover-reporting.h"
 #include "handover/leo-ntn-handover-runtime.h"
 #include "handover/leo-ntn-handover-update.h"
+#include "handover/b00-equivalent-antenna-model.h"
 #include "handover/leo-ntn-handover-utils.h"
 #include "handover/wgs84-hex-grid.h"
 #include <algorithm>
@@ -61,6 +63,9 @@ static std::map<uint16_t, uint32_t> g_cellToSatellite;
 // IMSI 到 UE 序号的映射，仅用于日志和统计。
 static std::map<uint64_t, uint32_t> g_imsiToUe;
 
+// 卫星全局索引到 gNB 设备的显式映射（用于 carrier reuse 模式）。
+static std::vector<Ptr<NrGnbNetDevice>> g_satelliteGnbDevices;
+
 // 参考 UE 地面点，用于轨道自动对齐和默认几何计算。
 static LeoOrbitCalculator::GroundPoint g_ueGroundPoint;
 // 默认小区锚点地面位置；未启用六边形网格时，波束会指向该位置。
@@ -81,9 +86,13 @@ static double g_gridCenterLatitudeDeg = 45.6;
 static double g_gridCenterLongitudeDeg = 84.9;
 static double g_gridWidthKm = 400.0;
 static double g_gridHeightKm = 400.0;
-static double g_hexCellRadiusKm = 20.0;
+static double g_anchorGridHexRadiusKm = 20.0;
 // 每颗卫星用于锚点选择的最近网格候选数。
 static uint32_t g_gridNearestK = 3;
+// 新锚点至少需要领先多少距离，才会进入切换门控。
+static double g_anchorGridSwitchGuardMeters = 0.0;
+// 新锚点需要持续领先多久，才允许真正切换。
+static double g_anchorGridHysteresisSeconds = 0.0;
 static std::string g_outputDir = "scratch/results";
 static bool g_printGridCatalog = true;
 static std::string g_gridCatalogPath = JoinOutputPath(g_outputDir, "hex_grid_cells.csv");
@@ -107,10 +116,6 @@ static double g_loadCongestionThreshold = 0.8;
 static double g_hoHysteresisDb = 2.0;
 // 将 A->B->A 识别为 ping-pong 的时间窗口。
 static double g_pingPongWindowSeconds = 1.5;
-// 吞吐恢复判定：以切换前短窗口平均吞吐为参考，结束后连续若干个采样达到阈值即视为恢复。
-static constexpr uint32_t g_recoveryReferenceWindowSamples = 20;
-static constexpr uint32_t g_recoveryRequiredConsecutiveSamples = 3;
-static constexpr double g_recoveryThresholdRatio = 0.9;
 
 // 当前 handover 主链统一走标准 PHY/RRC MeasurementReport。
 enum class HandoverMode
@@ -121,6 +126,7 @@ enum class HandoverMode
 
 static HandoverMode g_handoverMode = HandoverMode::BASELINE;
 static double g_improvedSignalWeight = 0.7;
+static double g_improvedRsrqWeight = 0.3;
 static double g_improvedLoadWeight = 0.3;
 static double g_improvedVisibilityWeight = 0.2;
 static double g_improvedMinLoadScoreDelta = 0.2;
@@ -130,9 +136,30 @@ static double g_improvedMinVisibilitySeconds = 1.0;
 static double g_improvedVisibilityHorizonSeconds = 8.0;
 static double g_improvedVisibilityPredictionStepSeconds = 0.5;
 static double g_improvedMinJointScoreMargin = 0.03;
+static double g_improvedMinCandidateRsrpDbm = -110.0;
+static double g_improvedMinCandidateRsrqDb = -17.0;
+static double g_improvedServingWeakRsrpDbm = -108.0;
+static double g_improvedServingWeakRsrqDb = -15.0;
+static double g_improvedMinRsrqAdvantageDb = 0.0;
+static bool g_improvedEnableCrossLayerPhyAssist = false;
+static double g_improvedCrossLayerPhyAlpha = 0.02;
+static double g_improvedCrossLayerTblerThreshold = 0.48;
+static double g_improvedCrossLayerSinrThresholdDb = -5.0;
+static uint32_t g_improvedCrossLayerMinSamples = 50;
 static uint16_t g_measurementReportIntervalMs = 120;
 static uint8_t g_measurementMaxReportCells = 8;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
+
+// Carrier reuse configuration
+static std::string g_carrierReuseMode = "reuse1";
+static double g_carrierFrequencySpacingHz = 60e6;
+static bool g_sameFrequencyHandoverOnly = true;
+static bool g_printCarrierPlan = true;
+static std::map<uint16_t, uint32_t> g_cellToCarrierGroup;  // cellId -> carrierGroupId
+
+// Phase 2: Inter-frequency handover support
+static bool g_interFrequencyHandoverEnabled = false;
+static bool g_printInterFrequencyEvents = true;
 
 // 逐时刻卫星波束锚点导出文件。
 static std::ofstream g_satAnchorTrace;
@@ -156,6 +183,66 @@ FormatUintList(const std::vector<uint32_t>& values)
     }
     oss << "]";
     return oss.str();
+}
+
+/**
+ * 获取 carrier reuse 模式对应的 carrier group 数量。
+ */
+static uint32_t
+GetCarrierGroupCount(const std::string& carrierReuseMode)
+{
+    if (carrierReuseMode == "reuse1")
+    {
+        return 1;
+    }
+    if (carrierReuseMode == "reuse2-plane")
+    {
+        return 2;
+    }
+    if (carrierReuseMode == "reuse4")
+    {
+        return 4;
+    }
+    return 1;
+}
+
+/**
+ * 根据轨道面和槽位索引计算 carrier group ID。
+ */
+static uint32_t
+ComputeCarrierGroupId(const std::string& carrierReuseMode, uint32_t orbitPlaneIndex, uint32_t orbitSlotIndex)
+{
+    if (carrierReuseMode == "reuse1")
+    {
+        return 0;
+    }
+    if (carrierReuseMode == "reuse2-plane")
+    {
+        return orbitPlaneIndex % 2;
+    }
+    if (carrierReuseMode == "reuse4")
+    {
+        return (orbitPlaneIndex % 2) * 2 + (orbitSlotIndex % 2);
+    }
+    return 0;
+}
+
+/**
+ * 根据 carrier group ID 计算载波中心频率。
+ */
+static double
+ComputeCarrierCenterFrequency(double baseFrequency, uint32_t carrierGroupId, double spacingHz)
+{
+    return baseFrequency + carrierGroupId * spacingHz;
+}
+
+static double
+DistanceMeters(const Vector& a, const Vector& b)
+{
+    const double dx = a.x - b.x;
+    const double dy = a.y - b.y;
+    const double dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 // ============================================================================
 // 运行时复位与事件回调
@@ -230,18 +317,109 @@ UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double n
     }
 
     sat.nearestGridIds = anchor.nearestGridIds;
-    sat.cellAnchorEcef = anchor.anchorEcef;
-
-    if (forceLog || (g_printGridAnchorEvents && sat.currentAnchorGridId != anchor.anchorGridId))
-    {
+    const auto logAnchor = [&](uint32_t anchorGridId) {
         std::cout << "[GRID-ANCHOR] t=" << std::fixed << std::setprecision(3) << nowSeconds << "s"
                   << " sat" << satIndex
                   << " cell=" << sat.dev->GetCellId()
-                  << " anchorGrid=" << anchor.anchorGridId
+                  << " anchorGrid=" << anchorGridId
                   << " nearestK=" << FormatUintList(sat.nearestGridIds) << std::endl;
+    };
+    const auto clearPendingAnchor = [&]() {
+        sat.pendingAnchorGridId = 0;
+        sat.pendingAnchorEcef = Vector(0.0, 0.0, 0.0);
+        sat.pendingAnchorLeadStartTimeSeconds = -1.0;
+    };
+    const auto commitAnchor = [&](uint32_t anchorGridId, const Vector& anchorEcef) {
+        sat.currentAnchorGridId = anchorGridId;
+        sat.cellAnchorEcef = anchorEcef;
+        clearPendingAnchor();
+    };
+
+    if (sat.currentAnchorGridId == 0)
+    {
+        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
+        if (forceLog || g_printGridAnchorEvents)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
     }
 
-    sat.currentAnchorGridId = anchor.anchorGridId;
+    if (anchor.anchorGridId == sat.currentAnchorGridId)
+    {
+        sat.cellAnchorEcef = anchor.anchorEcef;
+        clearPendingAnchor();
+        if (forceLog)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    const Vector nadirPoint = ProjectNadirToWgs84(satEcef);
+    const double candidateDistanceMeters = DistanceMeters(nadirPoint, anchor.anchorEcef);
+    double currentDistanceMeters = std::numeric_limits<double>::infinity();
+    if (const auto* currentCell = FindHexGridCellById(g_hexGridCells, sat.currentAnchorGridId))
+    {
+        currentDistanceMeters = DistanceMeters(nadirPoint, currentCell->ecef);
+    }
+    else
+    {
+        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
+        if (forceLog || g_printGridAnchorEvents)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    const bool candidateHasGuardAdvantage =
+        (currentDistanceMeters - candidateDistanceMeters >= g_anchorGridSwitchGuardMeters - 1e-9);
+    if (!candidateHasGuardAdvantage)
+    {
+        clearPendingAnchor();
+        if (forceLog)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    if (g_anchorGridHysteresisSeconds <= 0.0)
+    {
+        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
+        if (forceLog || g_printGridAnchorEvents)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    if (sat.pendingAnchorGridId != anchor.anchorGridId)
+    {
+        sat.pendingAnchorGridId = anchor.anchorGridId;
+        sat.pendingAnchorEcef = anchor.anchorEcef;
+        sat.pendingAnchorLeadStartTimeSeconds = nowSeconds;
+        if (forceLog)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    sat.pendingAnchorEcef = anchor.anchorEcef;
+    if (nowSeconds - sat.pendingAnchorLeadStartTimeSeconds + 1e-9 >= g_anchorGridHysteresisSeconds)
+    {
+        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
+        if (forceLog || g_printGridAnchorEvents)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+    }
+    else if (forceLog)
+    {
+        logAnchor(sat.currentAnchorGridId);
+    }
 }
 
 static void
@@ -304,6 +482,151 @@ ToString(HandoverMode handoverMode)
     return handoverMode == HandoverMode::IMPROVED ? "improved" : "baseline";
 }
 
+enum class AntennaElementMode
+{
+    ISOTROPIC,
+    THREE_GPP,
+    B00_CUSTOM,
+};
+
+static AntennaElementMode
+ParseAntennaElementMode(const std::string& mode)
+{
+    if (mode == "three-gpp")
+    {
+        return AntennaElementMode::THREE_GPP;
+    }
+    if (mode == "b00-custom")
+    {
+        return AntennaElementMode::B00_CUSTOM;
+    }
+    return AntennaElementMode::ISOTROPIC;
+}
+
+static const char*
+ToString(AntennaElementMode mode)
+{
+    if (mode == AntennaElementMode::THREE_GPP)
+    {
+        return "three-gpp";
+    }
+    if (mode == AntennaElementMode::B00_CUSTOM)
+    {
+        return "b00-custom";
+    }
+    return "isotropic";
+}
+
+static Ptr<AntennaModel>
+CreateAntennaElement(AntennaElementMode mode, const BaselineSimulationConfig& cfg)
+{
+    if (mode == AntennaElementMode::THREE_GPP)
+    {
+        return CreateObject<ThreeGppAntennaModel>();
+    }
+    if (mode == AntennaElementMode::B00_CUSTOM)
+    {
+        Ptr<B00EquivalentAntennaModel> model = CreateObject<B00EquivalentAntennaModel>();
+        model->SetMaxGainDb(cfg.b00MaxGainDb);
+        model->SetBeamwidthDeg(cfg.b00BeamwidthDeg);
+        model->SetMaxAttenuationDb(cfg.b00MaxAttenuationDb);
+        return model;
+    }
+    return CreateObject<IsotropicAntennaModel>();
+}
+
+enum class BeamformingMode
+{
+    IDEAL_DIRECT_PATH,
+    IDEAL_CELL_SCAN,
+    IDEAL_DIRECT_PATH_QUASI_OMNI,
+    IDEAL_CELL_SCAN_QUASI_OMNI,
+    IDEAL_QUASI_OMNI_DIRECT_PATH,
+    REALISTIC,
+};
+
+static BeamformingMode
+ParseBeamformingMode(const std::string& mode)
+{
+    if (mode == "ideal-cell-scan")
+    {
+        return BeamformingMode::IDEAL_CELL_SCAN;
+    }
+    if (mode == "ideal-direct-path-quasi-omni")
+    {
+        return BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI;
+    }
+    if (mode == "ideal-cell-scan-quasi-omni")
+    {
+        return BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI;
+    }
+    if (mode == "ideal-quasi-omni-direct-path")
+    {
+        return BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH;
+    }
+    if (mode == "realistic")
+    {
+        return BeamformingMode::REALISTIC;
+    }
+    return BeamformingMode::IDEAL_DIRECT_PATH;
+}
+
+static const char*
+ToString(BeamformingMode mode)
+{
+    switch (mode)
+    {
+    case BeamformingMode::IDEAL_CELL_SCAN:
+        return "ideal-cell-scan";
+    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
+        return "ideal-direct-path-quasi-omni";
+    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
+        return "ideal-cell-scan-quasi-omni";
+    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
+        return "ideal-quasi-omni-direct-path";
+    case BeamformingMode::REALISTIC:
+        return "realistic";
+    case BeamformingMode::IDEAL_DIRECT_PATH:
+    default:
+        return "ideal-direct-path";
+    }
+}
+
+static TypeId
+GetIdealBeamformingMethodTypeId(BeamformingMode mode)
+{
+    switch (mode)
+    {
+    case BeamformingMode::IDEAL_CELL_SCAN:
+        return CellScanBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
+        return DirectPathQuasiOmniBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
+        return CellScanQuasiOmniBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
+        return QuasiOmniDirectPathBeamforming::GetTypeId();
+    case BeamformingMode::IDEAL_DIRECT_PATH:
+    default:
+        return DirectPathBeamforming::GetTypeId();
+    }
+}
+
+static RealisticBfManager::TriggerEvent
+ParseRealisticBfTriggerEvent(const std::string& triggerEvent)
+{
+    if (triggerEvent == "delayed-update")
+    {
+        return RealisticBfManager::DELAYED_UPDATE;
+    }
+    return RealisticBfManager::SRS_COUNT;
+}
+
+static const char*
+ToString(RealisticBfManager::TriggerEvent triggerEvent)
+{
+    return triggerEvent == RealisticBfManager::DELAYED_UPDATE ? "delayed-update" : "srs-count";
+}
+
 static std::optional<uint32_t>
 ResolveUeIndexFromServingCellAndRnti(uint16_t servingCellId, uint16_t rnti)
 {
@@ -324,16 +647,70 @@ ResolveUeIndexFromServingCellAndRnti(uint16_t servingCellId, uint16_t rnti)
     return std::nullopt;
 }
 
+static void
+ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
+{
+    const auto ueIdx = ResolveUeIndexFromServingCellAndRnti(params.m_cellId, params.m_rnti);
+    if (!ueIdx || *ueIdx >= g_ues.size())
+    {
+        return;
+    }
+
+    auto& ue = g_ues[*ueIdx];
+    ue.phyDlTbCount++;
+    ue.phyDlTblerSum += params.m_tbler;
+    if (params.m_corrupt)
+    {
+        ue.phyDlCorruptTbCount++;
+    }
+
+    const double alpha = std::clamp(g_improvedCrossLayerPhyAlpha, 1e-6, 1.0);
+    const double corruptIndicator = params.m_corrupt ? 1.0 : 0.0;
+    if (ue.recentPhySampleCount == 0)
+    {
+        ue.recentPhyCorruptRateEwma = corruptIndicator;
+        ue.recentPhyTblerEwma = params.m_tbler;
+    }
+    else
+    {
+        ue.recentPhyCorruptRateEwma =
+            (1.0 - alpha) * ue.recentPhyCorruptRateEwma + alpha * corruptIndicator;
+        ue.recentPhyTblerEwma = (1.0 - alpha) * ue.recentPhyTblerEwma + alpha * params.m_tbler;
+    }
+    ue.recentPhySampleCount++;
+
+    if (params.m_sinr > 0.0)
+    {
+        const double sinrDb = 10.0 * std::log10(params.m_sinr);
+        ue.phyDlSinrDbSum += sinrDb;
+        ue.phyDlMinSinrDb = std::min(ue.phyDlMinSinrDb, sinrDb);
+        if (!std::isfinite(ue.recentPhySinrDbEwma) || ue.recentPhySampleCount <= 1)
+        {
+            ue.recentPhySinrDbEwma = sinrDb;
+        }
+        else
+        {
+            ue.recentPhySinrDbEwma =
+                (1.0 - alpha) * ue.recentPhySinrDbEwma + alpha * sinrDb;
+        }
+    }
+}
+
 struct MeasurementCandidate
 {
     uint32_t satIdx = std::numeric_limits<uint32_t>::max();
     uint16_t cellId = 0;
     double rsrpDbm = -std::numeric_limits<double>::infinity();
+    double rsrqDb = -std::numeric_limits<double>::infinity();
     double loadScore = 1.0;
     bool admissionAllowed = false;
     double remainingVisibilitySeconds = 0.0;
     double visibilityScore = 0.0;
     double jointScore = -std::numeric_limits<double>::infinity();
+    // Phase 2: Inter-frequency handover fields
+    uint32_t carrierGroupId = 0;
+    double carrierFrequencyHz = 0.0;
+    bool isInterFrequency = false;
 };
 
 static double
@@ -403,6 +780,17 @@ PredictRemainingVisibilitySeconds(uint32_t satIdx,
 }
 
 static double
+NormalizeMetric(double value, double minValue, double maxValue)
+{
+    if (!std::isfinite(value) || !std::isfinite(minValue) || !std::isfinite(maxValue))
+    {
+        return 0.0;
+    }
+    const double span = std::max(1e-9, maxValue - minValue);
+    return std::clamp((value - minValue) / span, 0.0, 1.0);
+}
+
+static double
 ComputeVisibilityScore(double remainingVisibilitySeconds)
 {
     return std::clamp(remainingVisibilitySeconds /
@@ -414,17 +802,22 @@ ComputeVisibilityScore(double remainingVisibilitySeconds)
 static double
 ComputeJointScore(const MeasurementCandidate& candidate,
                   double minRsrpDbm,
-                  double signalSpanDb,
+                  double maxRsrpDbm,
+                  double minRsrqDb,
+                  double maxRsrqDb,
                   double normalizedSignalWeight,
+                  double normalizedRsrqWeight,
                   double normalizedLoadWeight,
                   double normalizedVisibilityWeight,
                   double sourceLoadScore,
                   double sourceLoadPressure)
 {
-    const double signalScore = (candidate.rsrpDbm - minRsrpDbm) / signalSpanDb;
+    const double rsrpScore = NormalizeMetric(candidate.rsrpDbm, minRsrpDbm, maxRsrpDbm);
+    const double rsrqScore = NormalizeMetric(candidate.rsrqDb, minRsrqDb, maxRsrqDb);
     const double loadUtility = std::clamp(1.0 - candidate.loadScore, 0.0, 1.0);
     const double loadReliefUtility = std::clamp(sourceLoadScore - candidate.loadScore, 0.0, 1.0);
-    return normalizedSignalWeight * signalScore +
+    return normalizedSignalWeight * rsrpScore +
+           normalizedRsrqWeight * rsrqScore +
            normalizedLoadWeight * loadUtility +
            normalizedVisibilityWeight * candidate.visibilityScore +
            0.25 * sourceLoadPressure * loadReliefUtility;
@@ -438,6 +831,32 @@ ComputeLoadPressureFromScore(double loadScore)
     return std::clamp(loadScore / congestionSpan, 0.0, 1.0);
 }
 
+static bool
+IsServingLinkWeak(const NrRrcSap::MeasResults& measResults)
+{
+    const double servingRsrpDbm =
+        nr::EutranMeasurementMapping::RsrpRange2Dbm(measResults.measResultPCell.rsrpResult);
+    const double servingRsrqDb =
+        nr::EutranMeasurementMapping::RsrqRange2Db(measResults.measResultPCell.rsrqResult);
+    return servingRsrpDbm <= g_improvedServingWeakRsrpDbm ||
+           servingRsrqDb <= g_improvedServingWeakRsrqDb;
+}
+
+static bool
+IsCrossLayerPhyWeak(const UeRuntime& ue)
+{
+    if (!g_improvedEnableCrossLayerPhyAssist ||
+        ue.recentPhySampleCount < g_improvedCrossLayerMinSamples)
+    {
+        return false;
+    }
+
+    const bool tblerWeak = ue.recentPhyTblerEwma >= g_improvedCrossLayerTblerThreshold;
+    const bool sinrWeak = std::isfinite(ue.recentPhySinrDbEwma) &&
+                          ue.recentPhySinrDbEwma <= g_improvedCrossLayerSinrThresholdDb;
+    return tblerWeak || sinrWeak;
+}
+
 static void
 ClearStableLeadTracking(UeRuntime& ue)
 {
@@ -449,6 +868,7 @@ ClearStableLeadTracking(UeRuntime& ue)
 static std::optional<MeasurementCandidate>
 SelectMeasurementDrivenTarget(uint16_t servingCellId,
                               uint32_t sourceSatIdx,
+                              uint32_t ueIdx,
                               const UeRuntime& ue,
                               const NrRrcSap::MeasResults& measResults)
 {
@@ -473,11 +893,181 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         candidate.satIdx = satIt->second;
         candidate.cellId = neighbour.physCellId;
         candidate.rsrpDbm = nr::EutranMeasurementMapping::RsrpRange2Dbm(neighbour.rsrpResult);
+        if (neighbour.haveRsrqResult)
+        {
+            candidate.rsrqDb = nr::EutranMeasurementMapping::RsrqRange2Db(neighbour.rsrqResult);
+        }
         candidate.loadScore = satellite.loadScore;
         candidate.admissionAllowed = satellite.admissionAllowed;
         candidate.remainingVisibilitySeconds =
             PredictRemainingVisibilitySeconds(candidate.satIdx, ue.groundPoint, Simulator::Now().GetSeconds());
+        // Phase 2: Add carrier group info
+        candidate.carrierGroupId = satellite.carrierGroupId;
+        candidate.carrierFrequencyHz = satellite.carrierCenterFrequencyHz;
+        candidate.isInterFrequency = (satellite.carrierGroupId != g_satellites[sourceSatIdx].carrierGroupId);
         candidates.push_back(candidate);
+    }
+
+    // Phase 2: Generate inter-frequency candidates based on geometric visibility
+    // when interFrequencyHandoverEnabled=true and measurement chain is primarily intra-frequency
+    if (g_interFrequencyHandoverEnabled)
+    {
+        const uint32_t servingCarrierGroup = g_satellites[sourceSatIdx].carrierGroupId;
+        const double nowSeconds = Simulator::Now().GetSeconds();
+
+        for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+        {
+            // Skip serving satellite and same carrier group satellites
+            if (satIdx == sourceSatIdx || g_satellites[satIdx].carrierGroupId == servingCarrierGroup)
+            {
+                continue;
+            }
+
+            // Check if this satellite is already in candidates from measurement chain
+            bool alreadyInCandidates = false;
+            for (const auto& existingCand : candidates)
+            {
+                if (existingCand.satIdx == satIdx)
+                {
+                    alreadyInCandidates = true;
+                    break;
+                }
+            }
+            if (alreadyInCandidates)
+            {
+                continue;
+            }
+
+            // Calculate geometric state and beam budget for this inter-frequency satellite
+            const auto state = LeoOrbitCalculator::Calculate(nowSeconds,
+                                                              g_satellites[satIdx].orbit,
+                                                              g_gmstAtEpochRad,
+                                                              ue.groundPoint,
+                                                              g_satellites[satIdx].carrierCenterFrequencyHz,
+                                                              g_minElevationRad);
+
+            if (!state.visible)
+            {
+                continue;
+            }
+
+            const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
+                                                               ue.groundPoint.ecef,
+                                                               g_satellites[satIdx].cellAnchorEcef,
+                                                               g_beamModelConfig);
+
+            // Only add if beam is locked (valid link budget)
+            if (!budget.beamLocked || !std::isfinite(budget.rsrpDbm))
+            {
+                continue;
+            }
+
+            // Construct inter-frequency candidate using geometric beam budget
+            MeasurementCandidate geoCandidate;
+            geoCandidate.satIdx = satIdx;
+            geoCandidate.cellId = g_satelliteGnbDevices[satIdx]->GetCellId();
+            geoCandidate.rsrpDbm = budget.rsrpDbm;  // Use beam budget RSRP (estimated)
+            geoCandidate.rsrqDb = budget.rsrpDbm - 3.0;  // Rough RSRQ estimate (RSRP - 3dB typical)
+            geoCandidate.loadScore = g_satellites[satIdx].loadScore;
+            geoCandidate.admissionAllowed = g_satellites[satIdx].admissionAllowed;
+            geoCandidate.remainingVisibilitySeconds =
+                PredictRemainingVisibilitySeconds(satIdx, ue.groundPoint, nowSeconds);
+            geoCandidate.carrierGroupId = g_satellites[satIdx].carrierGroupId;
+            geoCandidate.carrierFrequencyHz = g_satellites[satIdx].carrierCenterFrequencyHz;
+            geoCandidate.isInterFrequency = true;  // By construction, all these are inter-frequency
+
+            candidates.push_back(geoCandidate);
+
+            if (g_printInterFrequencyEvents)
+            {
+                std::cout << "[INTER-FREQ-GEO-CAND] t=" << std::fixed << std::setprecision(3)
+                          << nowSeconds << "s"
+                          << " ue=" << ueIdx
+                          << " sat=" << satIdx
+                          << " group=" << geoCandidate.carrierGroupId
+                          << " freq=" << geoCandidate.carrierFrequencyHz / 1e6 << "MHz"
+                          << " rsrp=" << geoCandidate.rsrpDbm << "dBm"
+                          << " (geo-budget)"
+                          << std::endl;
+            }
+        }
+    }
+
+    // Carrier group filtering for same-frequency handover only
+    // Phase 2: When interFrequencyHandoverEnabled=true, sameFrequencyHandoverOnly is set to false
+    // in ApplyGlobalMirrorConfig, so all candidates are allowed.
+    const uint32_t servingCarrierGroup = g_satellites[sourceSatIdx].carrierGroupId;
+
+    if (g_sameFrequencyHandoverOnly && !candidates.empty())
+    {
+        // Phase 1 behavior: Filter out inter-frequency candidates
+        std::vector<MeasurementCandidate> sameFreqCandidates;
+        sameFreqCandidates.reserve(candidates.size());
+        uint32_t interFreqBlockedCount = 0;
+
+        for (const auto& candidate : candidates)
+        {
+            if (candidate.carrierGroupId == servingCarrierGroup)
+            {
+                sameFreqCandidates.push_back(candidate);
+            }
+            else
+            {
+                interFreqBlockedCount++;
+                if (g_printCarrierPlan && g_printNrtEvents)
+                {
+                    std::cout << "[INTER-FREQ-BLOCKED] t=" << std::fixed << std::setprecision(3)
+                              << Simulator::Now().GetSeconds() << "s"
+                              << " cell=" << candidate.cellId
+                              << " group=" << candidate.carrierGroupId
+                              << " (serving group=" << servingCarrierGroup << ")"
+                              << " rsrp=" << candidate.rsrpDbm << "dBm"
+                              << std::endl;
+                }
+            }
+        }
+
+        if (!sameFreqCandidates.empty())
+        {
+            candidates = std::move(sameFreqCandidates);
+        }
+        else if (interFreqBlockedCount > 0)
+        {
+            // All candidates are inter-frequency, must block handover
+            if (g_printCarrierPlan)
+            {
+                std::cout << "[INTER-FREQ-ALL-BLOCKED] t=" << std::fixed << std::setprecision(3)
+                          << Simulator::Now().GetSeconds() << "s"
+                          << " servingCell=" << servingCellId
+                          << " group=" << servingCarrierGroup
+                          << " blocked=" << interFreqBlockedCount << " candidates"
+                          << " -> NO_HANDOVER (sameFrequencyHandoverOnly=true)"
+                          << std::endl;
+            }
+            candidates.clear();
+        }
+    }
+    else if (g_interFrequencyHandoverEnabled && !candidates.empty())
+    {
+        // Phase 2 behavior: Allow all candidates, log inter-frequency ones
+        uint32_t interFreqCount = 0;
+        for (const auto& candidate : candidates)
+        {
+            if (candidate.isInterFrequency)
+            {
+                interFreqCount++;
+            }
+        }
+        if (interFreqCount > 0 && g_printInterFrequencyEvents)
+        {
+            std::cout << "[INTER-FREQ-CANDIDATES] t=" << std::fixed << std::setprecision(3)
+                      << Simulator::Now().GetSeconds() << "s"
+                      << " servingCell=" << servingCellId
+                      << " servingGroup=" << servingCarrierGroup
+                      << " totalCandidates=" << candidates.size()
+                      << " interFreqCandidates=" << interFreqCount
+                      << std::endl;
+        }
     }
 
     if (candidates.empty())
@@ -493,6 +1083,8 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
     servingCandidate.cellId = servingCellId;
     servingCandidate.rsrpDbm =
         nr::EutranMeasurementMapping::RsrpRange2Dbm(measResults.measResultPCell.rsrpResult);
+    servingCandidate.rsrqDb =
+        nr::EutranMeasurementMapping::RsrqRange2Db(measResults.measResultPCell.rsrqResult);
     servingCandidate.loadScore = sourceLoadScore;
     servingCandidate.admissionAllowed = true;
     servingCandidate.remainingVisibilitySeconds =
@@ -535,6 +1127,65 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         }
     }
 
+    std::vector<MeasurementCandidate> qualityQualifiedCandidates;
+    qualityQualifiedCandidates.reserve(filteredCandidates.size());
+    std::copy_if(filteredCandidates.begin(),
+                 filteredCandidates.end(),
+                 std::back_inserter(qualityQualifiedCandidates),
+                 [](const auto& candidate) {
+                     const bool rsrpOk = candidate.rsrpDbm >= g_improvedMinCandidateRsrpDbm;
+                     const bool rsrqOk = std::isfinite(candidate.rsrqDb) &&
+                                         candidate.rsrqDb >= g_improvedMinCandidateRsrqDb;
+                     return rsrpOk && rsrqOk;
+                 });
+    if (!qualityQualifiedCandidates.empty())
+    {
+        filteredCandidates = std::move(qualityQualifiedCandidates);
+    }
+
+    // Same-frequency interference guard: a target with stronger RSRP still needs
+    // enough RSRQ advantage over serving, otherwise we risk cutting into a trap.
+    const double servingRsrqDb =
+        std::isfinite(servingCandidate.rsrqDb) ? servingCandidate.rsrqDb : -19.5;
+    const bool servingWeak = servingCandidate.rsrpDbm <= g_improvedServingWeakRsrpDbm ||
+                             servingCandidate.rsrqDb <= g_improvedServingWeakRsrqDb;
+    if (g_improvedMinRsrqAdvantageDb > 0.0 && !servingWeak)
+    {
+        std::vector<MeasurementCandidate> rsrqGuardCandidates;
+        rsrqGuardCandidates.reserve(filteredCandidates.size());
+        for (const auto& candidate : filteredCandidates)
+        {
+            if (candidate.isInterFrequency)
+            {
+                rsrqGuardCandidates.push_back(candidate);
+                continue;
+            }
+            const bool rsrqAdvantageOk = std::isfinite(candidate.rsrqDb) &&
+                                         candidate.rsrqDb >=
+                                             servingRsrqDb + g_improvedMinRsrqAdvantageDb;
+            if (rsrqAdvantageOk)
+            {
+                rsrqGuardCandidates.push_back(candidate);
+            }
+        }
+        if (!rsrqGuardCandidates.empty())
+        {
+            filteredCandidates = std::move(rsrqGuardCandidates);
+        }
+        else if (!filteredCandidates.empty())
+        {
+            const auto bestSignal = std::max_element(filteredCandidates.begin(),
+                                                     filteredCandidates.end(),
+                                                     [](const auto& lhs, const auto& rhs) {
+                                                         return lhs.rsrpDbm < rhs.rsrpDbm;
+                                                     });
+            if (bestSignal->rsrpDbm > servingCandidate.rsrpDbm)
+            {
+                return *bestSignal;
+            }
+        }
+    }
+
     const auto bestSignalIt =
         std::max_element(filteredCandidates.begin(),
                          filteredCandidates.end(),
@@ -542,6 +1193,11 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
                              return lhs.rsrpDbm < rhs.rsrpDbm;
                          });
     const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
+    const bool crossLayerPhyWeak = IsCrossLayerPhyWeak(ue);
+    if (servingWeak || crossLayerPhyWeak)
+    {
+        return bestSignalCandidate;
+    }
 
     const double dynamicMaxSignalGapDb =
         g_improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
@@ -549,6 +1205,8 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         std::max(0.05, g_improvedMinLoadScoreDelta * (1.0 - 0.5 * sourceLoadPressure));
     const double effectiveSignalWeight =
         std::max(0.15, g_improvedSignalWeight * (1.0 - 0.4 * sourceLoadPressure));
+    const double effectiveRsrqWeight =
+        std::max(0.0, g_improvedRsrqWeight * (1.0 - 0.2 * sourceLoadPressure));
     const double effectiveLoadWeight = g_improvedLoadWeight + 0.6 * sourceLoadPressure;
     const double effectiveVisibilityWeight =
         g_improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
@@ -576,22 +1234,34 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
 
     double minRsrpDbm = std::numeric_limits<double>::infinity();
     double maxRsrpDbm = -std::numeric_limits<double>::infinity();
+    double minRsrqDb = std::numeric_limits<double>::infinity();
+    double maxRsrqDb = -std::numeric_limits<double>::infinity();
     if (std::isfinite(servingCandidate.rsrpDbm))
     {
         minRsrpDbm = servingCandidate.rsrpDbm;
         maxRsrpDbm = servingCandidate.rsrpDbm;
     }
+    if (std::isfinite(servingCandidate.rsrqDb))
+    {
+        minRsrqDb = servingCandidate.rsrqDb;
+        maxRsrqDb = servingCandidate.rsrqDb;
+    }
     for (const auto& candidate : scoredCandidates)
     {
         minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
         maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
+        if (std::isfinite(candidate.rsrqDb))
+        {
+            minRsrqDb = std::min(minRsrqDb, candidate.rsrqDb);
+            maxRsrqDb = std::max(maxRsrqDb, candidate.rsrqDb);
+        }
     }
 
-    const double signalSpanDb = std::max(1e-9, maxRsrpDbm - minRsrpDbm);
     const double totalWeight = std::max(
         1e-9,
-        effectiveSignalWeight + effectiveLoadWeight + effectiveVisibilityWeight);
+        effectiveSignalWeight + effectiveRsrqWeight + effectiveLoadWeight + effectiveVisibilityWeight);
     const double normalizedSignalWeight = effectiveSignalWeight / totalWeight;
+    const double normalizedRsrqWeight = effectiveRsrqWeight / totalWeight;
     const double normalizedLoadWeight = effectiveLoadWeight / totalWeight;
     const double normalizedVisibilityWeight = effectiveVisibilityWeight / totalWeight;
 
@@ -600,8 +1270,11 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         candidate.visibilityScore = ComputeVisibilityScore(candidate.remainingVisibilitySeconds);
         candidate.jointScore = ComputeJointScore(candidate,
                                                 minRsrpDbm,
-                                                signalSpanDb,
+                                                maxRsrpDbm,
+                                                minRsrqDb,
+                                                maxRsrqDb,
                                                 normalizedSignalWeight,
+                                                normalizedRsrqWeight,
                                                 normalizedLoadWeight,
                                                 normalizedVisibilityWeight,
                                                 sourceLoadScore,
@@ -625,8 +1298,11 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
             ComputeVisibilityScore(servingCandidate.remainingVisibilitySeconds);
         servingCandidate.jointScore = ComputeJointScore(servingCandidate,
                                                         minRsrpDbm,
-                                                        signalSpanDb,
+                                                        maxRsrpDbm,
+                                                        minRsrqDb,
+                                                        maxRsrqDb,
                                                         normalizedSignalWeight,
+                                                        normalizedRsrqWeight,
                                                         normalizedLoadWeight,
                                                         normalizedVisibilityWeight,
                                                         sourceLoadScore,
@@ -663,7 +1339,11 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         return;
     }
 
-    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, static_cast<uint32_t>(sourceSatIdx), ue, measResults);
+    const bool servingWeak =
+        (g_handoverMode == HandoverMode::IMPROVED) &&
+        (IsServingLinkWeak(measResults) || IsCrossLayerPhyWeak(ue));
+
+    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, static_cast<uint32_t>(sourceSatIdx), *ueIdx, ue, measResults);
     if (!selectedTarget.has_value() || selectedTarget->cellId == 0)
     {
         if (g_handoverMode == HandoverMode::IMPROVED)
@@ -673,7 +1353,7 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         return;
     }
 
-    if (g_handoverMode == HandoverMode::IMPROVED)
+    if (g_handoverMode == HandoverMode::IMPROVED && !servingWeak)
     {
         const double nowSeconds = Simulator::Now().GetSeconds();
         const bool sameStableLead = ue.stableLeadSourceCell == sourceCellId &&
@@ -709,7 +1389,10 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
                   << " ue=" << *ueIdx
                   << " sourceCell=" << sourceCellId
                   << " targetCell=" << selectedTarget->cellId
-                  << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm";
+                  << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm"
+                  << " srcGroup=" << g_satellites[sourceSatIdx].carrierGroupId
+                  << " tgtGroup=" << selectedTarget->carrierGroupId
+                  << " interFreq=" << (selectedTarget->isInterFrequency ? "YES" : "NO");
         if (g_handoverMode == HandoverMode::IMPROVED)
         {
             const double sourceLoadScore = g_satellites[sourceSatIdx].loadScore;
@@ -774,33 +1457,6 @@ InstallStaticNeighbourRelations()
     }
 }
 
-static double
-ComputeMeanThroughputMbps(const std::deque<double>& samples)
-{
-    if (samples.empty())
-    {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    double sum = 0.0;
-    uint32_t count = 0;
-    for (double value : samples)
-    {
-        if (!std::isfinite(value))
-        {
-            continue;
-        }
-        sum += value;
-        ++count;
-    }
-
-    if (count == 0)
-    {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-    return sum / static_cast<double>(count);
-}
-
 static void
 WriteHandoverEventTraceRow(double nowSeconds,
                            uint32_t ueIdx,
@@ -809,7 +1465,6 @@ WriteHandoverEventTraceRow(double nowSeconds,
                            uint16_t sourceCellId,
                            uint16_t targetCellId,
                            double delayMs,
-                           double recoveryMs,
                            bool pingPongDetected,
                            HandoverFailureReason failureReason = HandoverFailureReason::NONE)
 {
@@ -826,13 +1481,8 @@ WriteHandoverEventTraceRow(double nowSeconds,
     {
         g_handoverEventTrace << std::fixed << std::setprecision(3) << delayMs;
     }
-    g_handoverEventTrace << ",";
-    if (std::isfinite(recoveryMs))
-    {
-        g_handoverEventTrace << std::fixed << std::setprecision(3) << recoveryMs;
-    }
-    g_handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << "," << ToString(failureReason)
-                         << "\n";
+    g_handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << ","
+                         << ToString(failureReason) << "\n";
     g_handoverEventTrace.flush();
 }
 
@@ -918,33 +1568,19 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
         ue.handoverTraceSequence++;
         ue.activeHandoverTraceId = ue.handoverTraceSequence;
         ue.hasPendingHoStart = true;
-        ue.waitingForThroughputRecovery = false;
-        ue.waitingRecoveryHoId = 0;
-        ue.waitingRecoveryStartTimeSeconds = -1.0;
-        ue.waitingRecoverySatisfiedSamples = 0;
         ue.lastHoStartSourceCell = cellId;
         ue.lastHoStartTargetCell = targetCellId;
         ue.lastHoStartTimeSeconds = Simulator::Now().GetSeconds();
-        ue.pendingRecoveryReferenceThroughputMbps =
-            ComputeMeanThroughputMbps(ue.recentThroughputSamplesMbps);
-        if (std::isfinite(ue.pendingRecoveryReferenceThroughputMbps) &&
-            ue.pendingRecoveryReferenceThroughputMbps > 0.0)
-        {
-            ue.pendingRecoveryThresholdThroughputMbps =
-                ue.pendingRecoveryReferenceThroughputMbps * g_recoveryThresholdRatio;
-        }
-        else
-        {
-            ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-        }
         ue.handoverStartCount++;
+        ue.hoStartPhyTblerEwma = ue.recentPhyTblerEwma;
+        ue.hoStartPhySinrDbEwma = ue.recentPhySinrDbEwma;
+        ue.hoStartPhyCorruptRateEwma = ue.recentPhyCorruptRateEwma;
         WriteHandoverEventTraceRow(ue.lastHoStartTimeSeconds,
                                    *ueIdx,
                                    ue.activeHandoverTraceId,
                                    "HO_START",
                                    cellId,
                                    targetCellId,
-                                   std::numeric_limits<double>::quiet_NaN(),
                                    std::numeric_limits<double>::quiet_NaN(),
                                    false);
         ue.pendingFailureReason = HandoverFailureReason::NONE;
@@ -967,7 +1603,7 @@ ReportHandoverStart(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti, 
  * 主要工作：
  * - 统计成功次数；
  * - 计算切换执行时延；
- * - 判断是否发生短时回切与吞吐恢复。
+ * - 判断是否发生短时回切。
  */
 static void
 ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
@@ -975,6 +1611,7 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
     std::ostringstream prefix;
     double handoverDelayMs = -1.0;
     bool pingPongDetected = false;
+    bool interferenceTrapDetected = false;
     double pingPongGapSeconds = -1.0;
     uint16_t previousSourceCell = 0;
     uint16_t previousTargetCell = 0;
@@ -1007,18 +1644,27 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
         }
         if (ue.hasPendingHoStart)
         {
-        ue.lastSuccessfulHoSourceCell = ue.lastHoStartSourceCell;
-        ue.lastSuccessfulHoTargetCell = cellId;
-        ue.lastSuccessfulHoTimeSeconds = nowSeconds;
-        ClearStableLeadTracking(ue);
-    }
-        const bool hasRecoveryThreshold =
-            std::isfinite(ue.pendingRecoveryThresholdThroughputMbps) &&
-            ue.pendingRecoveryThresholdThroughputMbps > 0.0;
-        ue.waitingForThroughputRecovery = hasRecoveryThreshold;
-        ue.waitingRecoveryHoId = hasRecoveryThreshold ? activeHandoverTraceId : 0;
-        ue.waitingRecoveryStartTimeSeconds = hasRecoveryThreshold ? nowSeconds : -1.0;
-        ue.waitingRecoverySatisfiedSamples = 0;
+            ue.lastSuccessfulHoSourceCell = ue.lastHoStartSourceCell;
+            ue.lastSuccessfulHoTargetCell = cellId;
+            ue.lastSuccessfulHoTimeSeconds = nowSeconds;
+            ClearStableLeadTracking(ue);
+        }
+        ue.hoEndOkPhyTblerEwma = ue.recentPhyTblerEwma;
+        ue.hoEndOkPhySinrDbEwma = ue.recentPhySinrDbEwma;
+        ue.lastHoEndOkTimeSeconds = nowSeconds;
+        const bool sinrTrap = std::isfinite(ue.hoStartPhySinrDbEwma) &&
+                              std::isfinite(ue.hoEndOkPhySinrDbEwma) &&
+                              ue.hoStartPhySinrDbEwma > 5.0 &&
+                              ue.hoEndOkPhySinrDbEwma < 0.0;
+        const bool tblerTrap = std::isfinite(ue.hoStartPhyTblerEwma) &&
+                               std::isfinite(ue.hoEndOkPhyTblerEwma) &&
+                               ue.hoStartPhyTblerEwma < 0.3 &&
+                               ue.hoEndOkPhyTblerEwma > 0.4;
+        if (sinrTrap || tblerTrap)
+        {
+            ue.interferenceTrapHoCount++;
+            interferenceTrapDetected = true;
+        }
         WriteHandoverEventTraceRow(nowSeconds,
                                    *ueIdx,
                                    activeHandoverTraceId,
@@ -1026,7 +1672,6 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
                                    ue.lastHoStartSourceCell,
                                    cellId,
                                    handoverDelayMs,
-                                   std::numeric_limits<double>::quiet_NaN(),
                                    pingPongDetected);
         ue.hasPendingHoStart = false;
         ue.lastHoStartTimeSeconds = -1.0;
@@ -1048,6 +1693,14 @@ ReportHandoverEndOk(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnti)
                       << "ms";
         }
         std::cout << std::endl;
+        if (interferenceTrapDetected)
+        {
+            std::cout << "[INTERFERENCE-TRAP] t=" << std::fixed << std::setprecision(3)
+                      << Simulator::Now().GetSeconds() << "s"
+                      << prefix.str()
+                      << " sourceCell=" << currentSourceCell
+                      << " targetCell=" << cellId << std::endl;
+        }
         if (pingPongDetected)
         {
             std::cout << "[PING-PONG] t=" << std::fixed << std::setprecision(3)
@@ -1092,17 +1745,12 @@ ReportHandoverEndError(std::string, uint64_t imsi, uint16_t cellId, uint16_t rnt
                                    sourceCellId,
                                    targetCellId,
                                    std::numeric_limits<double>::quiet_NaN(),
-                                   std::numeric_limits<double>::quiet_NaN(),
                                    false,
                                    failureReason);
         ue.hasPendingHoStart = false;
         ue.lastHoStartTimeSeconds = -1.0;
         ue.activeHandoverTraceId = 0;
         ue.pendingFailureReason = HandoverFailureReason::NONE;
-        ue.waitingForThroughputRecovery = false;
-        ue.waitingRecoveryHoId = 0;
-        ue.waitingRecoveryStartTimeSeconds = -1.0;
-        ue.waitingRecoverySatisfiedSamples = 0;
         prefix << " ue=" << *ueIdx;
     }
 
@@ -1182,54 +1830,6 @@ SampleHandoverDlThroughput(uint32_t packetSizeBytes, Time interval)
 
         const double throughputMbps =
             (dtSeconds > 0.0) ? (deltaPackets * packetSizeBytes * 8.0) / dtSeconds / 1e6 : 0.0;
-
-        if (!ue.hasPendingHoStart && !ue.waitingForThroughputRecovery)
-        {
-            ue.recentThroughputSamplesMbps.push_back(throughputMbps);
-            while (ue.recentThroughputSamplesMbps.size() > g_recoveryReferenceWindowSamples)
-            {
-                ue.recentThroughputSamplesMbps.pop_front();
-            }
-        }
-
-        if (!ue.hasPendingHoStart && ue.waitingForThroughputRecovery)
-        {
-            const double thresholdMbps = ue.pendingRecoveryThresholdThroughputMbps;
-            if (std::isfinite(thresholdMbps) && throughputMbps + 1e-9 >= thresholdMbps)
-            {
-                ue.waitingRecoverySatisfiedSamples++;
-            }
-            else
-            {
-                ue.waitingRecoverySatisfiedSamples = 0;
-            }
-
-            if (ue.waitingRecoverySatisfiedSamples >= g_recoveryRequiredConsecutiveSamples &&
-                ue.waitingRecoveryStartTimeSeconds >= 0.0)
-            {
-                const double recoverySeconds = nowSeconds - ue.waitingRecoveryStartTimeSeconds;
-                ue.throughputRecoveryCount++;
-                ue.totalThroughputRecoverySeconds += recoverySeconds;
-                ue.lastThroughputRecoverySeconds = recoverySeconds;
-                WriteHandoverEventTraceRow(nowSeconds,
-                                           ueIdx,
-                                           ue.waitingRecoveryHoId,
-                                           "THROUGHPUT_RECOVERED",
-                                           ue.lastSuccessfulHoSourceCell,
-                                           ue.lastSuccessfulHoTargetCell,
-                                           std::numeric_limits<double>::quiet_NaN(),
-                                           recoverySeconds * 1000.0,
-                                           false);
-                ue.waitingForThroughputRecovery = false;
-                ue.waitingRecoveryHoId = 0;
-                ue.waitingRecoveryStartTimeSeconds = -1.0;
-                ue.waitingRecoverySatisfiedSamples = 0;
-                ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-                ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-                ue.recentThroughputSamplesMbps.clear();
-                ue.recentThroughputSamplesMbps.push_back(throughputMbps);
-            }
-        }
 
         g_handoverThroughputTrace << std::fixed << std::setprecision(3) << nowSeconds << ","
                                   << ueIdx << "," << servingCellId << ","
@@ -1349,6 +1949,103 @@ UpdateConstellation(Time interval, Time stopTime)
         }
 
         ue.lastServingCellForLog = servingCellId;
+
+        // Phase 2: Detect inter-frequency candidates but block execution due to NR Ideal RRC limitation
+        // When measurement chain doesn't trigger (intra-frequency only), we check geometric candidates
+        // but do NOT actually call TriggerHandover() because NrUeRrcProtocolIdeal crashes on RLF
+        if (g_interFrequencyHandoverEnabled && servingSatIdx >= 0)
+        {
+            const uint32_t servingCarrierGroup = g_satellites[static_cast<uint32_t>(servingSatIdx)].carrierGroupId;
+
+            // Find best inter-frequency candidate based on geometric visibility
+            uint32_t bestInterFreqSatIdx = std::numeric_limits<uint32_t>::max();
+            double bestInterFreqRsrpDbm = -std::numeric_limits<double>::infinity();
+            double servingRsrpDbm = -std::numeric_limits<double>::infinity();
+
+            // Estimate serving satellite RSRP from geometric budget
+            const auto servingState = LeoOrbitCalculator::Calculate(nowSeconds,
+                                                                    g_satellites[static_cast<uint32_t>(servingSatIdx)].orbit,
+                                                                    g_gmstAtEpochRad,
+                                                                    ue.groundPoint,
+                                                                    g_satellites[static_cast<uint32_t>(servingSatIdx)].carrierCenterFrequencyHz,
+                                                                    g_minElevationRad);
+            if (servingState.visible)
+            {
+                const auto servingBudget = CalculateEarthFixedBeamBudget(servingState.ecef,
+                                                                          ue.groundPoint.ecef,
+                                                                          g_satellites[static_cast<uint32_t>(servingSatIdx)].cellAnchorEcef,
+                                                                          g_beamModelConfig);
+                if (servingBudget.beamLocked)
+                {
+                    servingRsrpDbm = servingBudget.rsrpDbm;
+                }
+            }
+
+            // Check inter-frequency candidates
+            for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+            {
+                if (satIdx == static_cast<uint32_t>(servingSatIdx) ||
+                    g_satellites[satIdx].carrierGroupId == servingCarrierGroup)
+                {
+                    continue;  // Skip serving satellite and same-frequency satellites
+                }
+
+                const auto state = LeoOrbitCalculator::Calculate(nowSeconds,
+                                                                  g_satellites[satIdx].orbit,
+                                                                  g_gmstAtEpochRad,
+                                                                  ue.groundPoint,
+                                                                  g_satellites[satIdx].carrierCenterFrequencyHz,
+                                                                  g_minElevationRad);
+
+                if (!state.visible)
+                {
+                    continue;
+                }
+
+                const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
+                                                                   ue.groundPoint.ecef,
+                                                                   g_satellites[satIdx].cellAnchorEcef,
+                                                                   g_beamModelConfig);
+
+                if (!budget.beamLocked || !std::isfinite(budget.rsrpDbm))
+                {
+                    continue;
+                }
+
+                // Check if candidate is better than serving + hysteresis
+                if (budget.rsrpDbm > servingRsrpDbm + g_hoHysteresisDb && budget.rsrpDbm > bestInterFreqRsrpDbm)
+                {
+                    bestInterFreqRsrpDbm = budget.rsrpDbm;
+                    bestInterFreqSatIdx = satIdx;
+                }
+            }
+
+            // Log inter-frequency candidate detection but BLOCK execution due to NR Ideal RRC limitation
+            // This is trigger-level support only; execution-level is blocked by stack limitation
+            if (bestInterFreqSatIdx != std::numeric_limits<uint32_t>::max() &&
+                std::isfinite(servingRsrpDbm) &&
+                bestInterFreqRsrpDbm > servingRsrpDbm + g_hoHysteresisDb)
+            {
+                const uint16_t targetCellId = g_satelliteGnbDevices[bestInterFreqSatIdx]->GetCellId();
+
+                if (g_printInterFrequencyEvents)
+                {
+                    std::cout << "[INTER-FREQ-HO-BLOCKED-BY-RRC-LIMIT] t=" << std::fixed << std::setprecision(3)
+                              << nowSeconds << "s"
+                              << " ue=" << ueIdx
+                              << " sourceCell=" << servingCellId
+                              << " sourceGroup=" << servingCarrierGroup
+                              << " targetCell=" << targetCellId
+                              << " targetGroup=" << g_satellites[bestInterFreqSatIdx].carrierGroupId
+                              << " targetFreq=" << g_satellites[bestInterFreqSatIdx].carrierCenterFrequencyHz / 1e6 << "MHz"
+                              << " servingRsrp=" << servingRsrpDbm << "dBm"
+                              << " targetRsrp=" << bestInterFreqRsrpDbm << "dBm"
+                              << " delta=" << (bestInterFreqRsrpDbm - servingRsrpDbm) << "dB"
+                              << " reason=NrUeRrcProtocolIdeal-does-not-support-RLF"
+                              << std::endl;
+                }
+            }
+        }
     }
 
     for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
@@ -1378,8 +2075,10 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_gridCenterLongitudeDeg = config.gridCenterLongitudeDeg;
     g_gridWidthKm = config.gridWidthKm;
     g_gridHeightKm = config.gridHeightKm;
-    g_hexCellRadiusKm = config.hexCellRadiusKm;
+    g_anchorGridHexRadiusKm = config.anchorGridHexRadiusKm;
     g_gridNearestK = config.gridNearestK;
+    g_anchorGridSwitchGuardMeters = config.anchorGridSwitchGuardMeters;
+    g_anchorGridHysteresisSeconds = config.anchorGridHysteresisSeconds;
     g_outputDir = config.outputDir;
     g_printGridCatalog = config.printGridCatalog;
     g_gridCatalogPath = config.gridCatalogPath;
@@ -1404,6 +2103,7 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_handoverMode = ParseHandoverMode(config.handoverMode);
     g_improvedSignalWeight = config.improvedSignalWeight;
     g_improvedLoadWeight = config.improvedLoadWeight;
+    g_improvedRsrqWeight = config.improvedRsrqWeight;
     g_improvedVisibilityWeight = config.improvedVisibilityWeight;
     g_improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
     g_improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
@@ -1412,6 +2112,16 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_improvedVisibilityHorizonSeconds = config.improvedVisibilityHorizonSeconds;
     g_improvedVisibilityPredictionStepSeconds = config.improvedVisibilityPredictionStepSeconds;
     g_improvedMinJointScoreMargin = config.improvedMinJointScoreMargin;
+    g_improvedMinCandidateRsrpDbm = config.improvedMinCandidateRsrpDbm;
+    g_improvedMinCandidateRsrqDb = config.improvedMinCandidateRsrqDb;
+    g_improvedServingWeakRsrpDbm = config.improvedServingWeakRsrpDbm;
+    g_improvedServingWeakRsrqDb = config.improvedServingWeakRsrqDb;
+    g_improvedMinRsrqAdvantageDb = config.improvedMinRsrqAdvantageDb;
+    g_improvedEnableCrossLayerPhyAssist = config.improvedEnableCrossLayerPhyAssist;
+    g_improvedCrossLayerPhyAlpha = config.improvedCrossLayerPhyAlpha;
+    g_improvedCrossLayerTblerThreshold = config.improvedCrossLayerTblerThreshold;
+    g_improvedCrossLayerSinrThresholdDb = config.improvedCrossLayerSinrThresholdDb;
+    g_improvedCrossLayerMinSamples = config.improvedCrossLayerMinSamples;
 }
 
 // ============================================================================
@@ -1436,6 +2146,14 @@ main(int argc, char* argv[])
     const auto& cfg = config;
     double orbitRaanDeg = cfg.orbitRaanDeg;
     double baseTrueAnomalyDeg = cfg.baseTrueAnomalyDeg;
+    const auto gnbAntennaElementMode = ParseAntennaElementMode(cfg.gnbAntennaElement);
+    const auto ueAntennaElementMode = ParseAntennaElementMode(cfg.ueAntennaElement);
+    const auto beamformingMode = ParseBeamformingMode(cfg.beamformingMode);
+    const auto realisticBfTriggerEvent =
+        ParseRealisticBfTriggerEvent(cfg.realisticBfTriggerEvent);
+    const bool useRealisticBeamforming = (beamformingMode == BeamformingMode::REALISTIC);
+    const uint32_t effectiveSrsSymbols =
+        (useRealisticBeamforming && cfg.srsSymbols == 0) ? 1u : cfg.srsSymbols;
 
     // ------------------------------
     // 3. 几何场景与链路预算参数初始化
@@ -1461,9 +2179,28 @@ main(int argc, char* argv[])
                                  EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverThroughputTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverEventTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.e2eFlowMetricsPath) &&
+                                 EnsureParentDirectoryForFile(cfg.phyDlTbMetricsPath) &&
                                  EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
                                  EnsureParentDirectoryForFile(cfg.gridSvgPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
+
+    if (beamformingMode == BeamformingMode::IDEAL_CELL_SCAN ||
+        beamformingMode == BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI ||
+        beamformingMode == BeamformingMode::REALISTIC)
+    {
+        std::cout << "[DIAG-WARN] beamformingMode=" << ToString(beamformingMode)
+                  << " is intended for short diagnostic runs in the current stack; "
+                     "it may trigger NR PHY control/beam-update assertions and should not "
+                     "be treated as the formal B00/I31 baseline by default"
+                  << std::endl;
+    }
+    if (useRealisticBeamforming && cfg.srsSymbols == 0)
+    {
+        std::cout << "[DIAG-INFO] beamformingMode=realistic requires SRS feedback; "
+                     "automatically promoting srsSymbols from 0 to "
+                  << effectiveSrsSymbols << " for this run" << std::endl;
+    }
 
     // 生成用于波束锚定和后续可视化的六边形网格。
     if (g_useWgs84HexGrid)
@@ -1472,7 +2209,7 @@ main(int argc, char* argv[])
                                            g_gridCenterLongitudeDeg,
                                            g_gridWidthKm * 1000.0,
                                            g_gridHeightKm * 1000.0,
-                                           g_hexCellRadiusKm * 1000.0);
+                                           g_anchorGridHexRadiusKm * 1000.0);
         NS_ABORT_MSG_IF(g_hexGridCells.empty(), "hex-grid generation produced 0 cells");
 
         if (cfg.startupVerbose)
@@ -1481,9 +2218,11 @@ main(int argc, char* argv[])
                       << "[Grid] WGS84 hex-grid enabled center=(" << g_gridCenterLatitudeDeg << "deg, "
                       << g_gridCenterLongitudeDeg << "deg)"
                       << " size=" << g_gridWidthKm << "x" << g_gridHeightKm << "km"
-                      << " hexRadius=" << g_hexCellRadiusKm << "km"
+                      << " anchorHexRadius=" << g_anchorGridHexRadiusKm << "km"
                       << " cells=" << g_hexGridCells.size()
                       << " K=" << g_gridNearestK
+                      << " switchGuard=" << g_anchorGridSwitchGuardMeters << "m"
+                      << " hysteresis=" << g_anchorGridHysteresisSeconds << "s"
                       << std::endl;
         }
         if (g_printGridCatalog)
@@ -1505,7 +2244,30 @@ main(int argc, char* argv[])
         std::cout << std::fixed << std::setprecision(3)
                   << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
                   << " alphaMax=" << cfg.scanMaxDeg << "deg"
-                  << " theta3dB=" << cfg.theta3dBDeg << "deg" << std::endl;
+                  << " theta3dB=" << cfg.theta3dBDeg << "deg"
+                  << " gnbArray=" << cfg.gnbAntennaRows << "x" << cfg.gnbAntennaColumns
+                  << " ueArray=" << cfg.ueAntennaRows << "x" << cfg.ueAntennaColumns
+                  << " gnbElem=" << ToString(gnbAntennaElementMode)
+                  << " ueElem=" << ToString(ueAntennaElementMode)
+                  << " beamforming=" << ToString(beamformingMode)
+                  << " shadowing=" << (cfg.shadowingEnabled ? "on" : "off") << std::endl;
+        std::cout << "[Carrier] centralFrequency=" << cfg.centralFrequency / 1e9 << "GHz"
+                  << " bandwidth=" << cfg.bandwidth / 1e6 << "MHz"
+                  << " sharedOperationBand=ON"
+                  << " coChannelSatellites=" << cfg.gNbNum
+                  << " note=current measurement-driven handover is intra-frequency only; "
+                     "carrier orthogonalization is diagnostic-only unless inter-frequency "
+                     "measurement support is added"
+                  << std::endl;
+        if (useRealisticBeamforming)
+        {
+            std::cout << "[BeamModel] realisticTrigger="
+                      << ToString(realisticBfTriggerEvent)
+                      << " updatePeriodicity=" << cfg.realisticBfUpdatePeriodicity
+                      << " updateDelay=" << cfg.realisticBfUpdateDelayMs << "ms"
+                      << " effectiveSrsSymbols=" << effectiveSrsSymbols
+                      << std::endl;
+        }
         std::cout << "[A3-Measure] source=PHY MeasurementReport"
                   << " reportInterval=" << g_measurementReportIntervalMs << "ms"
                   << " maxReportCells=" << static_cast<uint32_t>(g_measurementMaxReportCells)
@@ -1519,7 +2281,7 @@ main(int argc, char* argv[])
         if (cfg.ueLayoutType == "seven-cell")
         {
             std::cout << " groups=center(9)+ring(16 across 6 cells)"
-                      << " hexRadius=" << cfg.hexCellRadiusKm << "km"
+                      << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
                       << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
                       << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km";
         }
@@ -1538,6 +2300,7 @@ main(int argc, char* argv[])
         if (g_handoverMode == HandoverMode::IMPROVED)
         {
             std::cout << " improvedVisibilityWeight=" << g_improvedVisibilityWeight
+                      << " improvedRsrqWeight=" << g_improvedRsrqWeight
                       << " improvedMinVisibility=" << g_improvedMinVisibilitySeconds << "s"
                       << " improvedVisibilityHorizon=" << g_improvedVisibilityHorizonSeconds
                       << "s"
@@ -1546,7 +2309,20 @@ main(int argc, char* argv[])
                       << " improvedMinStableLead=" << g_improvedMinStableLeadTimeSeconds << "s"
                       << " improvedVisibilityStep=" << g_improvedVisibilityPredictionStepSeconds
                       << "s"
-                      << " improvedMinJointScoreMargin=" << g_improvedMinJointScoreMargin;
+                      << " improvedMinJointScoreMargin=" << g_improvedMinJointScoreMargin
+                      << " improvedMinCandidateRsrp=" << g_improvedMinCandidateRsrpDbm << "dBm"
+                      << " improvedMinCandidateRsrq=" << g_improvedMinCandidateRsrqDb << "dB"
+                      << " improvedServingWeakRsrp=" << g_improvedServingWeakRsrpDbm << "dBm"
+                      << " improvedServingWeakRsrq=" << g_improvedServingWeakRsrqDb << "dB"
+                      << " crossLayerPhyAssist="
+                      << (g_improvedEnableCrossLayerPhyAssist ? "ON" : "OFF");
+            if (g_improvedEnableCrossLayerPhyAssist)
+            {
+                std::cout << " crossLayerPhyAlpha=" << g_improvedCrossLayerPhyAlpha
+                          << " crossLayerTblerTh=" << g_improvedCrossLayerTblerThreshold
+                          << " crossLayerSinrTh=" << g_improvedCrossLayerSinrThresholdDb << "dB"
+                          << " crossLayerMinSamples=" << g_improvedCrossLayerMinSamples;
+            }
         }
         std::cout << std::endl;
         std::cout << "[UserPlane] rlc="
@@ -1658,13 +2434,52 @@ main(int argc, char* argv[])
 
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
     channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
-    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(cfg.shadowingEnabled));
+
+    // Carrier reuse band creation
+    g_carrierReuseMode = cfg.carrierReuseMode;
+    g_carrierFrequencySpacingHz = cfg.carrierFrequencySpacingHz;
+    g_sameFrequencyHandoverOnly = cfg.sameFrequencyHandoverOnly;
+    g_printCarrierPlan = cfg.printCarrierPlan;
+    g_cellToCarrierGroup.clear();
+    g_interFrequencyHandoverEnabled = cfg.interFrequencyHandoverEnabled;
+    g_printInterFrequencyEvents = cfg.printInterFrequencyEvents;
+
+    // Phase 2: Resolve HO frequency policy
+    // If interFrequencyHandoverEnabled=true, sameFrequencyHandoverOnly should be false
+    if (g_interFrequencyHandoverEnabled)
+    {
+        g_sameFrequencyHandoverOnly = false;
+    }
+
+    const uint32_t carrierGroupCount = GetCarrierGroupCount(cfg.carrierReuseMode);
 
     CcBwpCreator ccBwpCreator;
-    CcBwpCreator::SimpleOperationBandConf bandConf(cfg.centralFrequency, cfg.bandwidth, 1);
-    OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
-    channelHelper->AssignChannelsToBands({band});
-    BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({band});
+    std::vector<OperationBandInfo> bands;
+    bands.reserve(carrierGroupCount);
+
+    for (uint32_t g = 0; g < carrierGroupCount; ++g)
+    {
+        const double freq = ComputeCarrierCenterFrequency(cfg.centralFrequency, g, cfg.carrierFrequencySpacingHz);
+        CcBwpCreator::SimpleOperationBandConf bandConf(freq, cfg.bandwidth, 1);
+        bands.push_back(ccBwpCreator.CreateOperationBandContiguousCc(bandConf));
+    }
+
+    // Create reference wrapper vector for AssignChannelsToBands
+    std::vector<std::reference_wrapper<OperationBandInfo>> bandRefs;
+    bandRefs.reserve(bands.size());
+    for (auto& band : bands)
+    {
+        bandRefs.push_back(std::ref(band));
+    }
+    channelHelper->AssignChannelsToBands(bandRefs);
+
+    BandwidthPartInfoPtrVector allBwpsForUe;
+    for (auto& band : bands)
+    {
+        auto bwps = CcBwpCreator::GetAllBwps({band});
+        allBwpsForUe.insert(allBwpsForUe.end(), bwps.begin(), bwps.end());
+    }
 
     nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(cfg.gnbTxPower));
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(cfg.ueTxPower));
@@ -1672,17 +2487,44 @@ main(int argc, char* argv[])
     nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
     nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
     nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
-    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(cfg.srsSymbols));
-    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(1));
-    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(2));
-    nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
-    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(8));
-    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
-    nrHelper->SetGnbAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
+    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(effectiveSrsSymbols));
+    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(cfg.ueAntennaRows));
+    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(cfg.ueAntennaColumns));
+    nrHelper->SetUeAntennaAttribute("AntennaElement",
+                                    PointerValue(CreateAntennaElement(ueAntennaElementMode, cfg)));
+    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(cfg.gnbAntennaRows));
+    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(cfg.gnbAntennaColumns));
+    nrHelper->SetGnbAntennaAttribute("AntennaElement",
+                                     PointerValue(CreateAntennaElement(gnbAntennaElementMode, cfg)));
 
-    Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
-    idealBeamformingHelper->SetAttribute("BeamformingMethod", TypeIdValue(DirectPathBeamforming::GetTypeId()));
-    nrHelper->SetBeamformingHelper(idealBeamformingHelper);
+    Ptr<BeamformingHelperBase> beamformingHelper;
+    if (useRealisticBeamforming)
+    {
+        Ptr<RealisticBeamformingHelper> realisticBeamformingHelper =
+            CreateObject<RealisticBeamformingHelper>();
+        realisticBeamformingHelper->SetBeamformingMethod(
+            RealisticBeamformingAlgorithm::GetTypeId());
+        nrHelper->SetGnbBeamManagerTypeId(RealisticBfManager::GetTypeId());
+        nrHelper->SetGnbBeamManagerAttribute("TriggerEvent",
+                                             EnumValue(realisticBfTriggerEvent));
+        nrHelper->SetGnbBeamManagerAttribute("UpdatePeriodicity",
+                                             UintegerValue(cfg.realisticBfUpdatePeriodicity));
+        nrHelper->SetGnbBeamManagerAttribute("UpdateDelay",
+                                             TimeValue(MilliSeconds(cfg.realisticBfUpdateDelayMs)));
+        beamformingHelper = realisticBeamformingHelper;
+    }
+    else
+    {
+        Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
+        idealBeamformingHelper->SetAttribute(
+            "BeamformingMethod",
+            TypeIdValue(GetIdealBeamformingMethodTypeId(beamformingMode)));
+        idealBeamformingHelper->SetAttribute(
+            "BeamformingPeriodicity",
+            TimeValue(MilliSeconds(cfg.beamformingPeriodicityMs)));
+        beamformingHelper = idealBeamformingHelper;
+    }
+    nrHelper->SetBeamformingHelper(beamformingHelper);
 
     // ------------------------------
     // 5. 节点创建与初始位置部署
@@ -1715,8 +2557,45 @@ main(int argc, char* argv[])
         ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(uePlacements[i].groundPoint.ecef);
     }
 
-    NetDeviceContainer gNbNetDev = nrHelper->InstallGnbDevice(gNbNodes, allBwps);
-    NetDeviceContainer ueNetDev = nrHelper->InstallUeDevice(ueNodes, allBwps);
+    // Carrier group-based gNB installation
+    // 关键：必须保证 gNbNetDev.Get(globalSatIdx) 正确映射到对应的卫星设备
+    // 因此按全局索引顺序逐个安装，每个卫星使用其对应 carrier group 的 band
+
+    g_satelliteGnbDevices.clear();
+    g_satelliteGnbDevices.reserve(cfg.gNbNum);
+
+    // Pre-compute carrier group for each satellite
+    std::vector<uint32_t> satCarrierGroups(cfg.gNbNum);
+    std::vector<uint32_t> satellitesPerPlane(cfg.orbitPlaneCount, cfg.gNbNum / cfg.orbitPlaneCount);
+    for (uint32_t planeIdx = 0; planeIdx < (cfg.gNbNum % cfg.orbitPlaneCount); ++planeIdx)
+    {
+        satellitesPerPlane[planeIdx]++;
+    }
+
+    uint32_t globalSatIdx = 0;
+    for (uint32_t planeIdx = 0; planeIdx < cfg.orbitPlaneCount; ++planeIdx)
+    {
+        const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
+        for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
+        {
+            satCarrierGroups[globalSatIdx] = ComputeCarrierGroupId(cfg.carrierReuseMode, planeIdx, slotIdx);
+        }
+    }
+
+    // 按全局索引顺序安装，保证索引映射正确
+    NetDeviceContainer gNbNetDev;
+    for (uint32_t satIdx = 0; satIdx < cfg.gNbNum; ++satIdx)
+    {
+        const uint32_t groupId = satCarrierGroups[satIdx];
+        NodeContainer singleNode;
+        singleNode.Add(gNbNodes.Get(satIdx));
+        auto groupBwps = CcBwpCreator::GetAllBwps({bands[groupId]});
+        NetDeviceContainer singleDev = nrHelper->InstallGnbDevice(singleNode, groupBwps);
+        gNbNetDev.Add(singleDev);
+        g_satelliteGnbDevices.push_back(DynamicCast<NrGnbNetDevice>(singleDev.Get(0)));
+    }
+
+    NetDeviceContainer ueNetDev = nrHelper->InstallUeDevice(ueNodes, allBwpsForUe);
 
     int64_t randomStream = 1;
     randomStream += nrHelper->AssignStreams(gNbNetDev, randomStream);
@@ -1734,14 +2613,10 @@ main(int argc, char* argv[])
     g_satellites.clear();
     g_cellToSatellite.clear();
     g_satellites.reserve(cfg.gNbNum);
-    std::vector<uint32_t> satellitesPerPlane(cfg.orbitPlaneCount, cfg.gNbNum / cfg.orbitPlaneCount);
-    for (uint32_t planeIdx = 0; planeIdx < (cfg.gNbNum % cfg.orbitPlaneCount); ++planeIdx)
-    {
-        satellitesPerPlane[planeIdx]++;
-    }
 
     // 为每颗卫星绑定轨道、初始位置和初始网格锚点。
-    uint32_t globalSatIdx = 0;
+    // 注意：satellitesPerPlane 和 globalSatIdx 已在前面 carrier group 计算时定义
+    globalSatIdx = 0;
     for (uint32_t planeIdx = 0; planeIdx < cfg.orbitPlaneCount; ++planeIdx)
     {
         const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
@@ -1754,7 +2629,7 @@ main(int argc, char* argv[])
 
         for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
         {
-            auto dev = DynamicCast<NrGnbNetDevice>(gNbNetDev.Get(globalSatIdx));
+            auto dev = g_satelliteGnbDevices[globalSatIdx];
             auto rrc = dev->GetRrc();
 
             const double overpassTime =
@@ -1785,7 +2660,11 @@ main(int argc, char* argv[])
             sat.orbit = orbit;
             sat.orbitPlaneIndex = planeIdx;
             sat.orbitSlotIndex = slotIdx;
+            sat.carrierGroupId = ComputeCarrierGroupId(cfg.carrierReuseMode, planeIdx, slotIdx);
+            sat.carrierCenterFrequencyHz = ComputeCarrierCenterFrequency(cfg.centralFrequency, sat.carrierGroupId, cfg.carrierFrequencySpacingHz);
             sat.cellAnchorEcef = g_cellGroundPoint.ecef;
+
+            g_cellToCarrierGroup[dev->GetCellId()] = sat.carrierGroupId;
 
             if (g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
@@ -1820,6 +2699,37 @@ main(int argc, char* argv[])
                 std::cout << std::endl;
             }
         }
+    }
+
+    // Print carrier reuse plan
+    if (cfg.printCarrierPlan || cfg.startupVerbose)
+    {
+        std::cout << "=== Carrier Reuse Plan ===" << std::endl;
+        std::cout << "carrierReuseMode: " << cfg.carrierReuseMode << std::endl;
+        std::cout << "groupCount: " << carrierGroupCount << std::endl;
+        std::cout << "carrierFrequencySpacing: " << cfg.carrierFrequencySpacingHz / 1e6 << " MHz" << std::endl;
+        std::cout << "sameFrequencyHandoverOnly: " << (g_sameFrequencyHandoverOnly ? "true" : "false") << std::endl;
+        // Phase 2: Print HO frequency policy
+        std::cout << "interFrequencyHandoverEnabled: " << (cfg.interFrequencyHandoverEnabled ? "true" : "false") << std::endl;
+        std::cout << "HO frequency policy: "
+                  << (g_interFrequencyHandoverEnabled ? "INTER-FREQ-ALLOWED" : "INTRA-FREQ-ONLY")
+                  << std::endl;
+        for (uint32_t g = 0; g < carrierGroupCount; ++g)
+        {
+            const double freq = ComputeCarrierCenterFrequency(cfg.centralFrequency, g, cfg.carrierFrequencySpacingHz);
+            std::cout << "Group " << g << ": freq=" << freq / 1e6 << " MHz" << std::endl;
+        }
+        for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+        {
+            const auto& sat = g_satellites[satIdx];
+            std::cout << "Sat " << satIdx << " plane=" << sat.orbitPlaneIndex
+                      << " slot=" << sat.orbitSlotIndex
+                      << " carrierGroup=" << sat.carrierGroupId
+                      << " freq=" << sat.carrierCenterFrequencyHz / 1e6 << " MHz"
+                      << " cell=" << sat.dev->GetCellId()
+                      << std::endl;
+        }
+        std::cout << "============================" << std::endl;
     }
 
     InstallStaticNeighbourRelations();
@@ -1935,7 +2845,7 @@ main(int argc, char* argv[])
 
         ue.initialAttachIdx = initialAttachIdx;
 
-        nrHelper->AttachToGnb(ueNetDev.Get(ueIdx), gNbNetDev.Get(initialAttachIdx));
+        nrHelper->AttachToGnb(ueNetDev.Get(ueIdx), g_satelliteGnbDevices[initialAttachIdx]);
 
         Ptr<Ipv4StaticRouting> ueStaticRouting =
             routingHelper.GetStaticRouting(ueNodes.Get(ueIdx)->GetObject<Ipv4>());
@@ -1965,6 +2875,7 @@ main(int argc, char* argv[])
         serverApps.Stop(Seconds(cfg.simTime));
         clientApps.Stop(Seconds(cfg.simTime));
 
+        ue.dlPort = dlPort;
         ue.server = serverApps.Get(0)->GetObject<UdpServer>();
         if (ue.dev)
         {
@@ -1973,10 +2884,22 @@ main(int argc, char* argv[])
         g_ues.push_back(ue);
     }
 
+    FlowMonitorHelper flowMonitorHelper;
+    NodeContainer flowMonitorNodes;
+    flowMonitorNodes.Add(remoteHost);
+    flowMonitorNodes.Add(ueNodes);
+    Ptr<FlowMonitor> flowMonitor = flowMonitorHelper.Install(flowMonitorNodes);
+    flowMonitor->SetAttribute("DelayBinWidth", DoubleValue(0.001));
+    flowMonitor->SetAttribute("JitterBinWidth", DoubleValue(0.001));
+    flowMonitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
+
     // ------------------------------
     // 8. 运行时复位、回调注册与周期事件调度
     // ------------------------------
     ResetRuntimeState(cfg.gNbNum);
+    Config::Connect(
+        "/NodeList/*/DeviceList/*/ComponentCarrierMapUe/*/NrUePhy/SpectrumPhy/RxPacketTraceUe",
+        MakeCallback(&ReportDlPhyTbTrace));
     if (g_satAnchorTrace.is_open())
     {
         g_satAnchorTrace.close();
@@ -1999,7 +2922,7 @@ main(int argc, char* argv[])
     NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
                     "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
     g_handoverEventTrace
-        << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,recovery_ms,"
+        << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,"
         << "ping_pong_detected,failure_reason\n";
     g_handoverEventTrace.flush();
     if (cfg.enableHandoverThroughputTrace)
@@ -2061,6 +2984,8 @@ main(int argc, char* argv[])
         {
             std::cout << "[Setup] ue" << ueIdx << " start attach=sat" << ue.initialAttachIdx
                       << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")"
+                      << " carrierGroup=" << g_satellites[ue.initialAttachIdx].carrierGroupId
+                      << " freq=" << g_satellites[ue.initialAttachIdx].carrierCenterFrequencyHz / 1e6 << "MHz"
                       << " role=" << ue.placementRole
                       << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
                       << ue.northOffsetMeters / 1000.0 << "kmN)"
@@ -2087,8 +3012,24 @@ main(int argc, char* argv[])
     Simulator::Run();
 
     const double appDuration = std::max(0.0, cfg.simTime - cfg.appStartTime);
+    flowMonitor->CheckForLostPackets();
+    const auto flowClassifier = DynamicCast<Ipv4FlowClassifier>(flowMonitorHelper.GetClassifier());
+    const E2eFlowAggregate e2eAggregate =
+        BuildE2eFlowAggregate(g_ues,
+                              flowMonitor->GetFlowStats(),
+                              flowClassifier,
+                              appDuration,
+                              cfg.udpPacketSize);
+    const PhyDlTbAggregate phyDlTbAggregate = BuildPhyDlTbAggregate(g_ues);
+
     PrintDlTrafficSummary(g_ues, appDuration, cfg.udpPacketSize);
+    PrintE2eFlowSummary(e2eAggregate);
+    PrintPhyDlTbSummary(phyDlTbAggregate);
     PrintHandoverSummary(g_ues, g_pingPongWindowSeconds);
+    NS_ABORT_MSG_IF(!WriteE2eFlowMetricsCsv(cfg.e2eFlowMetricsPath, e2eAggregate),
+                    "Failed to write E2E flow metrics CSV: " << cfg.e2eFlowMetricsPath);
+    NS_ABORT_MSG_IF(!WritePhyDlTbMetricsCsv(cfg.phyDlTbMetricsPath, phyDlTbAggregate),
+                    "Failed to write PHY DL TB metrics CSV: " << cfg.phyDlTbMetricsPath);
 
     if (g_satAnchorTrace.is_open())
     {

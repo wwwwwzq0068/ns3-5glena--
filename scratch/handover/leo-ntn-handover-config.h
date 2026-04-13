@@ -63,8 +63,11 @@ struct BaselineSimulationConfig
     double gridCenterLongitudeDeg = 84.9;
     double gridWidthKm = 400.0;
     double gridHeightKm = 400.0;
+    double anchorGridHexRadiusKm = 20.0;
     double hexCellRadiusKm = 20.0;
     uint32_t gridNearestK = 3;
+    double anchorGridSwitchGuardMeters = 0.0;
+    double anchorGridHysteresisSeconds = 0.0;
 
     std::string outputDir = "scratch/results";
     bool printGridCatalog = true;
@@ -77,6 +80,8 @@ struct BaselineSimulationConfig
     std::string handoverThroughputTracePath =
         JoinOutputPath(outputDir, "handover_dl_throughput_trace.csv");
     std::string handoverEventTracePath = JoinOutputPath(outputDir, "handover_event_trace.csv");
+    std::string e2eFlowMetricsPath = JoinOutputPath(outputDir, "e2e_flow_metrics.csv");
+    std::string phyDlTbMetricsPath = JoinOutputPath(outputDir, "phy_dl_tb_metrics.csv");
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -84,12 +89,41 @@ struct BaselineSimulationConfig
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
+    // 几何波束参数（v4.3 注：用于几何链路预算/观测口径，不代表 PHY 默认天线阵元参数）
+    // beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb 用于 BeamModelConfig 几何估算
+    // PHY 真实天线参数由 gnbAntennaElement/ueAntennaElement 和 b00-* 参数控制
     double beamMaxGainDbi = 38.0;
     double scanMaxDeg = 60.0;
     double theta3dBDeg = 4.0;
     double sideLobeAttenuationDb = 30.0;
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
+    uint32_t ueAntennaRows = 1;
+    uint32_t ueAntennaColumns = 2;
+    uint32_t gnbAntennaRows = 8;
+    uint32_t gnbAntennaColumns = 8;
+    std::string ueAntennaElement = "three-gpp";      // v4.3 新默认：现实 NR 阵元口径
+    std::string gnbAntennaElement = "b00-custom";    // v4.3 新默认：定向阵元口径
+    // b00-custom antenna model parameters (v4.3 新增)
+    double b00MaxGainDb = 20.0;           // 阵元峰值增益 (dBi)
+    double b00BeamwidthDeg = 15.0;        // 阵元波束宽度 (-3 dB 宽度，度)
+    double b00MaxAttenuationDb = 30.0;    // 旁瓣衰减上限 (dB)
+    std::string beamformingMode = "ideal-direct-path";
+    double beamformingPeriodicityMs = 100.0;
+    std::string realisticBfTriggerEvent = "srs-count";
+    uint16_t realisticBfUpdatePeriodicity = 3;
+    double realisticBfUpdateDelayMs = 0.0;
+    bool shadowingEnabled = true;
+
+    // Carrier reuse configuration
+    std::string carrierReuseMode = "reuse1";  // reuse1, reuse2-plane, reuse4
+    double carrierFrequencySpacingHz = 60e6;  // Spacing between carrier groups
+    bool sameFrequencyHandoverOnly = true;    // Conservative: only same-frequency handover
+    bool printCarrierPlan = true;             // Print carrier allocation at startup
+
+    // Phase 2: Inter-frequency handover support
+    bool interFrequencyHandoverEnabled = false;  // Allow handover to different carrier groups
+    bool printInterFrequencyEvents = true;       // Print inter-frequency HO events
 
     double hoHysteresisDb = 2.0;
     uint32_t hoTttMs = 160;
@@ -97,6 +131,7 @@ struct BaselineSimulationConfig
     uint8_t measurementMaxReportCells = 8;
     std::string handoverMode = "baseline";
     double improvedSignalWeight = 0.7;
+    double improvedRsrqWeight = 0.3;
     double improvedLoadWeight = 0.3;
     double improvedVisibilityWeight = 0.2;
     double improvedMinLoadScoreDelta = 0.2;
@@ -106,6 +141,16 @@ struct BaselineSimulationConfig
     double improvedVisibilityHorizonSeconds = 8.0;
     double improvedVisibilityPredictionStepSeconds = 0.5;
     double improvedMinJointScoreMargin = 0.03;
+    double improvedMinCandidateRsrpDbm = -110.0;
+    double improvedMinCandidateRsrqDb = -17.0;
+    double improvedServingWeakRsrpDbm = -108.0;
+    double improvedServingWeakRsrqDb = -15.0;
+    double improvedMinRsrqAdvantageDb = 0.0;  // Minimum RSRQ advantage over serving for same-frequency candidates
+    bool improvedEnableCrossLayerPhyAssist = false;
+    double improvedCrossLayerPhyAlpha = 0.02;
+    double improvedCrossLayerTblerThreshold = 0.48;
+    double improvedCrossLayerSinrThresholdDb = -5.0;
+    uint32_t improvedCrossLayerMinSamples = 50;
     double pingPongWindowSeconds = 1.5;
     bool forceRlcAmForEpc = false;
     bool disableUeIpv4Forwarding = true;
@@ -173,8 +218,11 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("gridCenterLongitudeDeg", config.gridCenterLongitudeDeg);
     addArg("gridWidthKm", config.gridWidthKm);
     addArg("gridHeightKm", config.gridHeightKm);
+    addArg("anchorGridHexRadiusKm", config.anchorGridHexRadiusKm);
     addArg("hexCellRadiusKm", config.hexCellRadiusKm);
     addArg("gridNearestK", config.gridNearestK);
+    addArg("anchorGridSwitchGuardMeters", config.anchorGridSwitchGuardMeters);
+    addArg("anchorGridHysteresisSeconds", config.anchorGridHysteresisSeconds);
     addArg("outputDir", config.outputDir);
     addArg("printGridCatalog", config.printGridCatalog);
     addArg("gridCatalogPath", config.gridCatalogPath);
@@ -190,12 +238,34 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("sideLobeAttenuationDb", config.sideLobeAttenuationDb);
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
+    addArg("ueAntennaRows", config.ueAntennaRows);
+    addArg("ueAntennaColumns", config.ueAntennaColumns);
+    addArg("gnbAntennaRows", config.gnbAntennaRows);
+    addArg("gnbAntennaColumns", config.gnbAntennaColumns);
+    addArg("ueAntennaElement", config.ueAntennaElement);
+    addArg("gnbAntennaElement", config.gnbAntennaElement);
+    addArg("b00MaxGainDb", config.b00MaxGainDb);
+    addArg("b00BeamwidthDeg", config.b00BeamwidthDeg);
+    addArg("b00MaxAttenuationDb", config.b00MaxAttenuationDb);
+    addArg("beamformingMode", config.beamformingMode);
+    addArg("beamformingPeriodicityMs", config.beamformingPeriodicityMs);
+    addArg("realisticBfTriggerEvent", config.realisticBfTriggerEvent);
+    addArg("realisticBfUpdatePeriodicity", config.realisticBfUpdatePeriodicity);
+    addArg("realisticBfUpdateDelayMs", config.realisticBfUpdateDelayMs);
+    addArg("shadowingEnabled", config.shadowingEnabled);
+    addArg("carrierReuseMode", config.carrierReuseMode);
+    addArg("carrierFrequencySpacingHz", config.carrierFrequencySpacingHz);
+    addArg("sameFrequencyHandoverOnly", config.sameFrequencyHandoverOnly);
+    addArg("printCarrierPlan", config.printCarrierPlan);
+    addArg("interFrequencyHandoverEnabled", config.interFrequencyHandoverEnabled);
+    addArg("printInterFrequencyEvents", config.printInterFrequencyEvents);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
     addArg("measurementReportIntervalMs", config.measurementReportIntervalMs);
     addArg("measurementMaxReportCells", config.measurementMaxReportCells);
     addArg("handoverMode", config.handoverMode);
     addArg("improvedSignalWeight", config.improvedSignalWeight);
+    addArg("improvedRsrqWeight", config.improvedRsrqWeight);
     addArg("improvedLoadWeight", config.improvedLoadWeight);
     addArg("improvedVisibilityWeight", config.improvedVisibilityWeight);
     addArg("improvedMinLoadScoreDelta", config.improvedMinLoadScoreDelta);
@@ -205,6 +275,16 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("improvedVisibilityHorizonSeconds", config.improvedVisibilityHorizonSeconds);
     addArg("improvedVisibilityPredictionStepSeconds", config.improvedVisibilityPredictionStepSeconds);
     addArg("improvedMinJointScoreMargin", config.improvedMinJointScoreMargin);
+    addArg("improvedMinCandidateRsrpDbm", config.improvedMinCandidateRsrpDbm);
+    addArg("improvedMinCandidateRsrqDb", config.improvedMinCandidateRsrqDb);
+    addArg("improvedServingWeakRsrpDbm", config.improvedServingWeakRsrpDbm);
+    addArg("improvedServingWeakRsrqDb", config.improvedServingWeakRsrqDb);
+    addArg("improvedMinRsrqAdvantageDb", config.improvedMinRsrqAdvantageDb);
+    addArg("improvedEnableCrossLayerPhyAssist", config.improvedEnableCrossLayerPhyAssist);
+    addArg("improvedCrossLayerPhyAlpha", config.improvedCrossLayerPhyAlpha);
+    addArg("improvedCrossLayerTblerThreshold", config.improvedCrossLayerTblerThreshold);
+    addArg("improvedCrossLayerSinrThresholdDb", config.improvedCrossLayerSinrThresholdDb);
+    addArg("improvedCrossLayerMinSamples", config.improvedCrossLayerMinSamples);
     addArg("pingPongWindowSeconds", config.pingPongWindowSeconds);
     addArg("forceRlcAmForEpc", config.forceRlcAmForEpc);
     addArg("disableUeIpv4Forwarding", config.disableUeIpv4Forwarding);
@@ -226,6 +306,8 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
     addArg("handoverEventTracePath", config.handoverEventTracePath);
+    addArg("e2eFlowMetricsPath", config.e2eFlowMetricsPath);
+    addArg("phyDlTbMetricsPath", config.phyDlTbMetricsPath);
     addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
     addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
@@ -248,6 +330,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "handover_dl_throughput_trace.csv");
     const std::string defaultHandoverEventTracePath =
         JoinOutputPath(defaultOutputDir, "handover_event_trace.csv");
+    const std::string defaultE2eFlowMetricsPath =
+        JoinOutputPath(defaultOutputDir, "e2e_flow_metrics.csv");
+    const std::string defaultPhyDlTbMetricsPath =
+        JoinOutputPath(defaultOutputDir, "phy_dl_tb_metrics.csv");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
@@ -276,6 +362,15 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     {
         config.handoverEventTracePath = JoinOutputPath(config.outputDir, "handover_event_trace.csv");
     }
+    if (config.e2eFlowMetricsPath == defaultE2eFlowMetricsPath && config.outputDir != defaultOutputDir)
+    {
+        config.e2eFlowMetricsPath = JoinOutputPath(config.outputDir, "e2e_flow_metrics.csv");
+    }
+    if (config.phyDlTbMetricsPath == defaultPhyDlTbMetricsPath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.phyDlTbMetricsPath = JoinOutputPath(config.outputDir, "phy_dl_tb_metrics.csv");
+    }
 
 }
 
@@ -301,6 +396,8 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
 {
     NS_ABORT_MSG_IF(config.gNbNum < 2, "gNbNum must be >= 2 for handover validation");
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
+    NS_ABORT_MSG_IF(config.simTime <= 0.0, "simTime must be > 0");
+    NS_ABORT_MSG_IF(config.appStartTime < 0.0, "appStartTime must be >= 0");
     NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell",
                     "ueLayoutType must be either 'line' or 'seven-cell'");
     NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
@@ -320,18 +417,48 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
+    NS_ABORT_MSG_IF(config.ueAntennaRows == 0, "ueAntennaRows must be >= 1");
+    NS_ABORT_MSG_IF(config.ueAntennaColumns == 0, "ueAntennaColumns must be >= 1");
+    NS_ABORT_MSG_IF(config.gnbAntennaRows == 0, "gnbAntennaRows must be >= 1");
+    NS_ABORT_MSG_IF(config.gnbAntennaColumns == 0, "gnbAntennaColumns must be >= 1");
+    NS_ABORT_MSG_IF(config.ueAntennaElement != "isotropic" &&
+                        config.ueAntennaElement != "three-gpp" &&
+                        config.ueAntennaElement != "b00-custom",
+                    "ueAntennaElement must be 'isotropic', 'three-gpp', or 'b00-custom'");
+    NS_ABORT_MSG_IF(config.gnbAntennaElement != "isotropic" &&
+                        config.gnbAntennaElement != "three-gpp" &&
+                        config.gnbAntennaElement != "b00-custom",
+                    "gnbAntennaElement must be 'isotropic', 'three-gpp', or 'b00-custom'");
+    NS_ABORT_MSG_IF(config.beamformingMode != "ideal-direct-path" &&
+                        config.beamformingMode != "ideal-cell-scan" &&
+                        config.beamformingMode != "ideal-direct-path-quasi-omni" &&
+                        config.beamformingMode != "ideal-cell-scan-quasi-omni" &&
+                        config.beamformingMode != "ideal-quasi-omni-direct-path" &&
+                        config.beamformingMode != "realistic",
+                    "beamformingMode must be one of: ideal-direct-path, ideal-cell-scan, ideal-direct-path-quasi-omni, ideal-cell-scan-quasi-omni, ideal-quasi-omni-direct-path, realistic");
+    NS_ABORT_MSG_IF(config.beamformingPeriodicityMs < 0.0,
+                    "beamformingPeriodicityMs must be >= 0");
+    NS_ABORT_MSG_IF(config.realisticBfTriggerEvent != "srs-count" &&
+                        config.realisticBfTriggerEvent != "delayed-update",
+                    "realisticBfTriggerEvent must be either 'srs-count' or 'delayed-update'");
+    NS_ABORT_MSG_IF(config.realisticBfUpdatePeriodicity == 0,
+                    "realisticBfUpdatePeriodicity must be >= 1");
+    NS_ABORT_MSG_IF(config.realisticBfUpdateDelayMs < 0.0,
+                    "realisticBfUpdateDelayMs must be >= 0");
     NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved",
                     "handoverMode must be either 'baseline' or 'improved'");
     NS_ABORT_MSG_IF(config.measurementMaxReportCells == 0,
                     "measurementMaxReportCells must be >= 1");
     NS_ABORT_MSG_IF(config.improvedSignalWeight < 0.0, "improvedSignalWeight must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedRsrqWeight < 0.0, "improvedRsrqWeight must be >= 0");
     NS_ABORT_MSG_IF(config.improvedLoadWeight < 0.0, "improvedLoadWeight must be >= 0");
     NS_ABORT_MSG_IF(config.improvedVisibilityWeight < 0.0,
                     "improvedVisibilityWeight must be >= 0");
-    NS_ABORT_MSG_IF(config.improvedSignalWeight + config.improvedLoadWeight +
+    NS_ABORT_MSG_IF(config.improvedSignalWeight + config.improvedRsrqWeight +
+                            config.improvedLoadWeight +
                             config.improvedVisibilityWeight <=
                         0.0,
-                    "improvedSignalWeight + improvedLoadWeight + improvedVisibilityWeight must be > 0");
+                    "improvedSignalWeight + improvedRsrqWeight + improvedLoadWeight + improvedVisibilityWeight must be > 0");
     NS_ABORT_MSG_IF(config.improvedMinLoadScoreDelta < 0.0,
                     "improvedMinLoadScoreDelta must be >= 0");
     NS_ABORT_MSG_IF(config.improvedMaxSignalGapDb < 0.0,
@@ -346,11 +473,36 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "improvedVisibilityPredictionStepSeconds must be > 0");
     NS_ABORT_MSG_IF(config.improvedMinJointScoreMargin < 0.0,
                     "improvedMinJointScoreMargin must be >= 0");
+    NS_ABORT_MSG_IF(config.improvedMinCandidateRsrpDbm > -44.0 ||
+                        config.improvedMinCandidateRsrpDbm < -140.0,
+                    "improvedMinCandidateRsrpDbm must be in [-140, -44]");
+    NS_ABORT_MSG_IF(config.improvedMinCandidateRsrqDb > 3.0 ||
+                        config.improvedMinCandidateRsrqDb < -19.5,
+                    "improvedMinCandidateRsrqDb must be in [-19.5, 3]");
+    NS_ABORT_MSG_IF(config.improvedServingWeakRsrpDbm > -44.0 ||
+                        config.improvedServingWeakRsrpDbm < -140.0,
+                    "improvedServingWeakRsrpDbm must be in [-140, -44]");
+    NS_ABORT_MSG_IF(config.improvedServingWeakRsrqDb > 3.0 ||
+                        config.improvedServingWeakRsrqDb < -19.5,
+                    "improvedServingWeakRsrqDb must be in [-19.5, 3]");
+    NS_ABORT_MSG_IF(config.improvedCrossLayerPhyAlpha <= 0.0 ||
+                        config.improvedCrossLayerPhyAlpha > 1.0,
+                    "improvedCrossLayerPhyAlpha must be in (0, 1]");
+    NS_ABORT_MSG_IF(config.improvedCrossLayerTblerThreshold < 0.0 ||
+                        config.improvedCrossLayerTblerThreshold > 1.0,
+                    "improvedCrossLayerTblerThreshold must be in [0, 1]");
+    NS_ABORT_MSG_IF(config.improvedCrossLayerMinSamples == 0,
+                    "improvedCrossLayerMinSamples must be >= 1");
     NS_ABORT_MSG_IF(config.kpiIntervalSeconds <= 0.0, "kpiIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.gridWidthKm <= 0.0, "gridWidthKm must be > 0");
     NS_ABORT_MSG_IF(config.gridHeightKm <= 0.0, "gridHeightKm must be > 0");
+    NS_ABORT_MSG_IF(config.anchorGridHexRadiusKm <= 0.0, "anchorGridHexRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.hexCellRadiusKm <= 0.0, "hexCellRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.gridNearestK == 0, "gridNearestK must be >= 1");
+    NS_ABORT_MSG_IF(config.anchorGridSwitchGuardMeters < 0.0,
+                    "anchorGridSwitchGuardMeters must be >= 0");
+    NS_ABORT_MSG_IF(config.anchorGridHysteresisSeconds < 0.0,
+                    "anchorGridHysteresisSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.outputDir.empty(), "outputDir must not be empty");
     NS_ABORT_MSG_IF(config.progressReportIntervalSeconds <= 0.0,
                     "progressReportIntervalSeconds must be > 0");
@@ -363,6 +515,17 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "maxSupportedUesPerSatellite must be > 0");
     NS_ABORT_MSG_IF(config.loadCongestionThreshold <= 0.0 || config.loadCongestionThreshold > 1.0,
                     "loadCongestionThreshold must satisfy 0 < x <= 1");
+    NS_ABORT_MSG_IF(config.carrierReuseMode != "reuse1" &&
+                        config.carrierReuseMode != "reuse2-plane" &&
+                        config.carrierReuseMode != "reuse4",
+                    "carrierReuseMode must be one of: reuse1, reuse2-plane, reuse4");
+    NS_ABORT_MSG_IF(config.carrierFrequencySpacingHz < config.bandwidth,
+                    "carrierFrequencySpacingHz must be >= bandwidth to avoid overlap");
+    NS_ABORT_MSG_IF(config.carrierFrequencySpacingHz <= 0.0,
+                    "carrierFrequencySpacingHz must be > 0");
+    // Phase 2: interFrequencyHandoverEnabled only makes sense for reuse2-plane or reuse4
+    // (reuse1 has single carrier group, no inter-frequency HO possible)
+    // Note: This is a logical constraint, not enforced here; main script handles it
 
 }
 

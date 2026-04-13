@@ -27,8 +27,8 @@
 
 当前阶段的重点已经从“先把基础物理场景构建出来”推进到“将其整理为可用于后续毕设实验的 baseline 平台”。这意味着：
 - 不再把继续扩星作为默认主线
-- 优先固定 `2x4` 双轨场景和传统 `A3` baseline
-- 为后续联合策略保留明确的对照组和接入口
+- 当前先固定 `2x4` 双轨场景，并将 `B00` 作为 baseline 主对照组
+- 后续主线转到在同一测量入口下比较 baseline 与 improved，并细化联合策略
 
 ## 3. 三维物理模型设计
 
@@ -107,6 +107,10 @@
 
 这些网格中心作为候选地面锚点，使 `Earth-fixed` 设计具备明确的数据结构和运行路径。
 
+在当前默认 baseline 口径中，地面锚点网格尺度与 `UE` 七小区布局尺度保持一致；若后续单独研究
+“波束中心跳格子”问题，可在不改 `UE` 七小区布局的前提下，进一步细化锚点网格分辨率，并给锚点更新加入
+距离优势与持续领先门控，把这部分变化限定在“锚点更新机制”而不是“场景定义”。
+
 ### 4.4 设计价值
 `Earth-fixed` 设计的价值主要在于：
 - 让覆盖建模具备网络规划语义
@@ -157,6 +161,7 @@
 - `maxSupportedUesPerSatellite = 5`
 - `handoverMode = baseline`
 - `improvedSignalWeight = 0.7`
+- `improvedRsrqWeight = 0.3`
 - `improvedLoadWeight = 0.3`
 - `improvedVisibilityWeight = 0.2`
 - `improvedMinStableLeadTimeSeconds = 0.12 s`
@@ -207,16 +212,24 @@
 当前平台已统一支持：
 - 周期性仿真进度输出
 - 面向研究主线的最终吞吐统计、切换汇总和自动 `ping-pong` 计数
-- 详细切换事件、恢复时间和失败原因通过事件/吞吐 trace 导出
+- 基于 `FlowMonitor` 的下行业务端到端时延与丢包率统计
+- 详细切换事件、执行时延和失败原因通过事件/吞吐 trace 导出
 - `ue_layout`、`sat_anchor_trace`、`grid svg` 以及切换窗口吞吐/事件 trace 等逐时刻导出
 
 结果目录统一为：
 - `scratch/results/`
 
+当前默认结果中，除 `handover_event_trace.csv` 与 `handover_dl_throughput_trace.csv` 外，还会导出
+`e2e_flow_metrics.csv`，用于按 `UE` 汇总 `remoteHost -> UE` 下行业务流的 `tx/rx/lost packets`、
+`packet loss rate` 与 `mean E2E delay`；当前也可额外导出 `phy_dl_tb_metrics.csv`，用于按 `UE`
+汇总 PHY 下行 `TB` 总数、`corrupt TB rate`、`mean TBler` 与 `SINR`。
+
 这样可以减少结果散落，便于后续做 baseline 与改进算法对照。
 
 需要说明的一点是：
 - 当前 `PHY` 信道已保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`
+- 当前真实 `NR PHY` 默认阵列为 `gNB 8x8`、`UE 1x2`，但默认天线单元仍为 `isotropic`，默认波束方法仍为 `ideal-direct-path`；几何链路预算中的 `beamMaxGain/theta3dB/sideLobe` 参数主要服务于观测与估计，不直接替代主链阵列规模
+- 当前所有卫星默认仍共享同一个 operation band，因此后续若要解释高 `PHY DL TB` 误块率，应优先把”同频干扰”和”更真实阵列定向性”作为诊断方向，而不是直接把现象归因给 handover 本身；Phase 2 已补上 `carrierReuseMode=reuse2-plane/reuse4` 下的跨频候选生成与触发尝试，但真实执行仍受当前 `NR Ideal RRC` 栈限制（不支持 `RLF`），尚未形成稳定可运行的 inter-frequency HO 方案
 - baseline 与 improved 都直接消费标准 `MeasurementReport`
 - 原来的几何 `beam budget/custom A3` handover 判决链已经从主线移除；几何计算只保留给轨道推进、地面锚点与初始接入
 
@@ -256,27 +269,27 @@
 
 ### 7.2 当前仍存在的不足
 当前平台已经具备 baseline 研究能力，但仍有三类不足：
-- baseline 仍需通过更多实验确认其问题暴露是否稳定
+- baseline 已固定为 `B00`，但相对它的改进收益仍需通过更多实验做扎实解释
 - 改进策略虽然已经接入 `remainingVisibility`、`loadScore` 与可见性门控，但仍需更多实验验证其收益边界，尤其是负载压力增强后是否能明显改善不均衡
 - 当前短跑 wall-clock 明显高于早期几何代理链，需要继续确认统一真实测量后对运行成本的影响边界
 
 ### 7.3 下一步优化方向
 下一阶段建议分三条线推进：
 
-1. baseline 验证线
-   - 冻结并验证 `seven-cell baseline` 主配置
-   - 观察频繁切换、潜在 `ping-pong` 和吞吐连续性
-   - 核实卫星过境与七小区占位关系是否稳定可解释
+1. baseline 固定线
+   - 将 `B00` 固定为当前论文与实验的 baseline 主对照组
+   - 保持 `2x4` 双轨、`25 UE`、`seven-cell` 场景口径不变
+   - 只做必要复核，不再把“重新寻找 baseline”作为默认主任务
 
 2. baseline / improved 对照线
-   - 在统一 `MeasurementReport` 入口下验证 baseline 与 improved 的差异
+   - 在统一 `MeasurementReport` 入口下验证 `B00` 与 improved 的差异
    - 观察边界竞争、`ping-pong`、吞吐连续性、剩余可见时间门控和负载分布是否出现可解释变化
-   - 确认 `handoverMode`、权重参数与结果趋势之间的关系
+   - 这是当前默认优先推进的主线
 
 3. 改进策略细化线
-   - 继续优化“信号质量 + 剩余可见时间 + 卫星负载”的联合指标
+   - 以 `I31` 为当前 improved 默认起点，继续优化“信号质量 + 剩余可见时间 + 卫星负载”的联合指标，并补强 `RSRP/RSRQ` 弱链路保护与可选的轻量跨层 PHY 辅助
    - 评估是否需要引入更细粒度负载量或更稳健的目标筛选规则
-   - 在统一 baseline 对照下验证负载感知增强后的收益
+   - 在统一 `B00` 对照下验证负载感知增强后的收益
 
 ## 8. 适合中期汇报的结论表达
 中期汇报结论可以概括为：
@@ -285,7 +298,7 @@
 2. 已完成 `Earth-fixed` 覆盖设计思路和局部六边形地理网格建模，为固定地面小区研究奠定了基础。
 3. 当前工作重点已从基础模型构建转向平台化与 baseline 收口，已经形成了以 `2x4` 双轨、`25 UE` 和传统 `A3` 风格切换为核心的可运行 baseline 平台。
 4. 平台已具备模块化结构、统一输出、运行时状态管理和后续联合策略扩展接口，能够支撑后续毕设实验。
-5. 下一阶段将围绕 baseline 验证和“信号质量 + 卫星负载”联合决策优化继续推进，重点观察源站负载感知是否能缓解当前的不均衡。
+5. 下一阶段将固定 `B00` 作为对照组，围绕 baseline / improved 对照和“信号质量 + 卫星负载”联合决策优化继续推进，重点观察源站负载感知是否能缓解当前的不均衡。
 
 ## 9. 汇报时的简要讲法
 推荐口头顺序：

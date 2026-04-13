@@ -12,7 +12,9 @@ Retained files:
 Current default scenario focus:
 - `2x4` dual-plane constellation
 - `25 UE` across a seven-cell footprint
+- current baseline control group fixed as `B00`
 - UE layout generation is now organized as local offset templates plus a unified geographic conversion step
+- optional anchor-smoothing experiments may decouple the Earth-fixed anchor-grid resolution from the UE seven-cell layout radius, but this does not replace the default `B00` baseline wording
 - Current slide and figure materials are aligned with the measurement-driven baseline / improved snapshot at `research-v4.2`
 
 Cleanup note:

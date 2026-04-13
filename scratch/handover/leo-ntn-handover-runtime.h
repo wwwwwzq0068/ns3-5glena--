@@ -23,7 +23,6 @@
 #include "leo-orbit-calculator.h"
 #include <cmath>
 #include <cstdint>
-#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -88,6 +87,12 @@ struct SatelliteRuntime
     /** 当前卫星在所属轨道面内的序号。 */
     uint32_t orbitSlotIndex = 0;
 
+    /** 当前卫星所属的载波复用组编号。 */
+    uint32_t carrierGroupId = 0;
+
+    /** 当前卫星使用的载波中心频率，单位 Hz。 */
+    double carrierCenterFrequencyHz = 0.0;
+
     /** 当前卫星波束所指向的小区锚点 ECEF 坐标。 */
     Vector cellAnchorEcef;
 
@@ -96,6 +101,15 @@ struct SatelliteRuntime
 
     /** 与当前星下点最近的 K 个网格编号。 */
     std::vector<uint32_t> nearestGridIds;
+
+    /** 正在等待门控确认的新锚点编号。 */
+    uint32_t pendingAnchorGridId = 0;
+
+    /** 正在等待门控确认的新锚点位置。 */
+    Vector pendingAnchorEcef;
+
+    /** 当前候选锚点首次取得领先的时刻，单位秒。 */
+    double pendingAnchorLeadStartTimeSeconds = -1.0;
 
     /** 当前被加入邻区列表的小区 ID 集合。 */
     std::set<uint16_t> activeNeighbours;
@@ -126,6 +140,9 @@ struct UeRuntime
 
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
+
+    /** 当前 UE 下行业务流使用的 UDP 目标端口。 */
+    uint16_t dlPort = 0;
 
     /** UE 在场景中的部署角色，例如线性、中心簇或外围簇。 */
     std::string placementRole = "line";
@@ -163,9 +180,6 @@ struct UeRuntime
     /** 切换窗口吞吐 trace 上一次采样时看到的累计收包数。 */
     uint64_t lastThroughputTraceRxPackets = 0;
 
-    /** 最近一小段稳定期内的吞吐样本，用于估计切换前参考吞吐。 */
-    std::deque<double> recentThroughputSamplesMbps;
-
     /** 已观察到的切换开始次数。 */
     uint32_t handoverStartCount = 0;
 
@@ -192,15 +206,6 @@ struct UeRuntime
 
     /** 成功切换执行时延累加值，单位秒。 */
     double totalHandoverExecutionDelaySeconds = 0.0;
-
-    /** 已完成吞吐恢复判定的切换次数。 */
-    uint32_t throughputRecoveryCount = 0;
-
-    /** 吞吐恢复时间累加值，单位秒。 */
-    double totalThroughputRecoverySeconds = 0.0;
-
-    /** 最近一次完成恢复判定的吞吐恢复时间，单位秒。 */
-    double lastThroughputRecoverySeconds = -1.0;
 
     /** 已识别到的短时回切（A->B->A）次数。 */
     uint32_t pingPongCount = 0;
@@ -232,23 +237,56 @@ struct UeRuntime
     /** 当前 pending 切换已捕获到的失败原因。 */
     HandoverFailureReason pendingFailureReason = HandoverFailureReason::NONE;
 
-    /** 当前切换的参考吞吐，取切换前短窗口平均值，单位 Mbps。 */
-    double pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+    /** PHY 下行已统计到的传输块总数。 */
+    uint64_t phyDlTbCount = 0;
 
-    /** 当前切换的恢复门限吞吐，单位 Mbps。 */
-    double pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
+    /** PHY 下行被判定为损坏的传输块总数。 */
+    uint64_t phyDlCorruptTbCount = 0;
 
-    /** 当前是否处于“等待吞吐恢复”状态。 */
-    bool waitingForThroughputRecovery = false;
+    /** PHY 下行 TBler 累加值，用于计算平均 TBler。 */
+    double phyDlTblerSum = 0.0;
 
-    /** 正在等待吞吐恢复的切换事件号。 */
-    uint32_t waitingRecoveryHoId = 0;
+    /** PHY 下行 SINR(dB) 累加值，用于计算平均 SINR。 */
+    double phyDlSinrDbSum = 0.0;
 
-    /** 当前等待吞吐恢复的起点时刻，单位秒。 */
-    double waitingRecoveryStartTimeSeconds = -1.0;
+    /** PHY 下行观测到的最小 SINR(dB)。 */
+    double phyDlMinSinrDb = std::numeric_limits<double>::infinity();
 
-    /** 当前连续满足恢复门限的采样个数。 */
-    uint32_t waitingRecoverySatisfiedSamples = 0;
+    /** 最近 PHY 下行样本数，用于跨层门控预热。 */
+    uint32_t recentPhySampleCount = 0;
+
+    /** 最近 PHY 下行损坏块率的 EWMA。 */
+    double recentPhyCorruptRateEwma = 0.0;
+
+    /** 最近 PHY 下行 TBler 的 EWMA。 */
+    double recentPhyTblerEwma = 0.0;
+
+    /** 最近 PHY 下行 SINR(dB) 的 EWMA。 */
+    double recentPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+
+    // ===== Interference-trap handover diagnosis fields =====
+
+    /** PHY state snapshot at HO_START time (TBler EWMA). */
+    double hoStartPhyTblerEwma = std::numeric_limits<double>::quiet_NaN();
+
+    /** PHY state snapshot at HO_START time (SINR EWMA in dB). */
+    double hoStartPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+
+    /** PHY state snapshot at HO_START time (corrupt rate EWMA). */
+    double hoStartPhyCorruptRateEwma = std::numeric_limits<double>::quiet_NaN();
+
+    /** PHY state snapshot at HO_END_OK time (TBler EWMA, after settling window). */
+    double hoEndOkPhyTblerEwma = std::numeric_limits<double>::quiet_NaN();
+
+    /** PHY state snapshot at HO_END_OK time (SINR EWMA in dB). */
+    double hoEndOkPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+
+    /** Count of detected interference-trap handovers (target PHY worse than source). */
+    uint32_t interferenceTrapHoCount = 0;
+
+    /** Time when last HO_END_OK occurred, for post-HO monitoring window. */
+    double lastHoEndOkTimeSeconds = -1.0;
+
 };
 
 struct UeLayoutConfig
@@ -294,7 +332,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastKpiReportTime = -1.0;
     ue.lastRxPackets = 0;
     ue.lastThroughputTraceRxPackets = 0;
-    ue.recentThroughputSamplesMbps.clear();
     ue.hasPendingHoStart = false;
     ue.lastHoStartSourceCell = 0;
     ue.lastHoStartTargetCell = 0;
@@ -308,9 +345,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverFailureJoiningCount = 0;
     ue.handoverFailureUnknownCount = 0;
     ue.totalHandoverExecutionDelaySeconds = 0.0;
-    ue.throughputRecoveryCount = 0;
-    ue.totalThroughputRecoverySeconds = 0.0;
-    ue.lastThroughputRecoverySeconds = -1.0;
     ue.pingPongCount = 0;
     ue.lastSuccessfulHoSourceCell = 0;
     ue.lastSuccessfulHoTargetCell = 0;
@@ -321,12 +355,23 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverTraceSequence = 0;
     ue.activeHandoverTraceId = 0;
     ue.pendingFailureReason = HandoverFailureReason::NONE;
-    ue.pendingRecoveryReferenceThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-    ue.pendingRecoveryThresholdThroughputMbps = std::numeric_limits<double>::quiet_NaN();
-    ue.waitingForThroughputRecovery = false;
-    ue.waitingRecoveryHoId = 0;
-    ue.waitingRecoveryStartTimeSeconds = -1.0;
-    ue.waitingRecoverySatisfiedSamples = 0;
+    ue.phyDlTbCount = 0;
+    ue.phyDlCorruptTbCount = 0;
+    ue.phyDlTblerSum = 0.0;
+    ue.phyDlSinrDbSum = 0.0;
+    ue.phyDlMinSinrDb = std::numeric_limits<double>::infinity();
+    ue.recentPhySampleCount = 0;
+    ue.recentPhyCorruptRateEwma = 0.0;
+    ue.recentPhyTblerEwma = 0.0;
+    ue.recentPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+    // Interference-trap diagnosis reset
+    ue.hoStartPhyTblerEwma = std::numeric_limits<double>::quiet_NaN();
+    ue.hoStartPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+    ue.hoStartPhyCorruptRateEwma = std::numeric_limits<double>::quiet_NaN();
+    ue.hoEndOkPhyTblerEwma = std::numeric_limits<double>::quiet_NaN();
+    ue.hoEndOkPhySinrDbEwma = std::numeric_limits<double>::quiet_NaN();
+    ue.interferenceTrapHoCount = 0;
+    ue.lastHoEndOkTimeSeconds = -1.0;
 }
 
 /**
