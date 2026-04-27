@@ -12,6 +12,7 @@
  * - 让后续继续收紧主脚本时，有一个统一的配置入口。
  */
 
+#include "earth-fixed-beam-target.h"
 #include "leo-ntn-handover-utils.h"
 #include "ns3/core-module.h"
 #include <string>
@@ -21,7 +22,7 @@ namespace ns3
 
 struct BaselineSimulationConfig
 {
-    double simTime = 40.0;
+    double simTime = 60.0;
     double appStartTime = 1.0;
 
     uint16_t gNbNum = 8;
@@ -37,14 +38,17 @@ struct BaselineSimulationConfig
     double orbitRaanDeg = 84.9;
     double orbitArgPerigeeDeg = 0.0;
     uint32_t orbitPlaneCount = 2;
-    double interPlaneRaanSpacingDeg = -1.0;
-    double interPlaneTimeOffsetSeconds = 3.0;
+    double interPlaneRaanSpacingDeg = -0.58;
+    double plane0RaanOffsetDeg = 1.09;
+    double interPlaneTimeOffsetSeconds = 7.5;
+    double plane0TimeOffsetSeconds = -3.5;
     double baseTrueAnomalyDeg = 0.0;
     double gmstAtEpochDeg = 0.0;
     bool autoAlignToUe = true;
     bool descendingPass = false;
-    double alignmentReferenceTimeSeconds = 15.0;
-    double overpassGapSeconds = 3.0;
+    double alignmentReferenceTimeSeconds = 6.5;
+    double overpassGapSeconds = 6.0;
+    double plane1OverpassGapSeconds = 3.0;
     double overpassTimeOffsetSeconds = 0.0;
     double updateIntervalMs = 100.0;
     double minElevationDeg = 10.0;
@@ -66,6 +70,13 @@ struct BaselineSimulationConfig
     double anchorGridHexRadiusKm = 20.0;
     double hexCellRadiusKm = 20.0;
     uint32_t gridNearestK = 3;
+    bool enforceBeamExclusionRing = true;
+    uint32_t beamExclusionCandidateK = 64;
+    bool enforceBeamCoverageForRealLinks = true;
+    bool enforceAnchorCellForRealLinks = true;
+    bool preferDemandAnchorCells = true;
+    std::string anchorSelectionMode = "demand-max-ue-near-nadir";
+    std::string demandSnapshotMode = "runtime-underserved-ue";
     double anchorGridSwitchGuardMeters = 0.0;
     double anchorGridHysteresisSeconds = 0.0;
 
@@ -75,13 +86,20 @@ struct BaselineSimulationConfig
     std::string plotHexGridScriptPath =
         std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/plot_hex_grid_svg.py";
     std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
+    std::string satGroundTrackTracePath = JoinOutputPath(outputDir, "sat_ground_track.csv");
     std::string ueLayoutPath = JoinOutputPath(outputDir, "ue_layout.csv");
     std::string gridSvgPath = JoinOutputPath(outputDir, "hex_grid_cells.svg");
+    std::string gridHtmlPath = JoinOutputPath(outputDir, "hex_grid_cells.html");
     std::string handoverThroughputTracePath =
         JoinOutputPath(outputDir, "handover_dl_throughput_trace.csv");
     std::string handoverEventTracePath = JoinOutputPath(outputDir, "handover_event_trace.csv");
     std::string e2eFlowMetricsPath = JoinOutputPath(outputDir, "e2e_flow_metrics.csv");
     std::string phyDlTbMetricsPath = JoinOutputPath(outputDir, "phy_dl_tb_metrics.csv");
+    std::string phyDlTbIntervalMetricsPath =
+        JoinOutputPath(outputDir, "phy_dl_tb_interval_metrics.csv");
+    std::string phyDlTbTracePath = JoinOutputPath(outputDir, "phy_dl_tb_trace.csv");
+    double phyDlTbIntervalSeconds = 1.0;
+    bool enablePhyDlTbTrace = false;
 
     double centralFrequency = 2e9;
     double bandwidth = 40e6;
@@ -100,30 +118,21 @@ struct BaselineSimulationConfig
     double atmLossDb = 0.5;
     uint32_t ueAntennaRows = 1;
     uint32_t ueAntennaColumns = 2;
-    uint32_t gnbAntennaRows = 8;
-    uint32_t gnbAntennaColumns = 8;
+    uint32_t gnbAntennaRows = 12;
+    uint32_t gnbAntennaColumns = 12;
     std::string ueAntennaElement = "three-gpp";      // v4.3 新默认：现实 NR 阵元口径
     std::string gnbAntennaElement = "b00-custom";    // v4.3 新默认：定向阵元口径
     // b00-custom antenna model parameters (v4.3 新增)
     double b00MaxGainDb = 20.0;           // 阵元峰值增益 (dBi)
-    double b00BeamwidthDeg = 15.0;        // 阵元波束宽度 (-3 dB 宽度，度)
+    double b00BeamwidthDeg = 4.0;         // 阵元方向图宽度参数（默认收紧到约 20 km 主瓣半径）
     double b00MaxAttenuationDb = 30.0;    // 旁瓣衰减上限 (dB)
-    std::string beamformingMode = "ideal-direct-path";
+    std::string beamformingMode = "ideal-earth-fixed";
+    std::string earthFixedBeamTargetMode = "grid-anchor";  // grid-anchor | nadir-continuous
     double beamformingPeriodicityMs = 100.0;
     std::string realisticBfTriggerEvent = "srs-count";
     uint16_t realisticBfUpdatePeriodicity = 3;
     double realisticBfUpdateDelayMs = 0.0;
     bool shadowingEnabled = true;
-
-    // Carrier reuse configuration
-    std::string carrierReuseMode = "reuse1";  // reuse1, reuse2-plane, reuse4
-    double carrierFrequencySpacingHz = 60e6;  // Spacing between carrier groups
-    bool sameFrequencyHandoverOnly = true;    // Conservative: only same-frequency handover
-    bool printCarrierPlan = true;             // Print carrier allocation at startup
-
-    // Phase 2: Inter-frequency handover support
-    bool interFrequencyHandoverEnabled = false;  // Allow handover to different carrier groups
-    bool printInterFrequencyEvents = true;       // Print inter-frequency HO events
 
     double hoHysteresisDb = 2.0;
     uint32_t hoTttMs = 160;
@@ -195,13 +204,16 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("orbitArgPerigeeDeg", config.orbitArgPerigeeDeg);
     addArg("orbitPlaneCount", config.orbitPlaneCount);
     addArg("interPlaneRaanSpacingDeg", config.interPlaneRaanSpacingDeg);
+    addArg("plane0RaanOffsetDeg", config.plane0RaanOffsetDeg);
     addArg("interPlaneTimeOffsetSeconds", config.interPlaneTimeOffsetSeconds);
+    addArg("plane0TimeOffsetSeconds", config.plane0TimeOffsetSeconds);
     addArg("baseTrueAnomalyDeg", config.baseTrueAnomalyDeg);
     addArg("gmstAtEpochDeg", config.gmstAtEpochDeg);
     addArg("autoAlignToUe", config.autoAlignToUe);
     addArg("descendingPass", config.descendingPass);
     addArg("alignmentReferenceTimeSeconds", config.alignmentReferenceTimeSeconds);
     addArg("overpassGapSeconds", config.overpassGapSeconds);
+    addArg("plane1OverpassGapSeconds", config.plane1OverpassGapSeconds);
     addArg("overpassTimeOffsetSeconds", config.overpassTimeOffsetSeconds);
     addArg("updateIntervalMs", config.updateIntervalMs);
     addArg("minElevationDeg", config.minElevationDeg);
@@ -221,6 +233,13 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("anchorGridHexRadiusKm", config.anchorGridHexRadiusKm);
     addArg("hexCellRadiusKm", config.hexCellRadiusKm);
     addArg("gridNearestK", config.gridNearestK);
+    addArg("enforceBeamExclusionRing", config.enforceBeamExclusionRing);
+    addArg("beamExclusionCandidateK", config.beamExclusionCandidateK);
+    addArg("enforceBeamCoverageForRealLinks", config.enforceBeamCoverageForRealLinks);
+    addArg("enforceAnchorCellForRealLinks", config.enforceAnchorCellForRealLinks);
+    addArg("preferDemandAnchorCells", config.preferDemandAnchorCells);
+    addArg("anchorSelectionMode", config.anchorSelectionMode);
+    addArg("demandSnapshotMode", config.demandSnapshotMode);
     addArg("anchorGridSwitchGuardMeters", config.anchorGridSwitchGuardMeters);
     addArg("anchorGridHysteresisSeconds", config.anchorGridHysteresisSeconds);
     addArg("outputDir", config.outputDir);
@@ -248,17 +267,12 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("b00BeamwidthDeg", config.b00BeamwidthDeg);
     addArg("b00MaxAttenuationDb", config.b00MaxAttenuationDb);
     addArg("beamformingMode", config.beamformingMode);
+    addArg("earthFixedBeamTargetMode", config.earthFixedBeamTargetMode);
     addArg("beamformingPeriodicityMs", config.beamformingPeriodicityMs);
     addArg("realisticBfTriggerEvent", config.realisticBfTriggerEvent);
     addArg("realisticBfUpdatePeriodicity", config.realisticBfUpdatePeriodicity);
     addArg("realisticBfUpdateDelayMs", config.realisticBfUpdateDelayMs);
     addArg("shadowingEnabled", config.shadowingEnabled);
-    addArg("carrierReuseMode", config.carrierReuseMode);
-    addArg("carrierFrequencySpacingHz", config.carrierFrequencySpacingHz);
-    addArg("sameFrequencyHandoverOnly", config.sameFrequencyHandoverOnly);
-    addArg("printCarrierPlan", config.printCarrierPlan);
-    addArg("interFrequencyHandoverEnabled", config.interFrequencyHandoverEnabled);
-    addArg("printInterFrequencyEvents", config.printInterFrequencyEvents);
     addArg("hoHysteresisDb", config.hoHysteresisDb);
     addArg("hoTttMs", config.hoTttMs);
     addArg("measurementReportIntervalMs", config.measurementReportIntervalMs);
@@ -301,13 +315,19 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("runGridSvgScript", config.runGridSvgScript);
     addArg("plotHexGridScriptPath", config.plotHexGridScriptPath);
     addArg("satAnchorTracePath", config.satAnchorTracePath);
+    addArg("satGroundTrackTracePath", config.satGroundTrackTracePath);
     addArg("ueLayoutPath", config.ueLayoutPath);
     addArg("gridSvgPath", config.gridSvgPath);
+    addArg("gridHtmlPath", config.gridHtmlPath);
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
     addArg("handoverEventTracePath", config.handoverEventTracePath);
     addArg("e2eFlowMetricsPath", config.e2eFlowMetricsPath);
     addArg("phyDlTbMetricsPath", config.phyDlTbMetricsPath);
+    addArg("phyDlTbIntervalMetricsPath", config.phyDlTbIntervalMetricsPath);
+    addArg("phyDlTbTracePath", config.phyDlTbTracePath);
+    addArg("phyDlTbIntervalSeconds", config.phyDlTbIntervalSeconds);
+    addArg("enablePhyDlTbTrace", config.enablePhyDlTbTrace);
     addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
     addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
     addArg("maxSupportedUesPerSatellite", config.maxSupportedUesPerSatellite);
@@ -324,8 +344,11 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     const std::string defaultGridCatalogPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.csv");
     const std::string defaultSatAnchorTracePath =
         JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
+    const std::string defaultSatGroundTrackTracePath =
+        JoinOutputPath(defaultOutputDir, "sat_ground_track.csv");
     const std::string defaultUeLayoutPath = JoinOutputPath(defaultOutputDir, "ue_layout.csv");
     const std::string defaultGridSvgPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.svg");
+    const std::string defaultGridHtmlPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.html");
     const std::string defaultHandoverThroughputTracePath =
         JoinOutputPath(defaultOutputDir, "handover_dl_throughput_trace.csv");
     const std::string defaultHandoverEventTracePath =
@@ -334,6 +357,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "e2e_flow_metrics.csv");
     const std::string defaultPhyDlTbMetricsPath =
         JoinOutputPath(defaultOutputDir, "phy_dl_tb_metrics.csv");
+    const std::string defaultPhyDlTbIntervalMetricsPath =
+        JoinOutputPath(defaultOutputDir, "phy_dl_tb_interval_metrics.csv");
+    const std::string defaultPhyDlTbTracePath =
+        JoinOutputPath(defaultOutputDir, "phy_dl_tb_trace.csv");
 
     if (config.gridCatalogPath == defaultGridCatalogPath && config.outputDir != defaultOutputDir)
     {
@@ -343,6 +370,11 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     {
         config.satAnchorTracePath = JoinOutputPath(config.outputDir, "sat_anchor_trace.csv");
     }
+    if (config.satGroundTrackTracePath == defaultSatGroundTrackTracePath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.satGroundTrackTracePath = JoinOutputPath(config.outputDir, "sat_ground_track.csv");
+    }
     if (config.ueLayoutPath == defaultUeLayoutPath && config.outputDir != defaultOutputDir)
     {
         config.ueLayoutPath = JoinOutputPath(config.outputDir, "ue_layout.csv");
@@ -350,6 +382,10 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     if (config.gridSvgPath == defaultGridSvgPath && config.outputDir != defaultOutputDir)
     {
         config.gridSvgPath = JoinOutputPath(config.outputDir, "hex_grid_cells.svg");
+    }
+    if (config.gridHtmlPath == defaultGridHtmlPath && config.outputDir != defaultOutputDir)
+    {
+        config.gridHtmlPath = JoinOutputPath(config.outputDir, "hex_grid_cells.html");
     }
     if (config.handoverThroughputTracePath == defaultHandoverThroughputTracePath &&
         config.outputDir != defaultOutputDir)
@@ -370,6 +406,16 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         config.outputDir != defaultOutputDir)
     {
         config.phyDlTbMetricsPath = JoinOutputPath(config.outputDir, "phy_dl_tb_metrics.csv");
+    }
+    if (config.phyDlTbIntervalMetricsPath == defaultPhyDlTbIntervalMetricsPath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.phyDlTbIntervalMetricsPath =
+            JoinOutputPath(config.outputDir, "phy_dl_tb_interval_metrics.csv");
+    }
+    if (config.phyDlTbTracePath == defaultPhyDlTbTracePath && config.outputDir != defaultOutputDir)
+    {
+        config.phyDlTbTracePath = JoinOutputPath(config.outputDir, "phy_dl_tb_trace.csv");
     }
 
 }
@@ -398,22 +444,30 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
     NS_ABORT_MSG_IF(config.simTime <= 0.0, "simTime must be > 0");
     NS_ABORT_MSG_IF(config.appStartTime < 0.0, "appStartTime must be >= 0");
-    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell",
-                    "ueLayoutType must be either 'line' or 'seven-cell'");
+    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell" &&
+                        config.ueLayoutType != "r2-diagnostic",
+                    "ueLayoutType must be one of: line, seven-cell, r2-diagnostic");
     NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueCenterSpacingMeters <= 0.0, "ueCenterSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueRingPointOffsetMeters <= 0.0,
                     "ueRingPointOffsetMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueLayoutType == "seven-cell" && config.ueNum != 25,
                     "seven-cell layout currently requires ueNum == 25");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "r2-diagnostic" && config.ueNum != 19,
+                    "r2-diagnostic layout currently requires ueNum == 19");
     NS_ABORT_MSG_IF(config.orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(config.orbitEccentricity < 0.0 || config.orbitEccentricity >= 1.0,
                     "orbitEccentricity must satisfy 0 <= e < 1");
     NS_ABORT_MSG_IF(std::abs(config.interPlaneRaanSpacingDeg) >= 180.0,
                     "interPlaneRaanSpacingDeg must satisfy |value| < 180");
+    NS_ABORT_MSG_IF(std::abs(config.plane0RaanOffsetDeg) >= 180.0,
+                    "plane0RaanOffsetDeg must satisfy |value| < 180");
     NS_ABORT_MSG_IF(config.interPlaneTimeOffsetSeconds < 0.0,
                     "interPlaneTimeOffsetSeconds must be >= 0");
+    NS_ABORT_MSG_IF(config.overpassGapSeconds <= 0.0, "overpassGapSeconds must be > 0");
+    NS_ABORT_MSG_IF(config.plane1OverpassGapSeconds <= 0.0,
+                    "plane1OverpassGapSeconds must be > 0");
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
     NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
@@ -430,12 +484,16 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                         config.gnbAntennaElement != "b00-custom",
                     "gnbAntennaElement must be 'isotropic', 'three-gpp', or 'b00-custom'");
     NS_ABORT_MSG_IF(config.beamformingMode != "ideal-direct-path" &&
+                        config.beamformingMode != "ideal-earth-fixed" &&
                         config.beamformingMode != "ideal-cell-scan" &&
                         config.beamformingMode != "ideal-direct-path-quasi-omni" &&
                         config.beamformingMode != "ideal-cell-scan-quasi-omni" &&
                         config.beamformingMode != "ideal-quasi-omni-direct-path" &&
                         config.beamformingMode != "realistic",
-                    "beamformingMode must be one of: ideal-direct-path, ideal-cell-scan, ideal-direct-path-quasi-omni, ideal-cell-scan-quasi-omni, ideal-quasi-omni-direct-path, realistic");
+                    "beamformingMode must be one of: ideal-direct-path, ideal-earth-fixed, ideal-cell-scan, ideal-direct-path-quasi-omni, ideal-cell-scan-quasi-omni, ideal-quasi-omni-direct-path, realistic");
+    NS_ABORT_MSG_IF(config.earthFixedBeamTargetMode != "grid-anchor" &&
+                        config.earthFixedBeamTargetMode != "nadir-continuous",
+                    "earthFixedBeamTargetMode must be one of: grid-anchor, nadir-continuous");
     NS_ABORT_MSG_IF(config.beamformingPeriodicityMs < 0.0,
                     "beamformingPeriodicityMs must be >= 0");
     NS_ABORT_MSG_IF(config.realisticBfTriggerEvent != "srs-count" &&
@@ -499,11 +557,21 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.anchorGridHexRadiusKm <= 0.0, "anchorGridHexRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.hexCellRadiusKm <= 0.0, "hexCellRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.gridNearestK == 0, "gridNearestK must be >= 1");
+    NS_ABORT_MSG_IF(config.enforceBeamExclusionRing && config.beamExclusionCandidateK == 0,
+                    "beamExclusionCandidateK must be >= 1 when enforceBeamExclusionRing is true");
+    NS_ABORT_MSG_IF(config.anchorSelectionMode != "demand-nearest" &&
+                        config.anchorSelectionMode != "demand-max-ue-near-nadir",
+                    "anchorSelectionMode must be one of: demand-nearest, demand-max-ue-near-nadir");
+    NS_ABORT_MSG_IF(config.demandSnapshotMode != "static-layout" &&
+                        config.demandSnapshotMode != "runtime-underserved-ue",
+                    "demandSnapshotMode must be one of: static-layout, runtime-underserved-ue");
     NS_ABORT_MSG_IF(config.anchorGridSwitchGuardMeters < 0.0,
                     "anchorGridSwitchGuardMeters must be >= 0");
     NS_ABORT_MSG_IF(config.anchorGridHysteresisSeconds < 0.0,
                     "anchorGridHysteresisSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.outputDir.empty(), "outputDir must not be empty");
+    NS_ABORT_MSG_IF(config.phyDlTbIntervalSeconds <= 0.0,
+                    "phyDlTbIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.progressReportIntervalSeconds <= 0.0,
                     "progressReportIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.pingPongWindowSeconds <= 0.0,
@@ -515,18 +583,6 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "maxSupportedUesPerSatellite must be > 0");
     NS_ABORT_MSG_IF(config.loadCongestionThreshold <= 0.0 || config.loadCongestionThreshold > 1.0,
                     "loadCongestionThreshold must satisfy 0 < x <= 1");
-    NS_ABORT_MSG_IF(config.carrierReuseMode != "reuse1" &&
-                        config.carrierReuseMode != "reuse2-plane" &&
-                        config.carrierReuseMode != "reuse4",
-                    "carrierReuseMode must be one of: reuse1, reuse2-plane, reuse4");
-    NS_ABORT_MSG_IF(config.carrierFrequencySpacingHz < config.bandwidth,
-                    "carrierFrequencySpacingHz must be >= bandwidth to avoid overlap");
-    NS_ABORT_MSG_IF(config.carrierFrequencySpacingHz <= 0.0,
-                    "carrierFrequencySpacingHz must be > 0");
-    // Phase 2: interFrequencyHandoverEnabled only makes sense for reuse2-plane or reuse4
-    // (reuse1 has single carrier group, no inter-frequency HO possible)
-    // Note: This is a logical constraint, not enforced here; main script handles it
-
 }
 
 } // namespace ns3

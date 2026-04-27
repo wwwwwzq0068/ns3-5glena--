@@ -33,8 +33,6 @@
   - `scratch/baseline-definition.md`
   - `scratch/results/README.md`
   - `scratch/midterm-report/README.md`
-  - `scratch/midterm-report/midterm-handover-flowcharts.md`
-  - `scratch/midterm-report/midterm-technical-summary.md`
 - After reading them, the first user-facing progress update must briefly restate:
   - which document set was checked
   - the current baseline/scenario understanding
@@ -44,7 +42,7 @@
 - Any task that modifies important files under `scratch/` must end with a doc-sync check against at least:
   - `scratch/README.md`
   - `scratch/baseline-definition.md`
-  - relevant files under `scratch/midterm-report/`
+  - `scratch/midterm-report/README.md`
 
 ## Collaboration Preferences
 - Prefer editing existing files over creating new documents or parallel explanations.

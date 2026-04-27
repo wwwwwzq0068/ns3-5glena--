@@ -3,32 +3,46 @@
 ## 目录用途
 - 本目录存放当前毕设使用的 LEO-NTN 切换仿真代码、辅助头文件和分析脚本
 - 当前主要仿真入口：`scratch/leo-ntn-handover-baseline.cc`
-- 最近已发布稳定节点：`4.2`（Git tag：`research-v4.2`）
-- 当前工作区与 `research-v4.2` 对齐，当前主线已经统一到真实测量驱动的 baseline / improved 对照
+- 最近已发布稳定节点：`5.0`（Git tag：`research-v5.0`）
+- 当前工作区与 `research-v5.0` 对齐；该版本在 `research-v4.3` 的定向天线与 `grid-anchor` 主线基础上，完成 thesis-mainline 清理、结果区收缩和 `19 UE r2-diagnostic` 诊断入口保留
 - 这里的 `4.2.x` 是研究工作稳定节点，不是 ns-3 框架版本；ns-3 本身仍然是 `3.46`
 
 ## 当前主线
 - 当前阶段先稳住基础组，再在此基础上验证和改进切换策略
-- 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、`seven-cell` 二维部署
-- 当前 baseline 已收口并固定为 `B00`，当前默认目标不是继续扩星，而是在该七小区场景下推进 baseline / improved 对照与改进细化
+- 当前工作区默认研究场景是：`2x4` 双轨、`25 UE`、带一圈空白邻区的 `seven-cell` 二维部署
+- 当前 baseline 仍保持传统 `A3` 决策边界，默认 same-frequency 运行口径已固定为 `ofdma-rr + grid-anchor + K=64 + gNB 12x12`
+- 当前还新增了 `ueLayoutType=r2-diagnostic` 诊断布局：围绕当前 `seven-cell` 中心 hex 的局部 `2-ring` 窗口放置 `19 UE` hex 中心点，用来观察连续地面轨迹、离散波束落点轨迹和局部坏 `UE/坏时窗`；它只用于诊断，不替代正式 baseline
 - 当前 handover 主链已统一到标准 `PHY/RRC MeasurementReport`
-- 当前改进方向是在同一测量入口上推进“信号质量 + 剩余可见时间 + 卫星负载”联合目标选择，并逐步补上联合领先持续时间门控、可见性门控、源站负载感知的负载覆写门槛，以及基于 `RSRP/RSRQ` 的弱链路保护
+- 平台上仍保留“信号质量 + 剩余可见时间 + 卫星负载”的 improved 路径，但当前近阶段主任务已经收口为业务与切换层 KPI 优化：`E2E delay`、`packet loss rate`、`SINR`、`ping-pong`、`load balance`
 - 当前切换统计除 `HO start / HO success` 外，也会单独导出 `HO failure`、未闭合 `unresolved` 次数，以及底层 `RACH / timeout` 类失败原因明细
 - 当前已接入基于 `FlowMonitor` 的下行业务端到端统计，可导出每个 `UE` 的 `E2E delay`、`packet loss rate` 与 `tx/rx/lost` 包数
-- 当前已补充按 `UE` 聚合的 PHY 下行 `TB` 统计，可导出 `corrupt TB rate`、`mean TBler` 与 `SINR`
+- 当前已补充按 `UE` 聚合的 `SINR` 与 PHY 背景统计，但这些输出当前只作为解释业务与切换指标的辅助材料
 
 ## 当前版本判断
-- 想确认“是不是进入新版本”，先看是否已打新的 `research-v4.2.x` 或 `research-v4.2` tag
-- 目前最近已发布稳定节点是 `research-v4.2`
+- 想确认“是不是进入新版本”，先看是否已打新的 `research-v5.x` 或 `research-v5.0` tag
+- 目前最近已发布稳定节点是 `research-v5.0`
 - 当前工作区中若继续补充结果、脚本或说明，默认按“`4.2` 之后的主阶段内继续迭代”理解，除非后续再打新 tag
 
 ## 当前进度整理
 - 当前 `4.2` 已收口到统一真实测量驱动的 baseline / improved 主线，baseline 默认继续保持传统 `A3` 语义
-- 当前 baseline 对照组已经固定为 `B00`：`handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0`
-- 当前默认几何与业务口径已经固定为：`RAAN=-1 deg`、`planeTimeOffset=3.0 s`、`alignmentReferenceTime=15 s`、`overpassGap=3 s`、`lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
-- 最新一轮 `30 s`、`3` 个随机种子的 improved 参数矩阵已经跑完，当前最平衡的 improved 候选为 `I31`
-- 当前 improved 默认参数已经切到 `I31`：`improvedMinStableLeadTimeSeconds=0.12 s`、`improvedMinJointScoreMargin=0.03`
-- 下一步默认围绕 `B00` vs `I31` 的对照继续细调权重，必要时再谨慎引入更轻的新机制，而不再回到大范围粗扫
+- 当前 baseline 对照组保留 `handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0` 的 A3 决策语义，默认运行口径固定为 `ofdma-rr + grid-anchor + K=64 + gNB 12x12`
+- 当前默认几何与业务口径已经固定为：`RAAN=-0.58 deg`、`plane0RaanOffset=1.09 deg`、`planeTimeOffset=7.5 s`、`plane0TimeOffset=-3.5 s`、`alignmentReferenceTime=6.5 s`、`overpassGap=6 s`、`lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
+- 最新一轮 `30 s`、`3` 个随机种子的 improved 参数矩阵已经跑完，`I31` 继续保留为后续 baseline / improved 对照参考点
+- 当前 thesis 口径已经不再把 `PHY DL TB error / TBler` 当成主目标，而是把这些内容降级成历史背景诊断；当前正式优化目标只保留：
+  - `E2E delay`
+  - `packet loss rate`
+  - `SINR`
+  - `ping-pong`
+  - `load balance`
+- 当前 `25 UE + 40 s` 默认口径下，baseline 与 improved 还没有拉开有效差异，因此接下来的重点不是继续扫 PHY 小开关，而是找到真正能改善这些最终指标的切换与负载机制
+- `19 UE r2-diagnostic` 结果继续保留为辅助诊断入口，例如最新 `no-exclusion` 对照得到：
+  - throughput `28.278 Mbps`
+  - `E2E delay = 56.733 ms`
+  - `packet loss = 25.584%`
+  - `mean SINR = 7.912 dB`
+  - completed HO `27`
+  - ping-pong `0`
+- 历史 PHY/阵元/波束诊断的主要价值已经完成：它们帮助把当前 default baseline 固定到更稳的 same-frequency 口径，但后续不再单独驱动研究顺序
 
 ## 当前默认口径
 场景与参数：
@@ -36,11 +50,14 @@
 - 轨道面数：`2`
 - UE 数：`25`
 - UE 主布局：`seven-cell`
-- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-1 deg`
-- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`3.0 s`
-- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`15 s`
-- `overpassGapSeconds`（同轨过境间隔）=`3 s`
-- `simTime`（仿真时长）=`40 s`
+- `interPlaneRaanSpacingDeg`（轨道面 RAAN 间隔）=`-0.58 deg`
+- `plane0RaanOffsetDeg`（仅 `plane 0` 的轨道面额外偏转）=`1.09 deg`
+- `interPlaneTimeOffsetSeconds`（轨道面时间偏移）=`7.5 s`
+- `plane0TimeOffsetSeconds`（仅 `plane 0` 额外物理相位偏移）=`-3.5 s`
+- `alignmentReferenceTimeSeconds`（对齐参考时刻）=`6.5 s`
+- `overpassGapSeconds`（主同轨过境间隔）=`6 s`
+- `plane1OverpassGapSeconds`（用于保持 plane 1 初始诊断几何的同轨间隔）=`3 s`
+- `simTime`（仿真时长）=`60 s`
 - `updateIntervalMs`（主循环更新周期）=`100`
 - `lambda`（业务流强度）=`250 pkt/s/UE`
 - `maxSupportedUesPerSatellite`（每星默认容量口径）=`5`
@@ -71,24 +88,24 @@
 - `improvedCrossLayerMinSamples`（启用跨层判断前要求的最少 PHY 样本数）=`50`
 - `pingPongWindowSeconds`（将 `A->B->A` 记为 `ping-pong` 的时间窗口）=`1.5 s`
 - `shadowingEnabled`（是否启用 `ThreeGpp` 阴影衰落）=`true`
-- `gnbAntennaRows/Columns`（真实 NR gNB 阵列规模）=`8x8`
+- `gnbAntennaRows/Columns`（真实 NR gNB 阵列规模）=`12x12`
 - `ueAntennaRows/Columns`（真实 NR UE 阵列规模）=`1x2`
-- `gnbAntennaElement`（gNB 阵列单元模型）默认=`b00-custom`（v4.3 新默认；可选：`isotropic`, `three-gpp`）
-- `ueAntennaElement`（UE 阵列单元模型）默认=`three-gpp`（v4.3 新默认；可选：`isotropic`, `b00-custom`）
+- `gnbAntennaElement`（gNB 阵列单元模型）默认=`b00-custom`（当前稳定默认；v4.3 引入；可选：`isotropic`, `three-gpp`）
+- `ueAntennaElement`（UE 阵列单元模型）默认=`three-gpp`（当前稳定默认；v4.3 引入；可选：`isotropic`, `b00-custom`）
 - `b00MaxGainDb`（b00-custom 阵元峰值增益）=`20.0 dBi`
-- `b00BeamwidthDeg`（b00-custom 阵元波束宽度）=`15.0°`
+- `b00BeamwidthDeg`（b00-custom 阵元方向图宽度参数）=`4.0°`
 - `b00MaxAttenuationDb`（b00-custom 旁瓣衰减上限）=`30.0 dB`
-- `beamformingMode`（阵列波束方法）默认=`ideal-direct-path`
+- `beamformingMode`（阵列波束方法）默认=`ideal-earth-fixed`
+- `earthFixedBeamTargetMode`（`ideal-earth-fixed` 的地面目标模式）默认=`grid-anchor`（可选：`nadir-continuous`）
 - `beamformingPeriodicityMs`（ideal beamforming 更新周期）=`100`
 - `realisticBfTriggerEvent`（realistic BF 触发方式）默认=`srs-count`
 - `realisticBfUpdatePeriodicity`（realistic BF 更新周期，按 SRS 报告数计）=`3`
 - `realisticBfUpdateDelayMs`（realistic BF 延迟更新）=`0`
-- `carrierReuseMode`（载波复用模式）默认=`reuse1`（可选：reuse2-plane, reuse4）
-- `carrierFrequencySpacingHz`（载波组间频率间隔）默认=`60e6`（60 MHz）
-- `sameFrequencyHandoverOnly`（是否只允许同频切换）默认=`true`
-- `printCarrierPlan`（是否打印载波分配计划）默认=`true`
-- `interFrequencyHandoverEnabled`（是否允许跨频切换）默认=`false`（Phase 2）
-- `printInterFrequencyEvents`（是否打印跨频切换事件）默认=`true`（Phase 2）
+- `phyDlTbIntervalSeconds`（PHY TB 分段统计窗口）默认=`1.0 s`
+- `enablePhyDlTbTrace`（是否导出逐 TB 明细 trace）默认=`false`
+- `phyDlTbTracePath`（逐 TB 明细 trace 路径）默认=`<outputDir>/phy_dl_tb_trace.csv`
+- 当前固定载波口径：`2 GHz / 40 MHz / 1 CC / same-frequency`
+- 当前固定 `NR` 下行调度器：`ofdma-rr`
 
 切换口径：
 - 当前算法 baseline 为传统 `A3` 风格切换
@@ -96,15 +113,21 @@
 - `handoverMode=baseline`：在 A3 上报候选中选择最强邻区
 - `handoverMode=improved`：在同一批真实测量候选中联合考虑 `RSRP`、`RSRQ`、`remainingVisibility` 与 `loadScore` 选目标，并加入过载候选过滤、最小联合领先持续时间、最小剩余可见时间门控、源站负载感知的负载优势门槛，以及“候选联合分数必须明显优于当前服务星”的最小分差约束
 - 当前 improved 还支持一层轻量弱链路保护：可对候选施加最小 `RSRP/RSRQ` 门槛，并在当前服务链路已经明显偏弱时，优先回到更保守的强信号切换
-- 当前 improved 还支持一层可选的轻量跨层 PHY 辅助：当最近 PHY `TBler/SINR` 持续恶化时，可临时跳过部分等待门控并优先逃离当前差链路
+- 当前 improved 还保留一层可选的轻量跨层 PHY 辅助：当最近 PHY `TBler/SINR` 持续恶化时，可临时放宽部分等待门控
 - 当前 baseline 不使用负载做决策，但运行时已保留负载观测字段；`loadScore` 本身采用更平滑的压力近似，避免少量 UE 时过早打满
 - 当前 PHY 信道已开启 `ShadowingEnabled`，切换判决直接读取真实 PHY/RRC 测量
-- v4.3 起，真实 NR PHY 默认天线单元改为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 8x8`、`UE 1x2`，波束方法 `ideal-direct-path`；几何参数 `beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb` 主要服务于几何链路预算与观测口径，不代表 PHY 默认天线阵元参数
-- 当前 `8` 颗卫星默认共享同一个 `2 GHz / 40 MHz / 1 CC` operation band，因此高 `PHY DL TB error rate` 的下一步解释应优先考虑同频干扰；若要做载波正交化，可启用 `carrierReuseMode=reuse2-plane/reuse4`；Phase 2 已补上跨频候选生成与触发尝试，但真实执行仍受当前 NR Ideal RRC 栈限制（不支持 RLF），尚未形成稳定可运行的 inter-frequency HO 方案，当前更适合作为 PHY 干扰缓解诊断路径
+- v4.3 起，真实 NR PHY 默认天线单元改为 `gNB b00-custom + UE three-gpp`，阵列规模升为 `gNB 12x12`、`UE 1x2`，波束方法默认切为 `ideal-earth-fixed`
+- 当前默认 `earthFixedBeamTargetMode=grid-anchor`：`gNB` 侧真实 PHY 发射波束锁到当前卫星已分配的唯一合法 anchor hex 中心，不跟着单个 `UE` 跑；`UE` 侧仍按当前服务卫星做 direct-path 接收对准
+- 几何参数 `beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb` 继续用于几何链路预算和真实接入/切换候选的主覆盖门控；当前默认 `grid-anchor` 下，`anchorCell` gate 会参与真实接入/切换候选过滤
+- 当前默认 `b00BeamwidthDeg=4.0` 是按真实 PHY 总方向图收紧后的口径；配合 `gNB 12x12 UPA + b00-custom + ideal-earth-fixed` 后，默认物理口径更偏向收窄发射端空间泄漏，而不是单纯加大发射功率
+- 当前 `8` 颗卫星默认共享同一个 `2 GHz / 40 MHz / 1 CC` operation band，因此高 `PHY DL TB error rate` 的下一步解释应优先考虑同频干扰；当前默认已通过外围 UE 二跳部署和波束锚点一圈排他降低同频波束过密。旧的 carrier-reuse / inter-frequency 诊断入口已经从活动工作区移除，不再作为当前 thesis 主线保留。
+- 当前 baseline 固定使用 `ofdma-rr`；旧的 scheduler 对照入口已经从活动工作区移除。
 - v4.3 已将默认天线切换为定向口径；历史 `isotropic` 仍可通过命令行参数切换，供对照与诊断使用
 - 当前默认控制台输出已收紧为研究导向摘要；详细切换事件、执行时延和失败原因优先写入 `handover_event_trace.csv`
 - 当前默认结果目录中还会额外导出 `e2e_flow_metrics.csv`，记录每个 `UE` 的下行业务端到端时延与丢包统计
 - 当前默认结果目录中还会额外导出 `phy_dl_tb_metrics.csv`，记录每个 `UE` 的 PHY 下行 `TB` 统计，用于区分 PHY 误块与端到端丢包
+- 当前默认结果目录中还会额外导出 `phy_dl_tb_interval_metrics.csv`，按时间窗汇总全局 PHY 下行 `TB` 统计，用于观察误块率随时间的波动
+- 若显式设置 `enablePhyDlTbTrace=true`，还会导出 `phy_dl_tb_trace.csv`，逐 TB 记录 `MCS/TB size/RV/CQI/SINR/TBler/corrupt`，用于定位 PHY 误块集中在哪类传输事件中
 - 原来的几何 `beam budget/custom A3` handover 代理链已经移除
 - 当前默认关闭 `UE IPv4 forwarding`，避免异常下行包被 UE 误判为待转发上行包重新送回 `NAS`
 - 当前保留 `forceRlcAmForEpc` 作为可选稳定性开关，但默认不覆盖 helper 的 `RLC` 映射
@@ -114,44 +137,49 @@
 - `anchorGridHexRadiusKm`（地面锚点网格 hex 半径）=`20`
 - `ueCenterSpacingMeters`（中心 `3x3` 间距）=`6000`
 - `ueRingPointOffsetMeters`（外围 `6` 小区内局部散点偏移）=`5000`
+- `enforceBeamExclusionRing`（波束锚点是否启用一圈排他）=`true`
+- `beamExclusionCandidateK`（启用排他时搜索的最近锚点候选数）=`64`
+- `enforceBeamCoverageForRealLinks`（真实接入/切换候选是否强制落在当前真实波束主覆盖内）=`true`
+- `enforceAnchorCellForRealLinks`（是否启用额外的锚点 hex cell 门控；仅 `earthFixedBeamTargetMode=grid-anchor` 时生效）=`true`
+- `preferDemandAnchorCells`（锚点选择是否优先覆盖实际有 `UE` 的需求 hex cell）=`true`
+- `anchorSelectionMode`（锚点选择模式）默认=`demand-max-ue-near-nadir`；可选=`demand-nearest`
+- `demandSnapshotMode`（需求格子快照模式）默认=`runtime-underserved-ue`；可选=`static-layout`
 - `anchorGridSwitchGuardMeters`（锚点切换最小距离优势）=`0`
 - `anchorGridHysteresisSeconds`（锚点持续领先时间门控）=`0`
 
 当前默认 UE 生成实现：
 - 先在局部东-北平面生成 `seven-cell` 偏移模板
 - 中心小区放置 `3x3` 密集簇，共 `9 UE`
-- 六个相邻小区共放置 `16 UE`，按 `3/3/3/3/2/2` 分配并在各自小区中心附近散开
+- 六个外围二跳小区共放置 `16 UE`，按 `3/3/3/3/2/2` 分配并在各自小区中心附近散开；中心小区与外围 UE 之间保留一圈空白邻区
+- 诊断口径下可显式设置 `ueLayoutType=r2-diagnostic --ueNum=19`：在当前 `seven-cell` 中心 hex 周围生成 `2-ring`、共 `19` 个 hex 中心点，角色分为 `r2-center / r2-ring1 / r2-ring2`
 - 再统一将偏移模板转换为 `WGS84` 地理点和 `ECEF` 位置
 
 当前锚点网格实验口径：
-- 默认仍保持 `anchorGridHexRadiusKm = hexCellRadiusKm = 20 km`，因此 baseline 口径不变
-- 若需缓解波束中心“跳格子”，可在不改 UE 七小区布局的前提下，将 `anchorGridHexRadiusKm` 单独调细到 `5~10 km`
-- 当前还支持给锚点切换加入轻量门控：只有新锚点相对当前锚点具备足够距离优势，并持续领先至少一段时间，才更新 `cellAnchorEcef`
-- 这组参数只改变地面锚点更新，不直接改变 `UE` 场景定义；因此更适合作为“锚点平滑”实验，而不是替代当前 `B00` 默认 baseline
+- 默认仍保持 `anchorGridHexRadiusKm = hexCellRadiusKm = 20 km`
+- 默认启用波束锚点一圈排他：其它卫星不能把最终落点选到已占锚点或其一圈邻区内，避免同频波束过密或重叠
+- 默认启用需求感知锚点选择：`anchorSelectionMode=demand-max-ue-near-nadir` 时，先取星下点最近格作为主落点；若主落点有 `UE` 且合法，则直接使用；若主落点无 `UE`，则只检查周围一圈邻格，只要存在合法且有 `UE` 的候选，就优先选择其中“运行时 demand 权重”最高的格子，若权重并列再按驻留 `UE` 数和“更接近星下点 + 更低扫描代价”打破平局
+- 默认 `demandSnapshotMode=runtime-underserved-ue`：需求格子不再只按启动时静态 UE 布局统计，而是在每个更新周期按 UE 所在地面格子重建；若 UE 当前无服务、已偏离服务星锚点/主覆盖、服务星过载，或最近 PHY 已进入弱链路状态，则对应格子的 demand 权重会上调
+- 若主落点和周围一圈都没有 `UE`，则允许回退到这个空主落点；但若周围一圈明明存在 `UE` 候选、却都因重复/邻占排他或 beam/scan 约束而不合法，则不会强行占用非法格子，而是继续走现有合法 fallback
+- 这套 grid anchor 逻辑现在默认把真实 PHY 发射目标落到已分配唯一 hex 的中心；`nadir-continuous` 保留为旧口径对照
+- 若需回到旧口径，可显式设置 `anchorSelectionMode=demand-nearest --demandSnapshotMode=static-layout`；其中 `demand-nearest` 会优先从实际有 `UE` 的 hex cell 中选择可扫描且未被排他的锚点，并按“更接近星下点 + 更低扫描代价”排序
+- 当前还支持给锚点切换加入轻量门控：只有新锚点相对当前锚点具备足够距离优势，并持续领先至少一段时间，才更新当前 grid anchor 状态（legacy `cellAnchorEcef`）
+- 若需单独诊断锚点平滑，可调整 `anchorGridSwitchGuardMeters`、`anchorGridHysteresisSeconds` 或关闭 `enforceBeamExclusionRing` 做对照
 
 ## 文档分工
 - `docs/research-context.md`
   - 研究范围、目标、评估指标和稳定上下文
 - `docs/current-task-memory.md`
   - 当前稳定节点、默认口径、已确认实现和近期工作边界
-- `docs/agent-collaboration-spec.md`
-  - `Codex` 与 `Claude Code` 的长期协作规范：分工、任务单格式、回传格式和默认工作流
-- `docs/agent-review-handoff.md`
-  - 单次任务的送审、执行回传、复核结论和后续修正项
 - `docs/joint-handover-strategy.md`
   - 后续“信号质量 + 可见性 + 卫星负载”联合策略的设计说明、变量映射与数学表达
+- `docs/link-budget-parameters.md`
+  - 当前链路预算口径与主要参数说明
 - `docs/research-workflow.md`
   - 版本、分支、提交和结果管理规则
 - `scratch/baseline-definition.md`
   - baseline 的正式定义、默认参数口径、验证清单和改进边界
-- `scratch/midterm-report/midterm-technical-summary.md`
-  - 面向中期汇报的技术总结
-- `scratch/midterm-report/midterm-handover-flowcharts.md`
-  - 中期汇报流程图与简要讲解提示
-- `scratch/midterm-report/midterm-ppt-design.md`
-  - 中期答辩 PPT 逐页设计终稿
-- `scratch/midterm-report/midterm-image-generation-spec.md`
-  - 中期答辩图片生成与制图说明
+- `scratch/midterm-report/README.md`
+  - 中期材料清理后的归档说明
 
 当前目录收纳约定：
 - `scratch/leo-ntn-handover-baseline.cc`
@@ -233,7 +261,7 @@
 
 典型例子：
 
-- 想把 `simTime` 从 `40` 改到 `10`
+- 想把 `simTime` 从 `30` 改到 `10`
 - 想把 `lambda` 从 `1000` 改到 `100`
 - 想测试不同的 `hoTttMs`
 - 想临时关闭 `runGridSvgScript`
@@ -313,7 +341,7 @@
 ```bash
 ./ns3 configure -d optimized --disable-tests --disable-examples
 ./ns3 build
-./ns3 run --no-build "leo-ntn-handover-baseline --simTime=40 ..."
+./ns3 run --no-build "leo-ntn-handover-baseline --simTime=30 ..."
 ```
 
 原则：
@@ -330,70 +358,30 @@
 - 切换过 `debug/optimized` 后行为很混乱
 - `build` 或 `run` 反复出现难以解释的旧错误
 
-## `4.2` 实验矩阵
-本节给出当前 `research-v4.2` 主线下建议优先执行的一组实验编号表。当前口径是：`B00` 已经固定为 baseline 对照组，后续研究重心集中到在同一场景下比较 `B00` 与 improved，并围绕 `I31` 继续细化。
+## 当前正式实验入口
+当前活动工作区只保留论文主线的正式对照入口：
 
-当前这组实验的前提是：
-- baseline 与 improved 已经统一到真实 `MeasurementReport` 入口
-- “第二轨是否参与竞争”不再作为当前实验矩阵的待验证问题
-- 场景边界继续固定为 `2x4` 双轨、`25 UE`、`seven-cell`
+| ID | 目标 | 关键参数 | 主要用途 |
+| --- | --- | --- | --- |
+| `B00` | baseline 对照组 | `handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0` | 正式 baseline |
+| `I31` | improved 参考组 | `handoverMode=improved` + `stableLead=0.12 s` + `jointScoreMargin=0.03` | 当前 improved 参考点 |
 
-建议优先关注的指标：
-- handover success rate
-- handover delay
-- throughput continuity
-- ping-pong count
-- load balance
-
-| ID | 目标 | 关键参数 | 建议重复次数 | 主要用途 |
-| --- | --- | --- | --- | --- |
-| `B00` | 当前固定 baseline 对照组 | `handoverMode=baseline hoTttMs=160 hoHysteresisDb=2.0` | `5` | 作为后续 baseline / improved 对照与参数细调的统一起点 |
-| `B10` | baseline 短 TTT | `handoverMode=baseline hoTttMs=160` | `3` | 观察更激进触发是否增加频繁切换和 `ping-pong` |
-| `B11` | baseline 中 TTT | `handoverMode=baseline hoTttMs=320` | `3` | 观察更稳健触发是否降低无效切换 |
-| `B12` | baseline 长 TTT | `handoverMode=baseline hoTttMs=480` | `3` | 观察过晚切换是否损伤吞吐连续性 |
-| `B20` | baseline 低 hysteresis | `handoverMode=baseline hoHysteresisDb=1.0` | `3` | 观察较低门限对边界切换的放大效应 |
-| `B21` | baseline 高 hysteresis | `handoverMode=baseline hoHysteresisDb=3.0` | `3` | 观察较高门限对切换抑制和时延的影响 |
-| `I00` | improved 默认权重 | `handoverMode=improved improvedSignalWeight=0.7 improvedLoadWeight=0.3` | `5` | 作为当前 improved 主对照组 |
-| `I01` | improved 偏信号 | `handoverMode=improved improvedSignalWeight=0.8 improvedLoadWeight=0.2` | `3` | 观察轻度负载感知能否兼顾稳定性 |
-| `I02` | improved 均衡权重 | `handoverMode=improved improvedSignalWeight=0.5 improvedLoadWeight=0.5` | `3` | 观察更强负载感知是否改善负载分布 |
-
-建议执行顺序：
-1. 先固定 `B00`，作为当前论文与实验的 baseline 对照组。
-2. 优先跑 `I00` 到 `I02` 和 `improved-opt-grid`，在相同场景口径下比较目标选择收益并细调 `I31` 周边参数。
-3. `B10` 到 `B12`、`B20`、`B21` 作为补充敏感性实验，需要时再单独查看 `TTT` 与 `hysteresis` 的边界影响。
-
-论文第一轮推荐对照集：
-- `B00`
-- `I00`
-- `I02`
-- `I31`
-
-每组实验建议至少记录：
-- 版本：`research-v4.2`
-- 运行命令
-- `RngRun`
-- 总切换次数
-- 切换成功率
-- 平均切换时延
-- `ping-pong` 次数
-- 切换附近吞吐波动
-- 负载分布的定性结论
-
-当前仓库已提供批量执行脚本：
+当前批量脚本只保留这两组：
 
 ```bash
 scratch/run_handover_experiment_matrix.sh --list
-scratch/run_handover_experiment_matrix.sh --group baseline-repeat --repeat 5
-scratch/run_handover_experiment_matrix.sh --group improved-weight --repeat 3
-scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 --rng-run-start 11
+scratch/run_handover_experiment_matrix.sh --group formal-compare --repeat 3 --rng-run-start 11
 ```
 
-说明：
-- 这里的脚本层 `B00` 已切换到当前选定的 `E3` 参数组：`hoTttMs=160`、`hoHysteresisDb=2.0`
-- 当前仓库后续实验默认直接以 `B00` 作为 baseline 对照组，不再把“重新寻找 baseline”本身作为主要工作
-- `improved-opt-grid` 是当前推荐的细化优化矩阵：`1` 组 baseline + `9` 组 improved，固定 `TTT=160 ms`、`Hys=2 dB`，只扫 `stableLead={0.12,0.16,0.24}` 与 `jointScoreMargin={0.02,0.03,0.05}`
-- `--repeat 3 --rng-run-start 11` 会自动跑 `RngRun=11/12/13`，适合做三次重复后再汇总均值与波动
-- `e2e_flow_metrics.csv` 默认按 `remoteHost -> UE` 下行业务流导出每个 `UE` 的 `mean E2E delay` 与 `packet loss rate`
+建议记录：
+- 版本
+- 运行命令
+- `RngRun`
+- `E2E delay`
+- `packet loss rate`
+- `SINR`
+- `ping-pong`
+- load balance 结论
 
 建议流程：
 
@@ -524,17 +512,22 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 - 常见结果包括：
   - `hex_grid_cells.csv`
   - `hex_grid_cells.svg`（当 `runGridSvgScript = true`）
+  - `hex_grid_cells.html`（当 `runGridSvgScript = true`）
   - `ue_layout.csv`
   - `sat_anchor_trace.csv`
+  - `sat_ground_track.csv`
   - `handover_dl_throughput_trace.csv`
   - `handover_event_trace.csv`
 
 分析脚本：
 - `plotting/plot_hex_grid_svg.py`
   - 读取六边形网格 `CSV`
-  - 生成对应 `SVG`
+  - 生成对应 `SVG` 与交互式 `HTML`
   - 默认会尝试读取同目录下的 `ue_layout.csv`，用于导出 `grid + UE` 视图
-  - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“两轨代表主线”的轨迹视图
+  - 当前支持叠加 `sat_anchor_trace.csv`，用于导出“最终波束落点轨迹”
+  - 当前支持叠加 `sat_ground_track.csv`，用于导出 `8` 颗卫星的真实连续地面轨迹
+  - 可选使用 `--plane-north-offsets-m "0:-12000"` 这类参数，仅在绘图层对指定轨道面的轨迹做南北方向显示偏移；它不会改动仿真几何、`UE` 位置或六边形网格本身
+  - `hex_grid_cells.html` 默认支持 `8` 星总览、单星筛选、`UE` 分布叠加、真实轨迹/波束落点双层显示与时间滑块检查
 - `plotting/plot_handover_throughput.py`
   - 默认读取 `scratch/results/handover_dl_throughput_trace.csv`
   - 默认读取 `scratch/results/handover_event_trace.csv`
@@ -547,10 +540,10 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 - 当前已将周期更新中的卫星公共轨道传播与 handover 判决主链彻底分开
 - 当前已将默认参数和合法性检查集中到 `leo-ntn-handover-config.h`
 - 当前已接入 `loadScore`（负载评分）相关运行时字段与逐时刻 trace 输出
-- 当前已将默认 `UE` 布局切换为 `seven-cell`，并补齐导出 `CSV/SVG` 的脚本链
+- 当前已将默认 `UE` 布局切换为带一圈空白邻区的 `seven-cell`，并补齐导出 `CSV/SVG` 的脚本链
 
 ## 接下来
-- 先用当前默认参数完成一轮 `seven-cell baseline` 测量驱动切换验证
+- 先用当前默认参数完成一轮带一圈空白邻区的 `seven-cell baseline` 测量驱动切换验证
 - 在相同 `MeasurementReport` 入口下，对比 baseline 与 improved 的目标选择差异
 - 最后再根据实验结果细化联合目标函数和负载指标
 
@@ -558,7 +551,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 - 修改 `scratch/` 目录下的重要代码后，同步检查：
   - `scratch/README.md`
   - `scratch/baseline-definition.md`
-  - 相关 `midterm-report` 文档
+  - `scratch/midterm-report/README.md`
 - 文档优先写清当前口径和决策，不堆叠过长历史说明
 - 当文档中提到关键参数时，优先采用“英文参数名（中文释义）”写法
 - 版本、分支和提交命名规则以 `docs/research-workflow.md` 为准
@@ -665,7 +658,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
   - 明确保留 `line` 布局作为对照入口，但默认研究场景优先使用 `hotspot-boundary`
   - 明确当前代码默认值为 `updateIntervalMs = 100`、`lambda = 250 pkt/s/UE`、`maxSupportedUesPerSatellite = 5`
   - 明确当时默认会生成额外的候选轨迹与中间分析文件
-  - 明确可在 `runGridSvgScript = true` 时继续生成 `hex_grid_cells.svg`
+  - 明确可在 `runGridSvgScript = true` 时继续生成 `hex_grid_cells.svg`，并额外导出 `hex_grid_cells.html`
   - 同步收口当前崩溃防御链说明，补齐 `SN Status Transfer`、`NrPdcp::DoReceivePdu()`、`UdpServer::HandleRead()` 的描述
 - 配置入口收口
   - 新增 `leo-ntn-handover-config.h`
@@ -708,7 +701,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 ### `4.2`
   - 对应 tag：`research-v4.2`
   - 对应提交：本次 `4.2` 发布提交
-  - 当前正式收口新默认几何：`RAAN=-1 deg`、`planeTimeOffset=3.0 s`、`alignmentReferenceTime=15 s`、`overpassGap=3 s`
+  - 当前正式收口新默认几何：`RAAN=-0.58 deg`、`plane0RaanOffset=1.09 deg`、`planeTimeOffset=7.5 s`、`plane0TimeOffset=0 s`、`alignmentReferenceTime=6.5 s`、`overpassGap=3 s`
   - 当前正式收口中等负载默认口径：`lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
   - 当前 improved 默认起点切到 `I31`：`stableLead=0.12 s`、`jointScoreMargin=0.03`
   - 当前后续实验口径固定使用 `B00` 作为 baseline 主对照组
@@ -716,12 +709,20 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
   - 将 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的当前口径同步到 `4.2`
 
 ### `4.3`
-  - 对应 tag：`research-v4.3`（待发布）
+  - 对应 tag：`research-v4.3`
   - 当前正式收口定向天线默认口径：`gnbAntennaElement=b00-custom`，`ueAntennaElement=three-gpp`
-  - 新增 b00-custom 参数暴露：`b00MaxGainDb=20.0`，`b00BeamwidthDeg=15.0`，`b00MaxAttenuationDb=30.0`
+  - 新增 b00-custom 参数暴露：`b00MaxGainDb=20.0`，`b00BeamwidthDeg=4.0`，`b00MaxAttenuationDb=30.0`
   - 几何参数（`beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb`）保留用于链路预算，但不代表 PHY 默认天线阵元参数
   - smoke 验证表明：`B00-V43` SINR 显著改善（约 +10 dB vs LEGACY-ISO），证明定向性生效
   - 同步 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 的当前口径到 `4.3`
+
+### `5.0`
+  - 对应 tag：`research-v5.0`
+  - 在 `research-v4.3` 定向天线默认口径基础上，完成 thesis-mainline 清理和正式收口
+  - 主线只保留 same-frequency baseline / improved、`B00/I31` 正式对照和 `19 UE r2-diagnostic` 诊断入口
+  - 移除 inter-frequency、carrier-reuse、scheduler 对照、beamwidth/sidelobe/plane-offset/overpass-gap 扫描等历史诊断入口
+  - 补齐 `grid-anchor`、`earth-fixed beam target`、`plane0 offset`、`r2-diagnostic layout` 和 plotting report 的 focused tests
+  - 清理中期材料、代理协作文档和结果区临时残留，并同步 `docs/`、`scratch/`、`baseline-definition` 与 `midterm-report/` 口径
 
 ### `4.0.1`
   - 当前稳定节点
@@ -748,7 +749,7 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 - `research-v4.2` 代表当前 measurement-driven baseline / improved 主线下的新稳定收口快照，重点是稳定双轨竞争几何、把业务口径收回到中等负载，并为后续以 `B00` 为对照的 improved 细化提供固定场景口径
 
 `v4.2` 已纳入的内容：
-- 默认几何调整为 `interPlaneRaanSpacingDeg=-1 deg`、`interPlaneTimeOffsetSeconds=3.0 s`、`alignmentReferenceTimeSeconds=15 s`、`overpassGapSeconds=3 s`
+- 默认几何调整为 `interPlaneRaanSpacingDeg=-0.58 deg`、`plane0RaanOffsetDeg=1.09 deg`、`interPlaneTimeOffsetSeconds=7.5 s`、`plane0TimeOffsetSeconds=0 s`、`alignmentReferenceTimeSeconds=6.5 s`、`overpassGapSeconds=3 s`
 - 默认业务与容量口径调整为 `lambda=250 pkt/s/UE`、`maxSupportedUesPerSatellite=5`
 - improved 默认参数调整为 `improvedMinStableLeadTimeSeconds=0.12 s`、`improvedMinJointScoreMargin=0.03`
 - 当前后续实验默认使用 `B00` 作为 baseline 主对照组
@@ -771,6 +772,5 @@ scratch/run_handover_experiment_matrix.sh --group improved-opt-grid --repeat 3 -
 - 确认 baseline 文档、README 与中期汇报技术总结的参数口径一致
 - 确认 measurement-driven baseline / improved 的当前代码与文档描述一致
 
-当前若继续做中期汇报整理，优先参考：
-- `scratch/midterm-report/midterm-image-generation-spec.md`
-- `scratch/midterm-report/midterm-ppt-design.md`
+当前若需要回溯已清理的中期材料，只保留：
+- `scratch/midterm-report/README.md`

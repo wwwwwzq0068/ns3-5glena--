@@ -204,6 +204,42 @@ struct PhyDlTbAggregate
 };
 
 /**
+ * 单个时间窗内的 PHY 下行传输块累计量。
+ */
+struct PhyDlTbIntervalAccumulator
+{
+    uint64_t tbCount = 0;
+    uint64_t corruptTbCount = 0;
+    double tblerSum = 0.0;
+    double sinrDbSum = 0.0;
+    double minSinrDb = std::numeric_limits<double>::infinity();
+};
+
+/**
+ * 单个时间窗的 PHY 下行传输块统计结果。
+ */
+struct PhyDlTbIntervalSummary
+{
+    uint64_t intervalIndex = 0;
+    double windowStartSeconds = 0.0;
+    double windowEndSeconds = 0.0;
+    uint64_t tbCount = 0;
+    uint64_t corruptTbCount = 0;
+    double corruptTbRatePercent = 0.0;
+    double meanTbler = std::numeric_limits<double>::quiet_NaN();
+    double meanSinrDb = std::numeric_limits<double>::quiet_NaN();
+    double minSinrDb = std::numeric_limits<double>::quiet_NaN();
+};
+
+/**
+ * 所有时间窗的 PHY 下行传输块统计结果。
+ */
+struct PhyDlTbIntervalAggregate
+{
+    std::vector<PhyDlTbIntervalSummary> intervals;
+};
+
+/**
  * 切换统计的聚合结果。
  */
 struct HandoverAggregate
@@ -682,6 +718,81 @@ WritePhyDlTbMetricsCsv(const std::string& path, const PhyDlTbAggregate& aggregat
         out << aggregate.minSinrDb;
     }
     out << "\n";
+    return true;
+}
+
+/**
+ * 根据时间窗累计量生成 PHY 下行分段统计。
+ */
+inline PhyDlTbIntervalAggregate
+BuildPhyDlTbIntervalAggregate(const std::map<uint64_t, PhyDlTbIntervalAccumulator>& accumulators,
+                              double intervalSeconds)
+{
+    PhyDlTbIntervalAggregate out;
+    out.intervals.reserve(accumulators.size());
+
+    for (const auto& [intervalIndex, acc] : accumulators)
+    {
+        PhyDlTbIntervalSummary summary;
+        summary.intervalIndex = intervalIndex;
+        summary.windowStartSeconds = static_cast<double>(intervalIndex) * intervalSeconds;
+        summary.windowEndSeconds = summary.windowStartSeconds + intervalSeconds;
+        summary.tbCount = acc.tbCount;
+        summary.corruptTbCount = acc.corruptTbCount;
+
+        if (summary.tbCount > 0)
+        {
+            summary.corruptTbRatePercent =
+                100.0 * static_cast<double>(summary.corruptTbCount) / static_cast<double>(summary.tbCount);
+            summary.meanTbler = acc.tblerSum / static_cast<double>(summary.tbCount);
+            summary.meanSinrDb = acc.sinrDbSum / static_cast<double>(summary.tbCount);
+            summary.minSinrDb = acc.minSinrDb;
+        }
+
+        out.intervals.push_back(summary);
+    }
+
+    return out;
+}
+
+/**
+ * 导出按时间窗聚合的 PHY 下行传输块统计。
+ */
+inline bool
+WritePhyDlTbIntervalMetricsCsv(const std::string& path, const PhyDlTbIntervalAggregate& aggregate)
+{
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out.is_open())
+    {
+        return false;
+    }
+
+    out << "interval_index,window_start_s,window_end_s,tb_count,corrupt_tb_count,"
+           "corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
+
+    out << std::fixed << std::setprecision(6);
+    for (const auto& summary : aggregate.intervals)
+    {
+        out << summary.intervalIndex << "," << summary.windowStartSeconds << ","
+            << summary.windowEndSeconds << "," << summary.tbCount << ","
+            << summary.corruptTbCount << "," << summary.corruptTbRatePercent << ",";
+        if (std::isfinite(summary.meanTbler))
+        {
+            out << summary.meanTbler;
+        }
+        out << ",";
+        if (std::isfinite(summary.meanSinrDb))
+        {
+            out << summary.meanSinrDb;
+        }
+        out << ",";
+        if (std::isfinite(summary.minSinrDb))
+        {
+            out << summary.minSinrDb;
+        }
+        out << "\n";
+    }
+
     return true;
 }
 

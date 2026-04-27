@@ -16,6 +16,9 @@
 #include "handover/leo-ntn-handover-runtime.h"
 #include "handover/leo-ntn-handover-update.h"
 #include "handover/b00-equivalent-antenna-model.h"
+#include "handover/earth-fixed-beam-target.h"
+#include "handover/earth-fixed-gnb-beamforming.h"
+#include "handover/grid-anchor-landing-rule.h"
 #include "handover/leo-ntn-handover-utils.h"
 #include "handover/wgs84-hex-grid.h"
 #include <algorithm>
@@ -89,6 +92,18 @@ static double g_gridHeightKm = 400.0;
 static double g_anchorGridHexRadiusKm = 20.0;
 // 每颗卫星用于锚点选择的最近网格候选数。
 static uint32_t g_gridNearestK = 3;
+// 是否禁止多个卫星波束锚点落在同一小区或彼此的一圈邻区内。
+static bool g_enforceBeamExclusionRing = true;
+// 启用波束排他时，用于搜索可用锚点的最近候选数。
+static uint32_t g_beamExclusionCandidateK = 32;
+// 是否在真实接入/切换候选上强制检查 UE 是否落在当前锚点波束覆盖内。
+static bool g_enforceBeamCoverageForRealLinks = true;
+// 是否进一步要求 UE 最近的 hex 小区必须等于候选卫星当前锚点小区。
+static bool g_enforceAnchorCellForRealLinks = true;
+// 是否优先把卫星锚点分配到实际存在 UE 的 hex 小区。
+static bool g_preferDemandAnchorCells = true;
+static EarthFixedBeamTargetMode g_earthFixedBeamTargetMode =
+    EarthFixedBeamTargetMode::NADIR_CONTINUOUS;
 // 新锚点至少需要领先多少距离，才会进入切换门控。
 static double g_anchorGridSwitchGuardMeters = 0.0;
 // 新锚点需要持续领先多久，才允许真正切换。
@@ -96,8 +111,18 @@ static double g_anchorGridHysteresisSeconds = 0.0;
 static std::string g_outputDir = "scratch/results";
 static bool g_printGridCatalog = true;
 static std::string g_gridCatalogPath = JoinOutputPath(g_outputDir, "hex_grid_cells.csv");
+static double g_phyDlTbIntervalSeconds = 1.0;
+static std::map<uint64_t, PhyDlTbIntervalAccumulator> g_phyDlTbIntervals;
+static bool g_enablePhyDlTbTrace = false;
+static std::ofstream g_phyDlTbTrace;
 // 预生成的六边形网格目录。
 static std::vector<Wgs84HexGridCell> g_hexGridCells;
+// 当前 UE 布局实际占用的 hex 小区。
+static std::set<uint32_t> g_demandGridIds;
+// 每个需求 hex 小区内的真实驻留 UE 数量。
+static std::map<uint32_t, uint32_t> g_demandGridUeCounts;
+// 运行时 anchor 选择使用的 demand 优先级权重。
+static std::map<uint32_t, uint32_t> g_demandGridPriorityWeights;
 
 // 以下开关控制控制台输出详略程度。
 static bool g_compactReport = true;
@@ -125,6 +150,22 @@ enum class HandoverMode
 };
 
 static HandoverMode g_handoverMode = HandoverMode::BASELINE;
+
+enum class AnchorSelectionMode
+{
+    DEMAND_NEAREST,
+    DEMAND_MAX_UE_NEAR_NADIR,
+};
+
+static AnchorSelectionMode g_anchorSelectionMode = AnchorSelectionMode::DEMAND_NEAREST;
+
+enum class DemandSnapshotMode
+{
+    STATIC_UE_LAYOUT,
+    RUNTIME_UNDERSERVED_UE,
+};
+
+static DemandSnapshotMode g_demandSnapshotMode = DemandSnapshotMode::RUNTIME_UNDERSERVED_UE;
 static double g_improvedSignalWeight = 0.7;
 static double g_improvedRsrqWeight = 0.3;
 static double g_improvedLoadWeight = 0.3;
@@ -150,19 +191,10 @@ static uint16_t g_measurementReportIntervalMs = 120;
 static uint8_t g_measurementMaxReportCells = 8;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
 
-// Carrier reuse configuration
-static std::string g_carrierReuseMode = "reuse1";
-static double g_carrierFrequencySpacingHz = 60e6;
-static bool g_sameFrequencyHandoverOnly = true;
-static bool g_printCarrierPlan = true;
-static std::map<uint16_t, uint32_t> g_cellToCarrierGroup;  // cellId -> carrierGroupId
-
-// Phase 2: Inter-frequency handover support
-static bool g_interFrequencyHandoverEnabled = false;
-static bool g_printInterFrequencyEvents = true;
-
 // 逐时刻卫星波束锚点导出文件。
 static std::ofstream g_satAnchorTrace;
+// 逐时刻卫星真实连续地面投影导出文件。
+static std::ofstream g_satGroundTrackTrace;
 // 切换窗口下行吞吐采样导出文件。
 static std::ofstream g_handoverThroughputTrace;
 // 精确记录 HO-START / HO-END-OK 时刻的事件导出文件。
@@ -185,57 +217,6 @@ FormatUintList(const std::vector<uint32_t>& values)
     return oss.str();
 }
 
-/**
- * 获取 carrier reuse 模式对应的 carrier group 数量。
- */
-static uint32_t
-GetCarrierGroupCount(const std::string& carrierReuseMode)
-{
-    if (carrierReuseMode == "reuse1")
-    {
-        return 1;
-    }
-    if (carrierReuseMode == "reuse2-plane")
-    {
-        return 2;
-    }
-    if (carrierReuseMode == "reuse4")
-    {
-        return 4;
-    }
-    return 1;
-}
-
-/**
- * 根据轨道面和槽位索引计算 carrier group ID。
- */
-static uint32_t
-ComputeCarrierGroupId(const std::string& carrierReuseMode, uint32_t orbitPlaneIndex, uint32_t orbitSlotIndex)
-{
-    if (carrierReuseMode == "reuse1")
-    {
-        return 0;
-    }
-    if (carrierReuseMode == "reuse2-plane")
-    {
-        return orbitPlaneIndex % 2;
-    }
-    if (carrierReuseMode == "reuse4")
-    {
-        return (orbitPlaneIndex % 2) * 2 + (orbitSlotIndex % 2);
-    }
-    return 0;
-}
-
-/**
- * 根据 carrier group ID 计算载波中心频率。
- */
-static double
-ComputeCarrierCenterFrequency(double baseFrequency, uint32_t carrierGroupId, double spacingHz)
-{
-    return baseFrequency + carrierGroupId * spacingHz;
-}
-
 static double
 DistanceMeters(const Vector& a, const Vector& b)
 {
@@ -244,6 +225,59 @@ DistanceMeters(const Vector& a, const Vector& b)
     const double dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
+
+static std::optional<uint32_t> FindNearestGridCellId(const Vector& pointEcef);
+
+static Vector
+ResolveSatelliteBeamTargetEcef(uint32_t satIdx, const Vector& satEcef)
+{
+    if (satIdx >= g_satellites.size())
+    {
+        return ProjectNadirToWgs84(satEcef);
+    }
+    if (g_earthFixedBeamTargetMode == EarthFixedBeamTargetMode::NADIR_CONTINUOUS &&
+        g_useWgs84HexGrid && !g_hexGridCells.empty() && g_satellites[satIdx].currentAnchorGridId != 0)
+    {
+        return ResolveDiscreteSafeNadirBeamTarget(satEcef,
+                                                  g_hexGridCells,
+                                                  g_satellites[satIdx].currentAnchorGridId,
+                                                  g_gridCenterLatitudeDeg,
+                                                  g_gridCenterLongitudeDeg,
+                                                  g_anchorGridHexRadiusKm * 1000.0);
+    }
+    return ResolveEarthFixedBeamTarget(
+        satEcef, g_satellites[satIdx].cellAnchorEcef, g_earthFixedBeamTargetMode);
+}
+
+static Vector
+EcefDeltaToGridCenterEnu(const Vector& deltaEcef)
+{
+    const double latRad = LeoOrbitCalculator::DegToRad(g_gridCenterLatitudeDeg);
+    const double lonRad = LeoOrbitCalculator::DegToRad(g_gridCenterLongitudeDeg);
+    const double sinLat = std::sin(latRad);
+    const double cosLat = std::cos(latRad);
+    const double sinLon = std::sin(lonRad);
+    const double cosLon = std::cos(lonRad);
+
+    const double east = -sinLon * deltaEcef.x + cosLon * deltaEcef.y;
+    const double north =
+        -sinLat * cosLon * deltaEcef.x - sinLat * sinLon * deltaEcef.y + cosLat * deltaEcef.z;
+    const double up =
+        cosLat * cosLon * deltaEcef.x + cosLat * sinLon * deltaEcef.y + sinLat * deltaEcef.z;
+    return Vector(east, north, up);
+}
+
+static LeoOrbitCalculator::GroundPoint
+BuildTraceGroundPointFromEcef(const Vector& pointEcef)
+{
+    const Vector centerEcef = Wgs84GeodeticToEcef(g_gridCenterLatitudeDeg, g_gridCenterLongitudeDeg, 0.0);
+    const Vector delta(pointEcef.x - centerEcef.x, pointEcef.y - centerEcef.y, pointEcef.z - centerEcef.z);
+    const Vector enu = EcefDeltaToGridCenterEnu(delta);
+    const auto latLon =
+        OffsetMetersToLatLonDeg(g_gridCenterLatitudeDeg, g_gridCenterLongitudeDeg, enu.x, enu.y);
+    return LeoOrbitCalculator::CreateGroundPoint(latLon.first, latLon.second, 0.0);
+}
+
 // ============================================================================
 // 运行时复位与事件回调
 // ============================================================================
@@ -266,7 +300,7 @@ ResetRuntimeState(uint32_t gNbNum)
 static void
 FlushSatelliteAnchorTraceRows(double nowSeconds)
 {
-    if (!g_satAnchorTrace.is_open())
+    if (!g_satAnchorTrace.is_open() && !g_satGroundTrackTrace.is_open())
     {
         return;
     }
@@ -274,26 +308,460 @@ FlushSatelliteAnchorTraceRows(double nowSeconds)
     for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
     {
         const auto& sat = g_satellites[satIdx];
+        uint32_t anchorGridId = sat.currentAnchorGridId;
         double anchorLatDeg = std::numeric_limits<double>::quiet_NaN();
         double anchorLonDeg = std::numeric_limits<double>::quiet_NaN();
         double anchorEastMeters = std::numeric_limits<double>::quiet_NaN();
         double anchorNorthMeters = std::numeric_limits<double>::quiet_NaN();
 
-        if (const auto* anchorCell = FindHexGridCellById(g_hexGridCells, sat.currentAnchorGridId))
+        Ptr<MobilityModel> satMobility = sat.node ? sat.node->GetObject<MobilityModel>() : nullptr;
+        if (satMobility)
         {
-            anchorLatDeg = anchorCell->latitudeDeg;
-            anchorLonDeg = anchorCell->longitudeDeg;
-            anchorEastMeters = anchorCell->eastMeters;
-            anchorNorthMeters = anchorCell->northMeters;
+            const Vector satEcef = satMobility->GetPosition();
+            const Vector beamTargetEcef =
+                ResolveSatelliteBeamTargetEcef(satIdx, satEcef);
+            const Wgs84HexGridCell* beamGridCell = nullptr;
+            if (const auto beamGridId = FindNearestGridCellId(beamTargetEcef))
+            {
+                anchorGridId = beamGridId.value();
+                beamGridCell = FindHexGridCellById(g_hexGridCells, anchorGridId);
+            }
+
+            const Vector centerEcef =
+                Wgs84GeodeticToEcef(g_gridCenterLatitudeDeg, g_gridCenterLongitudeDeg, 0.0);
+            if (beamGridCell != nullptr && DistanceMeters(beamTargetEcef, beamGridCell->ecef) <= 1.0)
+            {
+                anchorLatDeg = beamGridCell->latitudeDeg;
+                anchorLonDeg = beamGridCell->longitudeDeg;
+                anchorEastMeters = beamGridCell->eastMeters;
+                anchorNorthMeters = beamGridCell->northMeters;
+            }
+            else
+            {
+                const auto beamGroundPoint = BuildTraceGroundPointFromEcef(beamTargetEcef);
+                anchorLatDeg = LeoOrbitCalculator::RadToDeg(beamGroundPoint.latitudeRad);
+                anchorLonDeg = LeoOrbitCalculator::RadToDeg(beamGroundPoint.longitudeRad);
+
+                const Vector delta(beamTargetEcef.x - centerEcef.x,
+                                   beamTargetEcef.y - centerEcef.y,
+                                   beamTargetEcef.z - centerEcef.z);
+                const Vector enu = EcefDeltaToGridCenterEnu(delta);
+                anchorEastMeters = enu.x;
+                anchorNorthMeters = enu.y;
+            }
+
+            if (g_satGroundTrackTrace.is_open())
+            {
+                const auto subpointGround = BuildTraceGroundPointFromEcef(satEcef);
+                const Vector satDelta(satEcef.x - centerEcef.x,
+                                      satEcef.y - centerEcef.y,
+                                      satEcef.z - centerEcef.z);
+                const Vector satEnu = EcefDeltaToGridCenterEnu(satDelta);
+                g_satGroundTrackTrace << std::fixed << std::setprecision(3) << nowSeconds << ","
+                                      << satIdx << "," << sat.orbitPlaneIndex << ","
+                                      << sat.orbitSlotIndex << "," << sat.dev->GetCellId() << ","
+                                      << std::setprecision(8)
+                                      << LeoOrbitCalculator::RadToDeg(subpointGround.latitudeRad) << ","
+                                      << LeoOrbitCalculator::RadToDeg(subpointGround.longitudeRad) << ","
+                                      << std::setprecision(3) << satEnu.x << "," << satEnu.y << ","
+                                      << satEcef.x << "," << satEcef.y << "," << satEcef.z << "\n";
+            }
         }
 
-        g_satAnchorTrace << std::fixed << std::setprecision(3) << nowSeconds << "," << satIdx << ","
-                         << sat.orbitPlaneIndex << "," << sat.orbitSlotIndex << ","
-                         << sat.dev->GetCellId() << "," << sat.currentAnchorGridId << ",";
-        g_satAnchorTrace << std::setprecision(8) << anchorLatDeg << "," << anchorLonDeg << ",";
-        g_satAnchorTrace << std::setprecision(3) << anchorEastMeters << "," << anchorNorthMeters
-                         << "\n";
+        if (g_satAnchorTrace.is_open())
+        {
+            g_satAnchorTrace << std::fixed << std::setprecision(3) << nowSeconds << "," << satIdx
+                             << "," << sat.orbitPlaneIndex << "," << sat.orbitSlotIndex << ","
+                             << sat.dev->GetCellId() << "," << anchorGridId << ",";
+            g_satAnchorTrace << std::setprecision(8) << anchorLatDeg << "," << anchorLonDeg << ",";
+            g_satAnchorTrace << std::setprecision(3) << anchorEastMeters << "," << anchorNorthMeters
+                             << "\n";
+        }
     }
+}
+
+/**
+ * 判断两个六边形网格中心是否处于同一小区或彼此的一圈邻区内。
+ */
+static bool
+IsSameOrNeighborHexCell(const Wgs84HexGridCell& a, const Wgs84HexGridCell& b)
+{
+    const double eastDelta = a.eastMeters - b.eastMeters;
+    const double northDelta = a.northMeters - b.northMeters;
+    const double neighborDistanceMeters = std::sqrt(3.0) * g_anchorGridHexRadiusKm * 1000.0;
+    const double guardDistanceMeters = neighborDistanceMeters * 1.01;
+    return eastDelta * eastDelta + northDelta * northDelta <= guardDistanceMeters * guardDistanceMeters;
+}
+
+static std::vector<uint32_t>
+FindFirstRingNeighborGridIds(uint32_t centerGridId)
+{
+    std::vector<uint32_t> neighborGridIds;
+    const auto* centerCell = FindHexGridCellById(g_hexGridCells, centerGridId);
+    if (centerCell == nullptr)
+    {
+        return neighborGridIds;
+    }
+
+    for (const auto& cell : g_hexGridCells)
+    {
+        if (cell.id == centerGridId)
+        {
+            continue;
+        }
+        if (IsSameOrNeighborHexCell(cell, *centerCell))
+        {
+            neighborGridIds.push_back(cell.id);
+        }
+    }
+    return neighborGridIds;
+}
+
+/**
+ * 收集其它卫星波束已经占用的锚点及其一圈邻区。
+ */
+static std::set<uint32_t>
+BuildBeamAnchorExclusionSet(uint32_t selfSatIndex)
+{
+    std::set<uint32_t> blockedGridIds;
+    if (!g_enforceBeamExclusionRing || g_hexGridCells.empty())
+    {
+        return blockedGridIds;
+    }
+
+    for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+    {
+        if (satIdx == selfSatIndex || g_satellites[satIdx].currentAnchorGridId == 0)
+        {
+            continue;
+        }
+
+        const auto* occupiedCell =
+            FindHexGridCellById(g_hexGridCells, g_satellites[satIdx].currentAnchorGridId);
+        if (occupiedCell == nullptr)
+        {
+            continue;
+        }
+
+        for (const auto& cell : g_hexGridCells)
+        {
+            if (IsSameOrNeighborHexCell(cell, *occupiedCell))
+            {
+                blockedGridIds.insert(cell.id);
+            }
+        }
+    }
+    return blockedGridIds;
+}
+
+static uint32_t
+GetGridAnchorCandidateCount()
+{
+    if (!g_enforceBeamExclusionRing)
+    {
+        return std::max<uint32_t>(1, g_gridNearestK);
+    }
+    return std::max<uint32_t>({1, g_gridNearestK, g_beamExclusionCandidateK});
+}
+
+static int32_t ResolveSatelliteIndexFromCellId(uint16_t cellId);
+static bool IsCrossLayerPhyWeak(const UeRuntime& ue);
+static bool IsUeInsideAssignedBeam(uint32_t satIdx, const UeRuntime& ue);
+static void ClearStableLeadTracking(UeRuntime& ue);
+
+static std::optional<uint32_t>
+FindNearestGridCellId(const Vector& pointEcef)
+{
+    if (g_hexGridCells.empty())
+    {
+        return std::nullopt;
+    }
+
+    const auto nearestIndices = FindNearestHexCellIndices(g_hexGridCells, pointEcef, 1);
+    if (nearestIndices.empty())
+    {
+        return std::nullopt;
+    }
+    return g_hexGridCells[nearestIndices.front()].id;
+}
+
+static void
+ClearDemandGridSnapshot()
+{
+    g_demandGridIds.clear();
+    g_demandGridUeCounts.clear();
+    g_demandGridPriorityWeights.clear();
+}
+
+static void
+AccumulateDemandGridSnapshot(uint32_t gridId, uint32_t residentUeIncrement, uint32_t priorityWeightIncrement)
+{
+    if (residentUeIncrement == 0 && priorityWeightIncrement == 0)
+    {
+        return;
+    }
+    g_demandGridIds.insert(gridId);
+    g_demandGridUeCounts[gridId] += residentUeIncrement;
+    g_demandGridPriorityWeights[gridId] += priorityWeightIncrement;
+}
+
+static void
+RefreshDemandGridSnapshotFromPlacements(const std::vector<UePlacement>& uePlacements)
+{
+    ClearDemandGridSnapshot();
+    if (!g_useWgs84HexGrid || g_hexGridCells.empty())
+    {
+        return;
+    }
+
+    for (const auto& placement : uePlacements)
+    {
+        if (const auto gridId = FindNearestGridCellId(placement.groundPoint.ecef))
+        {
+            AccumulateDemandGridSnapshot(gridId.value(), 1, 1);
+        }
+    }
+}
+
+static void
+RefreshDemandGridSnapshotFromRuntime()
+{
+    ClearDemandGridSnapshot();
+    if (!g_useWgs84HexGrid || g_hexGridCells.empty())
+    {
+        return;
+    }
+
+    for (const auto& ue : g_ues)
+    {
+        const auto ueGridId = FindNearestGridCellId(ue.groundPoint.ecef);
+        if (!ueGridId.has_value())
+        {
+            continue;
+        }
+
+        uint32_t priorityWeight = 1;
+        uint16_t servingCellId = 0;
+        if (ue.dev && ue.dev->GetRrc())
+        {
+            servingCellId = ue.dev->GetRrc()->GetCellId();
+        }
+        const int32_t servingSatIdx = ResolveSatelliteIndexFromCellId(servingCellId);
+        if (g_demandSnapshotMode == DemandSnapshotMode::RUNTIME_UNDERSERVED_UE)
+        {
+            if (servingSatIdx < 0 || static_cast<uint32_t>(servingSatIdx) >= g_satellites.size())
+            {
+                priorityWeight += 2;
+            }
+            else
+            {
+                const auto& servingSat = g_satellites[static_cast<uint32_t>(servingSatIdx)];
+                if (servingSat.currentAnchorGridId != 0 && servingSat.currentAnchorGridId != ueGridId.value())
+                {
+                    priorityWeight += 1;
+                }
+                if (!IsUeInsideAssignedBeam(static_cast<uint32_t>(servingSatIdx), ue))
+                {
+                    priorityWeight += 1;
+                }
+                if (!servingSat.admissionAllowed)
+                {
+                    priorityWeight += 1;
+                }
+            }
+            if (IsCrossLayerPhyWeak(ue))
+            {
+                priorityWeight += 1;
+            }
+        }
+
+        AccumulateDemandGridSnapshot(ueGridId.value(), 1, priorityWeight);
+    }
+}
+
+static uint32_t
+GetDemandGridPriorityWeight(uint32_t gridId)
+{
+    const auto it = g_demandGridPriorityWeights.find(gridId);
+    return (it != g_demandGridPriorityWeights.end()) ? it->second : 0;
+}
+
+static uint32_t
+GetDemandGridUeCount(uint32_t gridId)
+{
+    const auto it = g_demandGridUeCounts.find(gridId);
+    return (it != g_demandGridUeCounts.end()) ? it->second : 0;
+}
+
+static bool
+IsUeInSatelliteAnchorCell(uint32_t satIdx, const UeRuntime& ue)
+{
+    if (!g_enforceAnchorCellForRealLinks ||
+        !RequiresDiscreteAnchorCellGate(g_earthFixedBeamTargetMode))
+    {
+        return true;
+    }
+    if (satIdx >= g_satellites.size() || g_satellites[satIdx].currentAnchorGridId == 0)
+    {
+        return false;
+    }
+
+    const auto ueGridId = FindNearestGridCellId(ue.groundPoint.ecef);
+    return ueGridId.has_value() && ueGridId.value() == g_satellites[satIdx].currentAnchorGridId;
+}
+
+static GridAnchorSelection
+ComputeDemandAwareGridAnchorSelection(const Vector& satEcef,
+                                      uint32_t candidateCount,
+                                      const std::set<uint32_t>& blockedGridIds)
+{
+    auto fallback = ComputeGridAnchorSelection(g_hexGridCells, satEcef, candidateCount, blockedGridIds);
+    if (!g_preferDemandAnchorCells || g_demandGridIds.empty())
+    {
+        return fallback;
+    }
+
+    const Vector nadirPoint = ProjectNadirToWgs84(satEcef);
+    const auto computeDemandCandidateScore =
+        [&](const Wgs84HexGridCell& cell) -> std::optional<double> {
+        const auto anchorBudget =
+            CalculateEarthFixedBeamBudget(satEcef, cell.ecef, cell.ecef, g_beamModelConfig);
+        if (!anchorBudget.valid || !anchorBudget.beamLocked)
+        {
+            return std::nullopt;
+        }
+
+        const double distanceMeters = DistanceMeters(nadirPoint, cell.ecef);
+        return distanceMeters + anchorBudget.scanLossDb * 1000.0;
+    };
+
+    const auto makeLandingCandidate = [&](uint32_t gridId) -> GridAnchorLandingCandidate {
+        GridAnchorLandingCandidate candidate;
+        candidate.gridId = gridId;
+
+        const auto* cell = FindHexGridCellById(g_hexGridCells, gridId);
+        if (cell == nullptr)
+        {
+            return candidate;
+        }
+
+        candidate.ueCount = GetDemandGridUeCount(gridId);
+        candidate.priorityWeight = GetDemandGridPriorityWeight(gridId);
+        const auto score = computeDemandCandidateScore(*cell);
+        candidate.legal = blockedGridIds.find(gridId) == blockedGridIds.end() && score.has_value();
+        if (score.has_value())
+        {
+            candidate.score = score.value();
+        }
+        return candidate;
+    };
+
+    if (!fallback.nearestGridIds.empty())
+    {
+        const uint32_t primaryGridId = fallback.nearestGridIds.front();
+        std::vector<GridAnchorLandingCandidate> firstRingCandidates;
+        for (const auto neighborGridId : FindFirstRingNeighborGridIds(primaryGridId))
+        {
+            firstRingCandidates.push_back(makeLandingCandidate(neighborGridId));
+        }
+
+        const auto landingDecision =
+            SelectPreferredGridAnchorLanding(makeLandingCandidate(primaryGridId), firstRingCandidates);
+        if (landingDecision.found)
+        {
+            if (const auto* chosenCell = FindHexGridCellById(g_hexGridCells, landingDecision.anchorGridId))
+            {
+                fallback.found = true;
+                fallback.anchorGridId = chosenCell->id;
+                fallback.anchorEcef = chosenCell->ecef;
+                return fallback;
+            }
+        }
+    }
+
+    if (g_anchorSelectionMode == AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR)
+    {
+        uint32_t bestPriorityWeight = 0;
+        uint32_t bestUeCount = 0;
+        double bestScore = std::numeric_limits<double>::infinity();
+        const Wgs84HexGridCell* bestCell = nullptr;
+
+        for (const auto gridId : fallback.nearestGridIds)
+        {
+            const auto* cell = FindHexGridCellById(g_hexGridCells, gridId);
+            if (cell == nullptr || g_demandGridIds.find(cell->id) == g_demandGridIds.end() ||
+                blockedGridIds.find(cell->id) != blockedGridIds.end())
+            {
+                continue;
+            }
+
+            const uint32_t priorityWeight = GetDemandGridPriorityWeight(cell->id);
+            const uint32_t ueCount = GetDemandGridUeCount(cell->id);
+            if (ueCount == 0)
+            {
+                continue;
+            }
+
+            const auto score = computeDemandCandidateScore(*cell);
+            if (!score.has_value())
+            {
+                continue;
+            }
+
+            if (bestCell == nullptr || priorityWeight > bestPriorityWeight ||
+                (priorityWeight == bestPriorityWeight && ueCount > bestUeCount) ||
+                (priorityWeight == bestPriorityWeight && ueCount == bestUeCount &&
+                 score.value() < bestScore))
+            {
+                bestCell = cell;
+                bestPriorityWeight = priorityWeight;
+                bestUeCount = ueCount;
+                bestScore = score.value();
+            }
+        }
+
+        if (bestCell != nullptr)
+        {
+            fallback.found = true;
+            fallback.anchorGridId = bestCell->id;
+            fallback.anchorEcef = bestCell->ecef;
+            return fallback;
+        }
+    }
+
+    double bestScore = std::numeric_limits<double>::infinity();
+    const Wgs84HexGridCell* bestCell = nullptr;
+
+    for (const auto& cell : g_hexGridCells)
+    {
+        if (g_demandGridIds.find(cell.id) == g_demandGridIds.end() ||
+            blockedGridIds.find(cell.id) != blockedGridIds.end())
+        {
+            continue;
+        }
+
+        const auto score = computeDemandCandidateScore(cell);
+        if (!score.has_value())
+        {
+            continue;
+        }
+
+        if (score.value() < bestScore)
+        {
+            bestScore = score.value();
+            bestCell = &cell;
+        }
+    }
+
+    if (bestCell == nullptr)
+    {
+        return fallback;
+    }
+
+    fallback.found = true;
+    fallback.anchorGridId = bestCell->id;
+    fallback.anchorEcef = bestCell->ecef;
+    return fallback;
 }
 
 /**
@@ -310,7 +778,10 @@ UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double n
     }
 
     auto& sat = g_satellites[satIndex];
-    const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, satEcef, g_gridNearestK);
+    const auto blockedGridIds = BuildBeamAnchorExclusionSet(satIndex);
+    const auto anchor = ComputeDemandAwareGridAnchorSelection(satEcef,
+                                                              GetGridAnchorCandidateCount(),
+                                                              blockedGridIds);
     if (!anchor.found)
     {
         return;
@@ -356,6 +827,8 @@ UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double n
         return;
     }
 
+    const bool currentAnchorBlocked =
+        (blockedGridIds.find(sat.currentAnchorGridId) != blockedGridIds.end());
     const Vector nadirPoint = ProjectNadirToWgs84(satEcef);
     const double candidateDistanceMeters = DistanceMeters(nadirPoint, anchor.anchorEcef);
     double currentDistanceMeters = std::numeric_limits<double>::infinity();
@@ -364,6 +837,16 @@ UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double n
         currentDistanceMeters = DistanceMeters(nadirPoint, currentCell->ecef);
     }
     else
+    {
+        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
+        if (forceLog || g_printGridAnchorEvents)
+        {
+            logAnchor(sat.currentAnchorGridId);
+        }
+        return;
+    }
+
+    if (currentAnchorBlocked)
     {
         commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
         if (forceLog || g_printGridAnchorEvents)
@@ -482,6 +965,41 @@ ToString(HandoverMode handoverMode)
     return handoverMode == HandoverMode::IMPROVED ? "improved" : "baseline";
 }
 
+static AnchorSelectionMode
+ParseAnchorSelectionMode(const std::string& anchorSelectionMode)
+{
+    if (anchorSelectionMode == "demand-max-ue-near-nadir")
+    {
+        return AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR;
+    }
+    return AnchorSelectionMode::DEMAND_NEAREST;
+}
+
+static const char*
+ToString(AnchorSelectionMode anchorSelectionMode)
+{
+    return anchorSelectionMode == AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR
+               ? "demand-max-ue-near-nadir"
+               : "demand-nearest";
+}
+
+static DemandSnapshotMode
+ParseDemandSnapshotMode(const std::string& demandSnapshotMode)
+{
+    if (demandSnapshotMode == "static-layout")
+    {
+        return DemandSnapshotMode::STATIC_UE_LAYOUT;
+    }
+    return DemandSnapshotMode::RUNTIME_UNDERSERVED_UE;
+}
+
+static const char*
+ToString(DemandSnapshotMode demandSnapshotMode)
+{
+    return demandSnapshotMode == DemandSnapshotMode::STATIC_UE_LAYOUT ? "static-layout"
+                                                                     : "runtime-underserved-ue";
+}
+
 enum class AntennaElementMode
 {
     ISOTROPIC,
@@ -538,6 +1056,7 @@ CreateAntennaElement(AntennaElementMode mode, const BaselineSimulationConfig& cf
 enum class BeamformingMode
 {
     IDEAL_DIRECT_PATH,
+    IDEAL_EARTH_FIXED,
     IDEAL_CELL_SCAN,
     IDEAL_DIRECT_PATH_QUASI_OMNI,
     IDEAL_CELL_SCAN_QUASI_OMNI,
@@ -548,6 +1067,10 @@ enum class BeamformingMode
 static BeamformingMode
 ParseBeamformingMode(const std::string& mode)
 {
+    if (mode == "ideal-earth-fixed")
+    {
+        return BeamformingMode::IDEAL_EARTH_FIXED;
+    }
     if (mode == "ideal-cell-scan")
     {
         return BeamformingMode::IDEAL_CELL_SCAN;
@@ -576,6 +1099,8 @@ ToString(BeamformingMode mode)
 {
     switch (mode)
     {
+    case BeamformingMode::IDEAL_EARTH_FIXED:
+        return "ideal-earth-fixed";
     case BeamformingMode::IDEAL_CELL_SCAN:
         return "ideal-cell-scan";
     case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
@@ -597,6 +1122,8 @@ GetIdealBeamformingMethodTypeId(BeamformingMode mode)
 {
     switch (mode)
     {
+    case BeamformingMode::IDEAL_EARTH_FIXED:
+        return EarthFixedGnbBeamforming::GetTypeId();
     case BeamformingMode::IDEAL_CELL_SCAN:
         return CellScanBeamforming::GetTypeId();
     case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
@@ -609,6 +1136,30 @@ GetIdealBeamformingMethodTypeId(BeamformingMode mode)
     default:
         return DirectPathBeamforming::GetTypeId();
     }
+}
+
+static std::optional<Vector>
+ResolveEarthFixedGnbAnchorPosition(const Ptr<const NetDevice>& gnbDevice)
+{
+    const auto gnb = DynamicCast<const NrGnbNetDevice>(gnbDevice);
+    if (!gnb)
+    {
+        return std::nullopt;
+    }
+
+    const auto satIt = g_cellToSatellite.find(gnb->GetCellId());
+    if (satIt == g_cellToSatellite.end() || satIt->second >= g_satellites.size())
+    {
+        return std::nullopt;
+    }
+
+    const auto& sat = g_satellites[satIt->second];
+    Ptr<MobilityModel> satMobility = sat.node ? sat.node->GetObject<MobilityModel>() : nullptr;
+    if (!satMobility)
+    {
+        return std::nullopt;
+    }
+    return ResolveSatelliteBeamTargetEcef(satIt->second, satMobility->GetPosition());
 }
 
 static RealisticBfManager::TriggerEvent
@@ -664,6 +1215,44 @@ ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
         ue.phyDlCorruptTbCount++;
     }
 
+    const uint64_t intervalIndex = static_cast<uint64_t>(
+        std::floor((Simulator::Now().GetSeconds() + 1e-9) / g_phyDlTbIntervalSeconds));
+    auto& interval = g_phyDlTbIntervals[intervalIndex];
+    interval.tbCount++;
+    interval.tblerSum += params.m_tbler;
+    if (params.m_corrupt)
+    {
+        interval.corruptTbCount++;
+    }
+
+    if (g_enablePhyDlTbTrace && g_phyDlTbTrace.is_open())
+    {
+        const int32_t servingSatIdx =
+            ResolveSatelliteIndexFromCellId(static_cast<uint16_t>(params.m_cellId));
+        g_phyDlTbTrace << std::fixed << std::setprecision(9)
+                       << Simulator::Now().GetSeconds() << "," << *ueIdx << ","
+                       << params.m_cellId << "," << servingSatIdx << "," << params.m_rnti
+                       << "," << params.m_bwpId << "," << params.m_frameNum << ","
+                       << static_cast<uint32_t>(params.m_subframeNum) << ","
+                       << params.m_slotNum << "," << static_cast<uint32_t>(params.m_symStart)
+                       << "," << static_cast<uint32_t>(params.m_numSym) << ","
+                       << params.m_tbSize << "," << static_cast<uint32_t>(params.m_mcs)
+                       << "," << static_cast<uint32_t>(params.m_rank) << ","
+                       << static_cast<uint32_t>(params.m_rv) << "," << params.m_rbAssignedNum
+                       << "," << static_cast<uint32_t>(params.m_cqi) << ",";
+        if (params.m_sinr > 0.0)
+        {
+            g_phyDlTbTrace << 10.0 * std::log10(params.m_sinr);
+        }
+        g_phyDlTbTrace << ",";
+        if (params.m_sinrMin > 0.0)
+        {
+            g_phyDlTbTrace << 10.0 * std::log10(params.m_sinrMin);
+        }
+        g_phyDlTbTrace << "," << params.m_tbler << "," << (params.m_corrupt ? 1 : 0)
+                       << "\n";
+    }
+
     const double alpha = std::clamp(g_improvedCrossLayerPhyAlpha, 1e-6, 1.0);
     const double corruptIndicator = params.m_corrupt ? 1.0 : 0.0;
     if (ue.recentPhySampleCount == 0)
@@ -684,6 +1273,8 @@ ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
         const double sinrDb = 10.0 * std::log10(params.m_sinr);
         ue.phyDlSinrDbSum += sinrDb;
         ue.phyDlMinSinrDb = std::min(ue.phyDlMinSinrDb, sinrDb);
+        interval.sinrDbSum += sinrDb;
+        interval.minSinrDb = std::min(interval.minSinrDb, sinrDb);
         if (!std::isfinite(ue.recentPhySinrDbEwma) || ue.recentPhySampleCount <= 1)
         {
             ue.recentPhySinrDbEwma = sinrDb;
@@ -707,10 +1298,6 @@ struct MeasurementCandidate
     double remainingVisibilitySeconds = 0.0;
     double visibilityScore = 0.0;
     double jointScore = -std::numeric_limits<double>::infinity();
-    // Phase 2: Inter-frequency handover fields
-    uint32_t carrierGroupId = 0;
-    double carrierFrequencyHz = 0.0;
-    bool isInterFrequency = false;
 };
 
 static double
@@ -857,6 +1444,34 @@ IsCrossLayerPhyWeak(const UeRuntime& ue)
     return tblerWeak || sinrWeak;
 }
 
+static bool
+IsUeInsideAssignedBeam(uint32_t satIdx, const UeRuntime& ue)
+{
+    if (!g_enforceBeamCoverageForRealLinks)
+    {
+        return true;
+    }
+    if (satIdx >= g_satellites.size() || !g_satellites[satIdx].node)
+    {
+        return false;
+    }
+
+    Ptr<MobilityModel> satMobility = g_satellites[satIdx].node->GetObject<MobilityModel>();
+    if (!satMobility)
+    {
+        return false;
+    }
+
+    const auto budget = CalculateEarthFixedBeamBudget(
+        satMobility->GetPosition(),
+        ue.groundPoint.ecef,
+        ResolveSatelliteBeamTargetEcef(satIdx, satMobility->GetPosition()),
+        g_beamModelConfig);
+    return budget.valid && budget.beamLocked &&
+           budget.offBoresightAngleRad <= g_beamModelConfig.theta3dBRad &&
+           std::isfinite(budget.rsrpDbm) && IsUeInSatelliteAnchorCell(satIdx, ue);
+}
+
 static void
 ClearStableLeadTracking(UeRuntime& ue)
 {
@@ -868,7 +1483,6 @@ ClearStableLeadTracking(UeRuntime& ue)
 static std::optional<MeasurementCandidate>
 SelectMeasurementDrivenTarget(uint16_t servingCellId,
                               uint32_t sourceSatIdx,
-                              uint32_t ueIdx,
                               const UeRuntime& ue,
                               const NrRrcSap::MeasResults& measResults)
 {
@@ -887,6 +1501,10 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         {
             continue;
         }
+        if (!IsUeInsideAssignedBeam(satIt->second, ue))
+        {
+            continue;
+        }
 
         const auto& satellite = g_satellites[satIt->second];
         MeasurementCandidate candidate;
@@ -901,173 +1519,7 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         candidate.admissionAllowed = satellite.admissionAllowed;
         candidate.remainingVisibilitySeconds =
             PredictRemainingVisibilitySeconds(candidate.satIdx, ue.groundPoint, Simulator::Now().GetSeconds());
-        // Phase 2: Add carrier group info
-        candidate.carrierGroupId = satellite.carrierGroupId;
-        candidate.carrierFrequencyHz = satellite.carrierCenterFrequencyHz;
-        candidate.isInterFrequency = (satellite.carrierGroupId != g_satellites[sourceSatIdx].carrierGroupId);
         candidates.push_back(candidate);
-    }
-
-    // Phase 2: Generate inter-frequency candidates based on geometric visibility
-    // when interFrequencyHandoverEnabled=true and measurement chain is primarily intra-frequency
-    if (g_interFrequencyHandoverEnabled)
-    {
-        const uint32_t servingCarrierGroup = g_satellites[sourceSatIdx].carrierGroupId;
-        const double nowSeconds = Simulator::Now().GetSeconds();
-
-        for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
-        {
-            // Skip serving satellite and same carrier group satellites
-            if (satIdx == sourceSatIdx || g_satellites[satIdx].carrierGroupId == servingCarrierGroup)
-            {
-                continue;
-            }
-
-            // Check if this satellite is already in candidates from measurement chain
-            bool alreadyInCandidates = false;
-            for (const auto& existingCand : candidates)
-            {
-                if (existingCand.satIdx == satIdx)
-                {
-                    alreadyInCandidates = true;
-                    break;
-                }
-            }
-            if (alreadyInCandidates)
-            {
-                continue;
-            }
-
-            // Calculate geometric state and beam budget for this inter-frequency satellite
-            const auto state = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                              g_satellites[satIdx].orbit,
-                                                              g_gmstAtEpochRad,
-                                                              ue.groundPoint,
-                                                              g_satellites[satIdx].carrierCenterFrequencyHz,
-                                                              g_minElevationRad);
-
-            if (!state.visible)
-            {
-                continue;
-            }
-
-            const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
-                                                               ue.groundPoint.ecef,
-                                                               g_satellites[satIdx].cellAnchorEcef,
-                                                               g_beamModelConfig);
-
-            // Only add if beam is locked (valid link budget)
-            if (!budget.beamLocked || !std::isfinite(budget.rsrpDbm))
-            {
-                continue;
-            }
-
-            // Construct inter-frequency candidate using geometric beam budget
-            MeasurementCandidate geoCandidate;
-            geoCandidate.satIdx = satIdx;
-            geoCandidate.cellId = g_satelliteGnbDevices[satIdx]->GetCellId();
-            geoCandidate.rsrpDbm = budget.rsrpDbm;  // Use beam budget RSRP (estimated)
-            geoCandidate.rsrqDb = budget.rsrpDbm - 3.0;  // Rough RSRQ estimate (RSRP - 3dB typical)
-            geoCandidate.loadScore = g_satellites[satIdx].loadScore;
-            geoCandidate.admissionAllowed = g_satellites[satIdx].admissionAllowed;
-            geoCandidate.remainingVisibilitySeconds =
-                PredictRemainingVisibilitySeconds(satIdx, ue.groundPoint, nowSeconds);
-            geoCandidate.carrierGroupId = g_satellites[satIdx].carrierGroupId;
-            geoCandidate.carrierFrequencyHz = g_satellites[satIdx].carrierCenterFrequencyHz;
-            geoCandidate.isInterFrequency = true;  // By construction, all these are inter-frequency
-
-            candidates.push_back(geoCandidate);
-
-            if (g_printInterFrequencyEvents)
-            {
-                std::cout << "[INTER-FREQ-GEO-CAND] t=" << std::fixed << std::setprecision(3)
-                          << nowSeconds << "s"
-                          << " ue=" << ueIdx
-                          << " sat=" << satIdx
-                          << " group=" << geoCandidate.carrierGroupId
-                          << " freq=" << geoCandidate.carrierFrequencyHz / 1e6 << "MHz"
-                          << " rsrp=" << geoCandidate.rsrpDbm << "dBm"
-                          << " (geo-budget)"
-                          << std::endl;
-            }
-        }
-    }
-
-    // Carrier group filtering for same-frequency handover only
-    // Phase 2: When interFrequencyHandoverEnabled=true, sameFrequencyHandoverOnly is set to false
-    // in ApplyGlobalMirrorConfig, so all candidates are allowed.
-    const uint32_t servingCarrierGroup = g_satellites[sourceSatIdx].carrierGroupId;
-
-    if (g_sameFrequencyHandoverOnly && !candidates.empty())
-    {
-        // Phase 1 behavior: Filter out inter-frequency candidates
-        std::vector<MeasurementCandidate> sameFreqCandidates;
-        sameFreqCandidates.reserve(candidates.size());
-        uint32_t interFreqBlockedCount = 0;
-
-        for (const auto& candidate : candidates)
-        {
-            if (candidate.carrierGroupId == servingCarrierGroup)
-            {
-                sameFreqCandidates.push_back(candidate);
-            }
-            else
-            {
-                interFreqBlockedCount++;
-                if (g_printCarrierPlan && g_printNrtEvents)
-                {
-                    std::cout << "[INTER-FREQ-BLOCKED] t=" << std::fixed << std::setprecision(3)
-                              << Simulator::Now().GetSeconds() << "s"
-                              << " cell=" << candidate.cellId
-                              << " group=" << candidate.carrierGroupId
-                              << " (serving group=" << servingCarrierGroup << ")"
-                              << " rsrp=" << candidate.rsrpDbm << "dBm"
-                              << std::endl;
-                }
-            }
-        }
-
-        if (!sameFreqCandidates.empty())
-        {
-            candidates = std::move(sameFreqCandidates);
-        }
-        else if (interFreqBlockedCount > 0)
-        {
-            // All candidates are inter-frequency, must block handover
-            if (g_printCarrierPlan)
-            {
-                std::cout << "[INTER-FREQ-ALL-BLOCKED] t=" << std::fixed << std::setprecision(3)
-                          << Simulator::Now().GetSeconds() << "s"
-                          << " servingCell=" << servingCellId
-                          << " group=" << servingCarrierGroup
-                          << " blocked=" << interFreqBlockedCount << " candidates"
-                          << " -> NO_HANDOVER (sameFrequencyHandoverOnly=true)"
-                          << std::endl;
-            }
-            candidates.clear();
-        }
-    }
-    else if (g_interFrequencyHandoverEnabled && !candidates.empty())
-    {
-        // Phase 2 behavior: Allow all candidates, log inter-frequency ones
-        uint32_t interFreqCount = 0;
-        for (const auto& candidate : candidates)
-        {
-            if (candidate.isInterFrequency)
-            {
-                interFreqCount++;
-            }
-        }
-        if (interFreqCount > 0 && g_printInterFrequencyEvents)
-        {
-            std::cout << "[INTER-FREQ-CANDIDATES] t=" << std::fixed << std::setprecision(3)
-                      << Simulator::Now().GetSeconds() << "s"
-                      << " servingCell=" << servingCellId
-                      << " servingGroup=" << servingCarrierGroup
-                      << " totalCandidates=" << candidates.size()
-                      << " interFreqCandidates=" << interFreqCount
-                      << std::endl;
-        }
     }
 
     if (candidates.empty())
@@ -1155,11 +1607,6 @@ SelectMeasurementDrivenTarget(uint16_t servingCellId,
         rsrqGuardCandidates.reserve(filteredCandidates.size());
         for (const auto& candidate : filteredCandidates)
         {
-            if (candidate.isInterFrequency)
-            {
-                rsrqGuardCandidates.push_back(candidate);
-                continue;
-            }
             const bool rsrqAdvantageOk = std::isfinite(candidate.rsrqDb) &&
                                          candidate.rsrqDb >=
                                              servingRsrqDb + g_improvedMinRsrqAdvantageDb;
@@ -1343,7 +1790,10 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         (g_handoverMode == HandoverMode::IMPROVED) &&
         (IsServingLinkWeak(measResults) || IsCrossLayerPhyWeak(ue));
 
-    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId, static_cast<uint32_t>(sourceSatIdx), *ueIdx, ue, measResults);
+    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId,
+                                                              static_cast<uint32_t>(sourceSatIdx),
+                                                              ue,
+                                                              measResults);
     if (!selectedTarget.has_value() || selectedTarget->cellId == 0)
     {
         if (g_handoverMode == HandoverMode::IMPROVED)
@@ -1389,10 +1839,7 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
                   << " ue=" << *ueIdx
                   << " sourceCell=" << sourceCellId
                   << " targetCell=" << selectedTarget->cellId
-                  << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm"
-                  << " srcGroup=" << g_satellites[sourceSatIdx].carrierGroupId
-                  << " tgtGroup=" << selectedTarget->carrierGroupId
-                  << " interFreq=" << (selectedTarget->isInterFrequency ? "YES" : "NO");
+                  << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm";
         if (g_handoverMode == HandoverMode::IMPROVED)
         {
             const double sourceLoadScore = g_satellites[sourceSatIdx].loadScore;
@@ -1887,6 +2334,8 @@ UpdateConstellation(Time interval, Time stopTime)
 {
     const double nowSeconds = Simulator::Now().GetSeconds();
     std::vector<uint32_t> nextAttachedUeCounts(g_satellites.size(), 0);
+    std::vector<uint16_t> servingCellIds(g_ues.size(), 0);
+    std::vector<int32_t> servingSatIndices(g_ues.size(), -1);
 
     std::vector<LeoOrbitCalculator::OrbitState> referenceStates(g_satellites.size());
     for (uint32_t i = 0; i < g_satellites.size(); ++i)
@@ -1895,6 +2344,40 @@ UpdateConstellation(Time interval, Time stopTime)
             nowSeconds, g_satellites[i].orbit, g_gmstAtEpochRad);
         // 卫星节点位置直接用几何计算结果覆盖，形成时变轨道运动。
         g_satellites[i].node->GetObject<MobilityModel>()->SetPosition(referenceStates[i].ecef);
+    }
+
+    for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
+    {
+        const auto& ue = g_ues[ueIdx];
+        uint16_t servingCellId = 0;
+        if (ue.dev && ue.dev->GetRrc())
+        {
+            servingCellId = ue.dev->GetRrc()->GetCellId();
+        }
+        servingCellIds[ueIdx] = servingCellId;
+
+        const int32_t servingSatIdx = ResolveSatelliteIndexFromCellId(servingCellId);
+        servingSatIndices[ueIdx] = servingSatIdx;
+        if (servingSatIdx >= 0 && static_cast<uint32_t>(servingSatIdx) < g_satellites.size())
+        {
+            nextAttachedUeCounts[servingSatIdx]++;
+        }
+    }
+
+    for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
+    {
+        g_satellites[satIdx].attachedUeCount = nextAttachedUeCounts[satIdx];
+    }
+    UpdateSatelliteLoadStats(
+        g_satellites, g_offeredPacketRatePerUe, g_maxSupportedUesPerSatellite, g_loadCongestionThreshold);
+
+    if (g_demandSnapshotMode == DemandSnapshotMode::RUNTIME_UNDERSERVED_UE)
+    {
+        RefreshDemandGridSnapshotFromRuntime();
+    }
+
+    for (uint32_t i = 0; i < g_satellites.size(); ++i)
+    {
         UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
     }
     FlushSatelliteAnchorTraceRows(nowSeconds);
@@ -1902,17 +2385,8 @@ UpdateConstellation(Time interval, Time stopTime)
     for (uint32_t ueIdx = 0; ueIdx < g_ues.size(); ++ueIdx)
     {
         auto& ue = g_ues[ueIdx];
-        uint16_t servingCellId = 0;
-        if (ue.dev && ue.dev->GetRrc())
-        {
-            servingCellId = ue.dev->GetRrc()->GetCellId();
-        }
-
-        const int32_t servingSatIdx = ResolveSatelliteIndexFromCellId(servingCellId);
-        if (servingSatIdx >= 0 && static_cast<uint32_t>(servingSatIdx) < g_satellites.size())
-        {
-            nextAttachedUeCounts[servingSatIdx]++;
-        }
+        const uint16_t servingCellId = servingCellIds[ueIdx];
+        const int32_t servingSatIdx = servingSatIndices[ueIdx];
 
         const bool servingChanged =
             (ue.lastServingCellForLog != 0 && servingCellId != 0 &&
@@ -1949,111 +2423,7 @@ UpdateConstellation(Time interval, Time stopTime)
         }
 
         ue.lastServingCellForLog = servingCellId;
-
-        // Phase 2: Detect inter-frequency candidates but block execution due to NR Ideal RRC limitation
-        // When measurement chain doesn't trigger (intra-frequency only), we check geometric candidates
-        // but do NOT actually call TriggerHandover() because NrUeRrcProtocolIdeal crashes on RLF
-        if (g_interFrequencyHandoverEnabled && servingSatIdx >= 0)
-        {
-            const uint32_t servingCarrierGroup = g_satellites[static_cast<uint32_t>(servingSatIdx)].carrierGroupId;
-
-            // Find best inter-frequency candidate based on geometric visibility
-            uint32_t bestInterFreqSatIdx = std::numeric_limits<uint32_t>::max();
-            double bestInterFreqRsrpDbm = -std::numeric_limits<double>::infinity();
-            double servingRsrpDbm = -std::numeric_limits<double>::infinity();
-
-            // Estimate serving satellite RSRP from geometric budget
-            const auto servingState = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                                    g_satellites[static_cast<uint32_t>(servingSatIdx)].orbit,
-                                                                    g_gmstAtEpochRad,
-                                                                    ue.groundPoint,
-                                                                    g_satellites[static_cast<uint32_t>(servingSatIdx)].carrierCenterFrequencyHz,
-                                                                    g_minElevationRad);
-            if (servingState.visible)
-            {
-                const auto servingBudget = CalculateEarthFixedBeamBudget(servingState.ecef,
-                                                                          ue.groundPoint.ecef,
-                                                                          g_satellites[static_cast<uint32_t>(servingSatIdx)].cellAnchorEcef,
-                                                                          g_beamModelConfig);
-                if (servingBudget.beamLocked)
-                {
-                    servingRsrpDbm = servingBudget.rsrpDbm;
-                }
-            }
-
-            // Check inter-frequency candidates
-            for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
-            {
-                if (satIdx == static_cast<uint32_t>(servingSatIdx) ||
-                    g_satellites[satIdx].carrierGroupId == servingCarrierGroup)
-                {
-                    continue;  // Skip serving satellite and same-frequency satellites
-                }
-
-                const auto state = LeoOrbitCalculator::Calculate(nowSeconds,
-                                                                  g_satellites[satIdx].orbit,
-                                                                  g_gmstAtEpochRad,
-                                                                  ue.groundPoint,
-                                                                  g_satellites[satIdx].carrierCenterFrequencyHz,
-                                                                  g_minElevationRad);
-
-                if (!state.visible)
-                {
-                    continue;
-                }
-
-                const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
-                                                                   ue.groundPoint.ecef,
-                                                                   g_satellites[satIdx].cellAnchorEcef,
-                                                                   g_beamModelConfig);
-
-                if (!budget.beamLocked || !std::isfinite(budget.rsrpDbm))
-                {
-                    continue;
-                }
-
-                // Check if candidate is better than serving + hysteresis
-                if (budget.rsrpDbm > servingRsrpDbm + g_hoHysteresisDb && budget.rsrpDbm > bestInterFreqRsrpDbm)
-                {
-                    bestInterFreqRsrpDbm = budget.rsrpDbm;
-                    bestInterFreqSatIdx = satIdx;
-                }
-            }
-
-            // Log inter-frequency candidate detection but BLOCK execution due to NR Ideal RRC limitation
-            // This is trigger-level support only; execution-level is blocked by stack limitation
-            if (bestInterFreqSatIdx != std::numeric_limits<uint32_t>::max() &&
-                std::isfinite(servingRsrpDbm) &&
-                bestInterFreqRsrpDbm > servingRsrpDbm + g_hoHysteresisDb)
-            {
-                const uint16_t targetCellId = g_satelliteGnbDevices[bestInterFreqSatIdx]->GetCellId();
-
-                if (g_printInterFrequencyEvents)
-                {
-                    std::cout << "[INTER-FREQ-HO-BLOCKED-BY-RRC-LIMIT] t=" << std::fixed << std::setprecision(3)
-                              << nowSeconds << "s"
-                              << " ue=" << ueIdx
-                              << " sourceCell=" << servingCellId
-                              << " sourceGroup=" << servingCarrierGroup
-                              << " targetCell=" << targetCellId
-                              << " targetGroup=" << g_satellites[bestInterFreqSatIdx].carrierGroupId
-                              << " targetFreq=" << g_satellites[bestInterFreqSatIdx].carrierCenterFrequencyHz / 1e6 << "MHz"
-                              << " servingRsrp=" << servingRsrpDbm << "dBm"
-                              << " targetRsrp=" << bestInterFreqRsrpDbm << "dBm"
-                              << " delta=" << (bestInterFreqRsrpDbm - servingRsrpDbm) << "dB"
-                              << " reason=NrUeRrcProtocolIdeal-does-not-support-RLF"
-                              << std::endl;
-                }
-            }
-        }
     }
-
-    for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
-    {
-        g_satellites[satIdx].attachedUeCount = nextAttachedUeCounts[satIdx];
-    }
-    UpdateSatelliteLoadStats(
-        g_satellites, g_offeredPacketRatePerUe, g_maxSupportedUesPerSatellite, g_loadCongestionThreshold);
 
     if (Simulator::Now() + interval <= stopTime)
     {
@@ -2077,11 +2447,21 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_gridHeightKm = config.gridHeightKm;
     g_anchorGridHexRadiusKm = config.anchorGridHexRadiusKm;
     g_gridNearestK = config.gridNearestK;
+    g_enforceBeamExclusionRing = config.enforceBeamExclusionRing;
+    g_beamExclusionCandidateK = config.beamExclusionCandidateK;
+    g_enforceBeamCoverageForRealLinks = config.enforceBeamCoverageForRealLinks;
+    g_enforceAnchorCellForRealLinks = config.enforceAnchorCellForRealLinks;
+    g_preferDemandAnchorCells = config.preferDemandAnchorCells;
+    g_anchorSelectionMode = ParseAnchorSelectionMode(config.anchorSelectionMode);
+    g_demandSnapshotMode = ParseDemandSnapshotMode(config.demandSnapshotMode);
+    g_earthFixedBeamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
     g_anchorGridSwitchGuardMeters = config.anchorGridSwitchGuardMeters;
     g_anchorGridHysteresisSeconds = config.anchorGridHysteresisSeconds;
     g_outputDir = config.outputDir;
     g_printGridCatalog = config.printGridCatalog;
     g_gridCatalogPath = config.gridCatalogPath;
+    g_phyDlTbIntervalSeconds = config.phyDlTbIntervalSeconds;
+    g_enablePhyDlTbTrace = config.enablePhyDlTbTrace;
     g_compactReport = config.compactReport;
     g_printGridAnchorEvents = config.printGridAnchorEvents;
     g_printKpiReports = config.printKpiReports;
@@ -2177,12 +2557,17 @@ main(int argc, char* argv[])
 
     const bool outputDirsReady = EnsureParentDirectoryForFile(g_gridCatalogPath) &&
                                  EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
+                                 EnsureParentDirectoryForFile(cfg.satGroundTrackTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverThroughputTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.handoverEventTracePath) &&
                                  EnsureParentDirectoryForFile(cfg.e2eFlowMetricsPath) &&
                                  EnsureParentDirectoryForFile(cfg.phyDlTbMetricsPath) &&
+                                 EnsureParentDirectoryForFile(cfg.phyDlTbIntervalMetricsPath) &&
+                                 (!cfg.enablePhyDlTbTrace ||
+                                  EnsureParentDirectoryForFile(cfg.phyDlTbTracePath)) &&
                                  EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
-                                 EnsureParentDirectoryForFile(cfg.gridSvgPath);
+                                 EnsureParentDirectoryForFile(cfg.gridSvgPath) &&
+                                 EnsureParentDirectoryForFile(cfg.gridHtmlPath);
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
 
     if (beamformingMode == BeamformingMode::IDEAL_CELL_SCAN ||
@@ -2221,6 +2606,14 @@ main(int argc, char* argv[])
                       << " anchorHexRadius=" << g_anchorGridHexRadiusKm << "km"
                       << " cells=" << g_hexGridCells.size()
                       << " K=" << g_gridNearestK
+                      << " beamExclusion=" << (g_enforceBeamExclusionRing ? "on" : "off")
+                      << " exclusionK=" << GetGridAnchorCandidateCount()
+                      << " realLinkAccessGate=" << (g_enforceBeamCoverageForRealLinks ? "on" : "off")
+                      << " anchorCellGate=" << (g_enforceAnchorCellForRealLinks ? "on" : "off")
+                      << " demandAnchor=" << (g_preferDemandAnchorCells ? "on" : "off")
+                      << " anchorMode=" << ToString(g_anchorSelectionMode)
+                      << " demandSnapshot=" << ToString(g_demandSnapshotMode)
+                      << " earthFixedTarget=" << ToString(g_earthFixedBeamTargetMode)
                       << " switchGuard=" << g_anchorGridSwitchGuardMeters << "m"
                       << " hysteresis=" << g_anchorGridHysteresisSeconds << "s"
                       << std::endl;
@@ -2250,6 +2643,7 @@ main(int argc, char* argv[])
                   << " gnbElem=" << ToString(gnbAntennaElementMode)
                   << " ueElem=" << ToString(ueAntennaElementMode)
                   << " beamforming=" << ToString(beamformingMode)
+                  << " earthFixedTarget=" << ToString(g_earthFixedBeamTargetMode)
                   << " shadowing=" << (cfg.shadowingEnabled ? "on" : "off") << std::endl;
         std::cout << "[Carrier] centralFrequency=" << cfg.centralFrequency / 1e9 << "GHz"
                   << " bandwidth=" << cfg.bandwidth / 1e6 << "MHz"
@@ -2276,14 +2670,25 @@ main(int argc, char* argv[])
                   << " planes=" << cfg.orbitPlaneCount
                   << " ue=" << cfg.ueNum
                   << " raanSpacing=" << cfg.interPlaneRaanSpacingDeg << "deg"
-                  << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s" << std::endl;
+                  << " plane0RaanOffset=" << cfg.plane0RaanOffsetDeg << "deg"
+                  << " planeTimeOffset=" << cfg.interPlaneTimeOffsetSeconds << "s"
+                  << " plane0TimeOffset=" << cfg.plane0TimeOffsetSeconds << "s"
+                  << " overpassGap=" << cfg.overpassGapSeconds << "s"
+                  << " plane1OverpassGap=" << cfg.plane1OverpassGapSeconds << "s"
+                  << std::endl;
         std::cout << "[UE-Layout] type=" << cfg.ueLayoutType;
         if (cfg.ueLayoutType == "seven-cell")
         {
-            std::cout << " groups=center(9)+ring(16 across 6 cells)"
+            std::cout << " groups=center(9)+ring(16 across 6 two-hop cells)"
                       << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
                       << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
                       << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km";
+        }
+        else if (cfg.ueLayoutType == "r2-diagnostic")
+        {
+            std::cout << " window=two-ring(19 hex centers)"
+                      << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
+                      << " baselineReplacement=no";
         }
         else
         {
@@ -2327,6 +2732,7 @@ main(int argc, char* argv[])
         std::cout << std::endl;
         std::cout << "[UserPlane] rlc="
                   << (cfg.forceRlcAmForEpc ? "AM(default override)" : "helper default")
+                  << " scheduler=ofdma-rr"
                   << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
                   << std::endl;
         std::cout << "[Output] dir=" << g_outputDir << std::endl;
@@ -2436,55 +2842,17 @@ main(int argc, char* argv[])
     channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
     channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(cfg.shadowingEnabled));
 
-    // Carrier reuse band creation
-    g_carrierReuseMode = cfg.carrierReuseMode;
-    g_carrierFrequencySpacingHz = cfg.carrierFrequencySpacingHz;
-    g_sameFrequencyHandoverOnly = cfg.sameFrequencyHandoverOnly;
-    g_printCarrierPlan = cfg.printCarrierPlan;
-    g_cellToCarrierGroup.clear();
-    g_interFrequencyHandoverEnabled = cfg.interFrequencyHandoverEnabled;
-    g_printInterFrequencyEvents = cfg.printInterFrequencyEvents;
-
-    // Phase 2: Resolve HO frequency policy
-    // If interFrequencyHandoverEnabled=true, sameFrequencyHandoverOnly should be false
-    if (g_interFrequencyHandoverEnabled)
-    {
-        g_sameFrequencyHandoverOnly = false;
-    }
-
-    const uint32_t carrierGroupCount = GetCarrierGroupCount(cfg.carrierReuseMode);
-
     CcBwpCreator ccBwpCreator;
-    std::vector<OperationBandInfo> bands;
-    bands.reserve(carrierGroupCount);
-
-    for (uint32_t g = 0; g < carrierGroupCount; ++g)
-    {
-        const double freq = ComputeCarrierCenterFrequency(cfg.centralFrequency, g, cfg.carrierFrequencySpacingHz);
-        CcBwpCreator::SimpleOperationBandConf bandConf(freq, cfg.bandwidth, 1);
-        bands.push_back(ccBwpCreator.CreateOperationBandContiguousCc(bandConf));
-    }
-
-    // Create reference wrapper vector for AssignChannelsToBands
-    std::vector<std::reference_wrapper<OperationBandInfo>> bandRefs;
-    bandRefs.reserve(bands.size());
-    for (auto& band : bands)
-    {
-        bandRefs.push_back(std::ref(band));
-    }
+    CcBwpCreator::SimpleOperationBandConf bandConf(cfg.centralFrequency, cfg.bandwidth, 1);
+    OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
+    std::vector<std::reference_wrapper<OperationBandInfo>> bandRefs{std::ref(band)};
     channelHelper->AssignChannelsToBands(bandRefs);
-
-    BandwidthPartInfoPtrVector allBwpsForUe;
-    for (auto& band : bands)
-    {
-        auto bwps = CcBwpCreator::GetAllBwps({band});
-        allBwpsForUe.insert(allBwpsForUe.end(), bwps.begin(), bwps.end());
-    }
+    BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({band});
 
     nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(cfg.gnbTxPower));
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(cfg.ueTxPower));
 
-    nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
+    nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerOfdmaRR"));
     nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
     nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
     nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(effectiveSrsSymbols));
@@ -2497,6 +2865,8 @@ main(int argc, char* argv[])
     nrHelper->SetGnbAntennaAttribute("AntennaElement",
                                      PointerValue(CreateAntennaElement(gnbAntennaElementMode, cfg)));
 
+    EarthFixedGnbBeamforming::SetAnchorResolver(&ResolveEarthFixedGnbAnchorPosition);
+    g_phyDlTbIntervals.clear();
     Ptr<BeamformingHelperBase> beamformingHelper;
     if (useRealisticBeamforming)
     {
@@ -2552,50 +2922,45 @@ main(int argc, char* argv[])
         BuildUePlacements(cfg.ueLatitudeDeg, cfg.ueLongitudeDeg, cfg.ueAltitudeMeters, cfg.ueNum, ueLayout);
     NS_ABORT_MSG_IF(uePlacements.size() != cfg.ueNum, "UE placement count does not match ueNum");
     DumpUeLayoutCsv(cfg.ueLayoutPath, uePlacements);
+    if (g_useWgs84HexGrid && !g_hexGridCells.empty())
+    {
+        RefreshDemandGridSnapshotFromPlacements(uePlacements);
+        if (cfg.startupVerbose)
+        {
+            std::vector<uint32_t> demandGridIds(g_demandGridIds.begin(), g_demandGridIds.end());
+            std::cout << "[UE-Layout] demandGridIds=" << FormatUintList(demandGridIds)
+                      << " demandAnchor=" << (g_preferDemandAnchorCells ? "on" : "off")
+                      << " anchorMode=" << ToString(g_anchorSelectionMode)
+                      << " demandSnapshot=" << ToString(g_demandSnapshotMode)
+                      << std::endl;
+        }
+    }
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
     {
         ueNodes.Get(i)->GetObject<MobilityModel>()->SetPosition(uePlacements[i].groundPoint.ecef);
     }
 
-    // Carrier group-based gNB installation
-    // 关键：必须保证 gNbNetDev.Get(globalSatIdx) 正确映射到对应的卫星设备
-    // 因此按全局索引顺序逐个安装，每个卫星使用其对应 carrier group 的 band
-
     g_satelliteGnbDevices.clear();
     g_satelliteGnbDevices.reserve(cfg.gNbNum);
 
-    // Pre-compute carrier group for each satellite
-    std::vector<uint32_t> satCarrierGroups(cfg.gNbNum);
     std::vector<uint32_t> satellitesPerPlane(cfg.orbitPlaneCount, cfg.gNbNum / cfg.orbitPlaneCount);
     for (uint32_t planeIdx = 0; planeIdx < (cfg.gNbNum % cfg.orbitPlaneCount); ++planeIdx)
     {
         satellitesPerPlane[planeIdx]++;
     }
 
-    uint32_t globalSatIdx = 0;
-    for (uint32_t planeIdx = 0; planeIdx < cfg.orbitPlaneCount; ++planeIdx)
-    {
-        const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
-        for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
-        {
-            satCarrierGroups[globalSatIdx] = ComputeCarrierGroupId(cfg.carrierReuseMode, planeIdx, slotIdx);
-        }
-    }
-
     // 按全局索引顺序安装，保证索引映射正确
     NetDeviceContainer gNbNetDev;
     for (uint32_t satIdx = 0; satIdx < cfg.gNbNum; ++satIdx)
     {
-        const uint32_t groupId = satCarrierGroups[satIdx];
         NodeContainer singleNode;
         singleNode.Add(gNbNodes.Get(satIdx));
-        auto groupBwps = CcBwpCreator::GetAllBwps({bands[groupId]});
-        NetDeviceContainer singleDev = nrHelper->InstallGnbDevice(singleNode, groupBwps);
+        NetDeviceContainer singleDev = nrHelper->InstallGnbDevice(singleNode, allBwps);
         gNbNetDev.Add(singleDev);
         g_satelliteGnbDevices.push_back(DynamicCast<NrGnbNetDevice>(singleDev.Get(0)));
     }
 
-    NetDeviceContainer ueNetDev = nrHelper->InstallUeDevice(ueNodes, allBwpsForUe);
+    NetDeviceContainer ueNetDev = nrHelper->InstallUeDevice(ueNodes, allBwps);
 
     int64_t randomStream = 1;
     randomStream += nrHelper->AssignStreams(gNbNetDev, randomStream);
@@ -2616,16 +2981,15 @@ main(int argc, char* argv[])
 
     // 为每颗卫星绑定轨道、初始位置和初始网格锚点。
     // 注意：satellitesPerPlane 和 globalSatIdx 已在前面 carrier group 计算时定义
-    globalSatIdx = 0;
+    uint32_t globalSatIdx = 0;
     for (uint32_t planeIdx = 0; planeIdx < cfg.orbitPlaneCount; ++planeIdx)
     {
         const uint32_t satsInPlane = satellitesPerPlane[planeIdx];
-        const double planeCenterIndex = (static_cast<double>(satsInPlane) - 1.0) / 2.0;
-        const double planeRaanRad =
-            LeoOrbitCalculator::NormalizeAngle(raanRad +
-                                               LeoOrbitCalculator::DegToRad(cfg.interPlaneRaanSpacingDeg) * planeIdx);
+        const double planeRaanRad = ComputePlaneRaanRad(raanRad,
+                                                        cfg.interPlaneRaanSpacingDeg,
+                                                        cfg.plane0RaanOffsetDeg,
+                                                        planeIdx);
         const double planeRaanDeg = LeoOrbitCalculator::RadToDeg(planeRaanRad);
-        const double planeTimeOffset = cfg.interPlaneTimeOffsetSeconds * planeIdx;
 
         for (uint32_t slotIdx = 0; slotIdx < satsInPlane; ++slotIdx, ++globalSatIdx)
         {
@@ -2633,9 +2997,15 @@ main(int argc, char* argv[])
             auto rrc = dev->GetRrc();
 
             const double overpassTime =
-                cfg.alignmentReferenceTimeSeconds +
-                (static_cast<double>(slotIdx) - planeCenterIndex) * cfg.overpassGapSeconds +
-                cfg.overpassTimeOffsetSeconds + planeTimeOffset;
+                ComputeSatelliteOverpassTime(cfg.alignmentReferenceTimeSeconds,
+                                             cfg.overpassGapSeconds,
+                                             cfg.overpassTimeOffsetSeconds,
+                                             cfg.interPlaneTimeOffsetSeconds,
+                                             cfg.plane0TimeOffsetSeconds,
+                                             cfg.plane1OverpassGapSeconds,
+                                             planeIdx,
+                                             slotIdx,
+                                             satsInPlane);
             LeoOrbitCalculator::KeplerElements orbit;
             orbit.semiMajorAxisMeters = semiMajorAxisMeters;
             orbit.eccentricity = cfg.orbitEccentricity;
@@ -2660,15 +3030,14 @@ main(int argc, char* argv[])
             sat.orbit = orbit;
             sat.orbitPlaneIndex = planeIdx;
             sat.orbitSlotIndex = slotIdx;
-            sat.carrierGroupId = ComputeCarrierGroupId(cfg.carrierReuseMode, planeIdx, slotIdx);
-            sat.carrierCenterFrequencyHz = ComputeCarrierCenterFrequency(cfg.centralFrequency, sat.carrierGroupId, cfg.carrierFrequencySpacingHz);
             sat.cellAnchorEcef = g_cellGroundPoint.ecef;
-
-            g_cellToCarrierGroup[dev->GetCellId()] = sat.carrierGroupId;
 
             if (g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
-                const auto anchor = ComputeGridAnchorSelection(g_hexGridCells, initState.ecef, g_gridNearestK);
+                const auto blockedGridIds = BuildBeamAnchorExclusionSet(std::numeric_limits<uint32_t>::max());
+                const auto anchor = ComputeDemandAwareGridAnchorSelection(initState.ecef,
+                                                                          GetGridAnchorCandidateCount(),
+                                                                          blockedGridIds);
                 if (anchor.found)
                 {
                     sat.currentAnchorGridId = anchor.anchorGridId;
@@ -2701,35 +3070,20 @@ main(int argc, char* argv[])
         }
     }
 
-    // Print carrier reuse plan
-    if (cfg.printCarrierPlan || cfg.startupVerbose)
+    if (cfg.startupVerbose)
     {
-        std::cout << "=== Carrier Reuse Plan ===" << std::endl;
-        std::cout << "carrierReuseMode: " << cfg.carrierReuseMode << std::endl;
-        std::cout << "groupCount: " << carrierGroupCount << std::endl;
-        std::cout << "carrierFrequencySpacing: " << cfg.carrierFrequencySpacingHz / 1e6 << " MHz" << std::endl;
-        std::cout << "sameFrequencyHandoverOnly: " << (g_sameFrequencyHandoverOnly ? "true" : "false") << std::endl;
-        // Phase 2: Print HO frequency policy
-        std::cout << "interFrequencyHandoverEnabled: " << (cfg.interFrequencyHandoverEnabled ? "true" : "false") << std::endl;
-        std::cout << "HO frequency policy: "
-                  << (g_interFrequencyHandoverEnabled ? "INTER-FREQ-ALLOWED" : "INTRA-FREQ-ONLY")
-                  << std::endl;
-        for (uint32_t g = 0; g < carrierGroupCount; ++g)
-        {
-            const double freq = ComputeCarrierCenterFrequency(cfg.centralFrequency, g, cfg.carrierFrequencySpacingHz);
-            std::cout << "Group " << g << ": freq=" << freq / 1e6 << " MHz" << std::endl;
-        }
+        std::cout << "=== Radio Plan ===" << std::endl;
+        std::cout << "operationBand: " << cfg.centralFrequency / 1e6 << " MHz / "
+                  << cfg.bandwidth / 1e6 << " MHz / 1 CC / same-frequency" << std::endl;
         for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
         {
             const auto& sat = g_satellites[satIdx];
             std::cout << "Sat " << satIdx << " plane=" << sat.orbitPlaneIndex
                       << " slot=" << sat.orbitSlotIndex
-                      << " carrierGroup=" << sat.carrierGroupId
-                      << " freq=" << sat.carrierCenterFrequencyHz / 1e6 << " MHz"
                       << " cell=" << sat.dev->GetCellId()
                       << std::endl;
         }
-        std::cout << "============================" << std::endl;
+        std::cout << "==================" << std::endl;
     }
 
     InstallStaticNeighbourRelations();
@@ -2793,11 +3147,17 @@ main(int argc, char* argv[])
                                                              ue.groundPoint,
                                                              cfg.centralFrequency,
                                                              g_minElevationRad);
-            const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
-                                                              ue.groundPoint.ecef,
-                                                              g_satellites[satIdx].cellAnchorEcef,
-                                                              g_beamModelConfig);
+            const auto budget = CalculateEarthFixedBeamBudget(
+                state.ecef,
+                ue.groundPoint.ecef,
+                ResolveSatelliteBeamTargetEcef(satIdx, state.ecef),
+                g_beamModelConfig);
 
+            const bool accessAllowed =
+                !g_enforceBeamCoverageForRealLinks ||
+                (budget.beamLocked &&
+                 budget.offBoresightAngleRad <= g_beamModelConfig.theta3dBRad &&
+                 IsUeInSatelliteAnchorCell(satIdx, ue));
             if (state.elevationRad > bestAnyElevation)
             {
                 bestAnyElevation = state.elevationRad;
@@ -2808,7 +3168,7 @@ main(int argc, char* argv[])
                 bestVisibleElevation = state.elevationRad;
                 bestVisibleIdx = satIdx;
             }
-            if (state.visible && budget.beamLocked && budget.rsrpDbm > bestEligibleRsrp)
+            if (state.visible && accessAllowed && budget.rsrpDbm > bestEligibleRsrp)
             {
                 bestEligibleRsrp = budget.rsrpDbm;
                 bestEligibleIdx = satIdx;
@@ -2825,7 +3185,7 @@ main(int argc, char* argv[])
             if (cfg.startupVerbose)
             {
                 std::cout << "[Setup] warning: ue" << ueIdx
-                          << " visible satellites exist but none satisfy alpha<alphaMax at t=0, "
+                          << " visible satellites exist but none satisfy real-link access gate at t=0, "
                           << "fallback to highest-elevation visible sat" << initialAttachIdx
                           << std::endl;
             }
@@ -2904,6 +3264,10 @@ main(int argc, char* argv[])
     {
         g_satAnchorTrace.close();
     }
+    if (g_satGroundTrackTrace.is_open())
+    {
+        g_satGroundTrackTrace.close();
+    }
     if (g_handoverThroughputTrace.is_open())
     {
         g_handoverThroughputTrace.close();
@@ -2912,12 +3276,23 @@ main(int argc, char* argv[])
     {
         g_handoverEventTrace.close();
     }
+    if (g_phyDlTbTrace.is_open())
+    {
+        g_phyDlTbTrace.close();
+    }
     g_satAnchorTrace.open(cfg.satAnchorTracePath, std::ios::out | std::ios::trunc);
     NS_ABORT_MSG_IF(!g_satAnchorTrace.is_open(),
                     "Failed to open satellite anchor trace CSV: " << cfg.satAnchorTracePath);
     g_satAnchorTrace
         << "time_s,sat,plane,slot,cell,anchor_grid_id,anchor_latitude_deg,anchor_longitude_deg,"
         << "anchor_east_m,anchor_north_m\n";
+    g_satGroundTrackTrace.open(cfg.satGroundTrackTracePath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_IF(!g_satGroundTrackTrace.is_open(),
+                    "Failed to open satellite ground-track CSV: "
+                        << cfg.satGroundTrackTracePath);
+    g_satGroundTrackTrace
+        << "time_s,sat,plane,slot,cell,subpoint_latitude_deg,subpoint_longitude_deg,"
+        << "subpoint_east_m,subpoint_north_m,sat_ecef_x,sat_ecef_y,sat_ecef_z\n";
     g_handoverEventTrace.open(cfg.handoverEventTracePath, std::ios::out | std::ios::trunc);
     NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
                     "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
@@ -2925,6 +3300,15 @@ main(int argc, char* argv[])
         << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,"
         << "ping_pong_detected,failure_reason\n";
     g_handoverEventTrace.flush();
+    if (cfg.enablePhyDlTbTrace)
+    {
+        g_phyDlTbTrace.open(cfg.phyDlTbTracePath, std::ios::out | std::ios::trunc);
+        NS_ABORT_MSG_IF(!g_phyDlTbTrace.is_open(),
+                        "Failed to open PHY DL TB trace CSV: " << cfg.phyDlTbTracePath);
+        g_phyDlTbTrace
+            << "time_s,ue,cell,serving_sat,rnti,bwp,frame,subframe,slot,sym_start,num_sym,"
+            << "tb_size,mcs,rank,rv,rb_assigned,cqi,sinr_db,min_sinr_db,tbler,corrupt\n";
+    }
     if (cfg.enableHandoverThroughputTrace)
     {
         g_handoverThroughputTrace.open(cfg.handoverThroughputTracePath,
@@ -2984,8 +3368,6 @@ main(int argc, char* argv[])
         {
             std::cout << "[Setup] ue" << ueIdx << " start attach=sat" << ue.initialAttachIdx
                       << "(cell=" << g_satellites[ue.initialAttachIdx].dev->GetCellId() << ")"
-                      << " carrierGroup=" << g_satellites[ue.initialAttachIdx].carrierGroupId
-                      << " freq=" << g_satellites[ue.initialAttachIdx].carrierCenterFrequencyHz / 1e6 << "MHz"
                       << " role=" << ue.placementRole
                       << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
                       << ue.northOffsetMeters / 1000.0 << "kmN)"
@@ -3021,6 +3403,8 @@ main(int argc, char* argv[])
                               appDuration,
                               cfg.udpPacketSize);
     const PhyDlTbAggregate phyDlTbAggregate = BuildPhyDlTbAggregate(g_ues);
+    const PhyDlTbIntervalAggregate phyDlTbIntervalAggregate =
+        BuildPhyDlTbIntervalAggregate(g_phyDlTbIntervals, g_phyDlTbIntervalSeconds);
 
     PrintDlTrafficSummary(g_ues, appDuration, cfg.udpPacketSize);
     PrintE2eFlowSummary(e2eAggregate);
@@ -3030,10 +3414,18 @@ main(int argc, char* argv[])
                     "Failed to write E2E flow metrics CSV: " << cfg.e2eFlowMetricsPath);
     NS_ABORT_MSG_IF(!WritePhyDlTbMetricsCsv(cfg.phyDlTbMetricsPath, phyDlTbAggregate),
                     "Failed to write PHY DL TB metrics CSV: " << cfg.phyDlTbMetricsPath);
+    NS_ABORT_MSG_IF(!WritePhyDlTbIntervalMetricsCsv(cfg.phyDlTbIntervalMetricsPath,
+                                                    phyDlTbIntervalAggregate),
+                    "Failed to write PHY DL TB interval metrics CSV: "
+                        << cfg.phyDlTbIntervalMetricsPath);
 
     if (g_satAnchorTrace.is_open())
     {
         g_satAnchorTrace.close();
+    }
+    if (g_satGroundTrackTrace.is_open())
+    {
+        g_satGroundTrackTrace.close();
     }
     if (g_handoverThroughputTrace.is_open())
     {
@@ -3042,6 +3434,10 @@ main(int argc, char* argv[])
     if (g_handoverEventTrace.is_open())
     {
         g_handoverEventTrace.close();
+    }
+    if (g_phyDlTbTrace.is_open())
+    {
+        g_phyDlTbTrace.close();
     }
 
     if (cfg.runGridSvgScript)
@@ -3060,13 +3456,15 @@ main(int argc, char* argv[])
             cmdline << "python3 \"" << cfg.plotHexGridScriptPath << "\""
                     << " --csv \"" << g_gridCatalogPath << "\""
                     << " --sat-anchor-csv \"" << cfg.satAnchorTracePath << "\""
-                    << " --out \"" << cfg.gridSvgPath << "\"";
+                    << " --sat-ground-track-csv \"" << cfg.satGroundTrackTracePath << "\""
+                    << " --out \"" << cfg.gridSvgPath << "\""
+                    << " --html-out \"" << cfg.gridHtmlPath << "\"";
             const int scriptRc = std::system(cmdline.str().c_str());
             if (scriptRc == 0)
             {
                 if (cfg.startupVerbose)
                 {
-                    std::cout << "[GridSvg] SVG generated successfully" << std::endl;
+                    std::cout << "[GridSvg] SVG/HTML generated successfully" << std::endl;
                 }
             }
             else

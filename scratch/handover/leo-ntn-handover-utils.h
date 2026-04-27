@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -59,12 +60,60 @@ struct AutoAlignOrbitResult
 };
 
 /**
+ * 计算指定轨道面的升交点赤经。
+ *
+ * `plane0RaanOffsetDeg` 只作用在 plane 0，用来整体平移该轨道面的地面投影线。
+ */
+inline double
+ComputePlaneRaanRad(double baseRaanRad,
+                    double interPlaneRaanSpacingDeg,
+                    double plane0RaanOffsetDeg,
+                    uint32_t planeIdx)
+{
+    const double plane0OffsetRad =
+        (planeIdx == 0) ? LeoOrbitCalculator::DegToRad(plane0RaanOffsetDeg) : 0.0;
+    return LeoOrbitCalculator::NormalizeAngle(
+        baseRaanRad + plane0OffsetRad +
+        LeoOrbitCalculator::DegToRad(interPlaneRaanSpacingDeg) * static_cast<double>(planeIdx));
+}
+
+/**
+ * 计算单颗卫星在初始轨道相位中使用的目标过境时间。
+ *
+ * `overpassGapSeconds` 是主场景的同轨相邻卫星时间间隔。`plane1OverpassGapSeconds`
+ * 用于在主场景间隔调整后保持 plane 1 的初始诊断几何可复现。
+ */
+inline double
+ComputeSatelliteOverpassTime(double alignmentReferenceTimeSeconds,
+                             double overpassGapSeconds,
+                             double overpassTimeOffsetSeconds,
+                             double interPlaneTimeOffsetSeconds,
+                             double plane0TimeOffsetSeconds,
+                             double plane1OverpassGapSeconds,
+                             uint32_t planeIdx,
+                             uint32_t slotIdx,
+                             uint32_t satsInPlane)
+{
+    const double planeCenterIndex = (static_cast<double>(satsInPlane) - 1.0) / 2.0;
+    const double effectiveOverpassGapSeconds =
+        (planeIdx == 1) ? plane1OverpassGapSeconds : overpassGapSeconds;
+    const double planeTimeOffset =
+        interPlaneTimeOffsetSeconds * static_cast<double>(planeIdx) +
+        ((planeIdx == 0) ? plane0TimeOffsetSeconds : 0.0);
+
+    return alignmentReferenceTimeSeconds +
+           (static_cast<double>(slotIdx) - planeCenterIndex) * effectiveOverpassGapSeconds +
+           overpassTimeOffsetSeconds + planeTimeOffset;
+}
+
+/**
  * 根据卫星当前位置，在六边形网格中选择用于波束锚定的网格单元。
  */
 inline GridAnchorSelection
 ComputeGridAnchorSelection(const std::vector<Wgs84HexGridCell>& cells,
                            const Vector& satEcef,
-                           uint32_t nearestK)
+                           uint32_t nearestK,
+                           const std::set<uint32_t>& blockedGridIds = {})
 {
     GridAnchorSelection out;
     if (cells.empty())
@@ -79,13 +128,16 @@ ComputeGridAnchorSelection(const std::vector<Wgs84HexGridCell>& cells,
         return out;
     }
 
-    out.found = true;
-    out.anchorGridId = cells[nearestIndices.front()].id;
-    out.anchorEcef = cells[nearestIndices.front()].ecef;
     out.nearestGridIds.reserve(nearestIndices.size());
     for (const auto idx : nearestIndices)
     {
         out.nearestGridIds.push_back(cells[idx].id);
+        if (!out.found && blockedGridIds.find(cells[idx].id) == blockedGridIds.end())
+        {
+            out.found = true;
+            out.anchorGridId = cells[idx].id;
+            out.anchorEcef = cells[idx].ecef;
+        }
     }
     return out;
 }

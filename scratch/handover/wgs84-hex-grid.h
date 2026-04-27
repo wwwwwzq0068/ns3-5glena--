@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -81,6 +82,33 @@ Wgs84GeodeticToEcef(double latitudeDeg, double longitudeDeg, double altitudeMete
     const double y = (n + altitudeMeters) * cosLat * sinLon;
     const double z = (n * (1.0 - e2) + altitudeMeters) * sinLat;
     return Vector(x, y, z);
+}
+
+/** 以给定参考地理点为原点，将 ECEF 点转换到局部 ENU。 */
+inline Vector
+Wgs84EcefToEnu(const Vector& pointEcef,
+               double centerLatDeg,
+               double centerLonDeg,
+               double centerAltitudeMeters = 0.0)
+{
+    const Vector centerEcef = Wgs84GeodeticToEcef(centerLatDeg, centerLonDeg, centerAltitudeMeters);
+    const Vector delta(pointEcef.x - centerEcef.x,
+                       pointEcef.y - centerEcef.y,
+                       pointEcef.z - centerEcef.z);
+
+    const double latRad = Wgs84DegToRad(centerLatDeg);
+    const double lonRad = Wgs84DegToRad(centerLonDeg);
+    const double sinLat = std::sin(latRad);
+    const double cosLat = std::cos(latRad);
+    const double sinLon = std::sin(lonRad);
+    const double cosLon = std::cos(lonRad);
+
+    const double east = -sinLon * delta.x + cosLon * delta.y;
+    const double north =
+        -sinLat * cosLon * delta.x - sinLat * sinLon * delta.y + cosLat * delta.z;
+    const double up =
+        cosLat * cosLon * delta.x + cosLat * sinLon * delta.y + sinLat * delta.z;
+    return Vector(east, north, up);
 }
 
 /**
@@ -246,6 +274,103 @@ FindNearestHexCellIndices(const std::vector<Wgs84HexGridCell>& cells, const Vect
         indices.push_back(ranked[i].second);
     }
     return indices;
+}
+
+inline bool
+IsInsidePointyTopHex(double eastMeters, double northMeters, const Wgs84HexGridCell& cell, double hexRadiusMeters)
+{
+    const double localEast = std::abs(eastMeters - cell.eastMeters);
+    const double localNorth = std::abs(northMeters - cell.northMeters);
+    return localNorth <= hexRadiusMeters + 1e-9 &&
+           std::sqrt(3.0) * localEast + localNorth <= 2.0 * hexRadiusMeters + 1e-9;
+}
+
+inline std::pair<double, double>
+ClosestPointOnSegment2d(double px,
+                        double py,
+                        double ax,
+                        double ay,
+                        double bx,
+                        double by)
+{
+    const double abx = bx - ax;
+    const double aby = by - ay;
+    const double apx = px - ax;
+    const double apy = py - ay;
+    const double denom = abx * abx + aby * aby;
+    if (denom <= 1e-12)
+    {
+        return {ax, ay};
+    }
+
+    const double t = std::clamp((apx * abx + apy * aby) / denom, 0.0, 1.0);
+    return {ax + t * abx, ay + t * aby};
+}
+
+inline std::pair<double, double>
+ClampEnuPointToPointyTopHex(double eastMeters,
+                            double northMeters,
+                            const Wgs84HexGridCell& cell,
+                            double hexRadiusMeters)
+{
+    if (IsInsidePointyTopHex(eastMeters, northMeters, cell, hexRadiusMeters))
+    {
+        return {eastMeters, northMeters};
+    }
+
+    const double dx = std::sqrt(3.0) * 0.5 * hexRadiusMeters;
+    const std::pair<double, double> vertices[] = {
+        {cell.eastMeters, cell.northMeters + hexRadiusMeters},
+        {cell.eastMeters + dx, cell.northMeters + 0.5 * hexRadiusMeters},
+        {cell.eastMeters + dx, cell.northMeters - 0.5 * hexRadiusMeters},
+        {cell.eastMeters, cell.northMeters - hexRadiusMeters},
+        {cell.eastMeters - dx, cell.northMeters - 0.5 * hexRadiusMeters},
+        {cell.eastMeters - dx, cell.northMeters + 0.5 * hexRadiusMeters},
+    };
+
+    double bestDistSq = std::numeric_limits<double>::infinity();
+    std::pair<double, double> bestPoint{cell.eastMeters, cell.northMeters};
+    constexpr size_t vertexCount = 6;
+    for (size_t i = 0; i < vertexCount; ++i)
+    {
+        const auto& a = vertices[i];
+        const auto& b = vertices[(i + 1) % vertexCount];
+        const auto candidate =
+            ClosestPointOnSegment2d(eastMeters, northMeters, a.first, a.second, b.first, b.second);
+        const double dxPoint = candidate.first - eastMeters;
+        const double dyPoint = candidate.second - northMeters;
+        const double distSq = dxPoint * dxPoint + dyPoint * dyPoint;
+        if (distSq < bestDistSq)
+        {
+            bestDistSq = distSq;
+            bestPoint = candidate;
+        }
+    }
+
+    // Avoid exact polygon edges to keep nearest-hex resolution numerically stable.
+    const double towardCenterX = cell.eastMeters - bestPoint.first;
+    const double towardCenterY = cell.northMeters - bestPoint.second;
+    const double norm = std::sqrt(towardCenterX * towardCenterX + towardCenterY * towardCenterY);
+    if (norm > 1e-9)
+    {
+        bestPoint.first += towardCenterX / norm * 1e-3;
+        bestPoint.second += towardCenterY / norm * 1e-3;
+    }
+    return bestPoint;
+}
+
+inline Vector
+ClampSurfacePointToHexCellEcef(const Vector& pointEcef,
+                               const Wgs84HexGridCell& cell,
+                               double gridCenterLatDeg,
+                               double gridCenterLonDeg,
+                               double hexRadiusMeters)
+{
+    const Vector enu = Wgs84EcefToEnu(pointEcef, gridCenterLatDeg, gridCenterLonDeg, 0.0);
+    const auto clamped = ClampEnuPointToPointyTopHex(enu.x, enu.y, cell, hexRadiusMeters);
+    const auto latLon =
+        OffsetMetersToLatLonDeg(gridCenterLatDeg, gridCenterLonDeg, clamped.first, clamped.second);
+    return Wgs84GeodeticToEcef(latLon.first, latLon.second, 0.0);
 }
 
 } // namespace ns3

@@ -13,9 +13,11 @@
  */
 
 #include "beam-link-budget.h"
+#include "earth-fixed-beam-target.h"
 #include "leo-ntn-handover-config.h"
 #include "leo-ntn-handover-runtime.h"
 #include "leo-orbit-calculator.h"
+#include "wgs84-hex-grid.h"
 
 #include "ns3/applications-module.h"
 #include "ns3/internet-module.h"
@@ -36,6 +38,7 @@ struct UeScenarioInstallContext
     const std::vector<SatelliteRuntime>& satellites;
     std::vector<UeRuntime>& ues;
     std::map<uint64_t, uint32_t>& imsiToUe;
+    const std::vector<Wgs84HexGridCell>* hexGridCells = nullptr;
     double gmstAtEpochRad = 0.0;
     double minElevationRad = 0.0;
     BeamModelConfig beamModelConfig;
@@ -63,12 +66,39 @@ DisableUeIpv4ForwardingIfRequested(const BaselineSimulationConfig& config, const
     }
 }
 
+inline bool
+IsUeInInitialAnchorCell(const UeScenarioInstallContext& context,
+                        const BaselineSimulationConfig& config,
+                        const UeRuntime& ue,
+                        uint32_t satIdx)
+{
+    const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
+    if (!config.enforceAnchorCellForRealLinks || !RequiresDiscreteAnchorCellGate(beamTargetMode))
+    {
+        return true;
+    }
+    if (context.hexGridCells == nullptr || context.hexGridCells->empty() ||
+        context.satellites[satIdx].currentAnchorGridId == 0)
+    {
+        return false;
+    }
+
+    const auto nearestIndices = FindNearestHexCellIndices(*context.hexGridCells, ue.groundPoint.ecef, 1);
+    if (nearestIndices.empty())
+    {
+        return false;
+    }
+    return (*context.hexGridCells)[nearestIndices.front()].id ==
+           context.satellites[satIdx].currentAnchorGridId;
+}
+
 inline uint32_t
 SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                              const BaselineSimulationConfig& config,
                              const UeRuntime& ue,
                              uint32_t ueIdx)
 {
+    const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
     uint32_t initialAttachIdx = 0;
     uint32_t bestVisibleIdx = 0;
     uint32_t bestAnyIdx = 0;
@@ -85,11 +115,19 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                                                          ue.groundPoint,
                                                          config.centralFrequency,
                                                          context.minElevationRad);
+        const Vector beamTargetEcef = ResolveEarthFixedBeamTarget(state.ecef,
+                                                                  context.satellites[satIdx].cellAnchorEcef,
+                                                                  beamTargetMode);
         const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
                                                           ue.groundPoint.ecef,
-                                                          context.satellites[satIdx].cellAnchorEcef,
+                                                          beamTargetEcef,
                                                           context.beamModelConfig);
 
+        const bool accessAllowed =
+            !config.enforceBeamCoverageForRealLinks ||
+            (budget.beamLocked &&
+             budget.offBoresightAngleRad <= context.beamModelConfig.theta3dBRad &&
+             IsUeInInitialAnchorCell(context, config, ue, satIdx));
         if (state.elevationRad > bestAnyElevation)
         {
             bestAnyElevation = state.elevationRad;
@@ -100,7 +138,7 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
             bestVisibleElevation = state.elevationRad;
             bestVisibleIdx = satIdx;
         }
-        if (state.visible && budget.beamLocked && budget.rsrpDbm > bestEligibleRsrp)
+        if (state.visible && accessAllowed && budget.rsrpDbm > bestEligibleRsrp)
         {
             bestEligibleRsrp = budget.rsrpDbm;
             bestEligibleIdx = satIdx;
@@ -115,7 +153,7 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
     {
         initialAttachIdx = bestVisibleIdx;
         std::cout << "[Setup] warning: ue" << ueIdx
-                  << " visible satellites exist but none satisfy alpha<alphaMax at t=0, "
+                  << " visible satellites exist but none satisfy real-link access gate at t=0, "
                   << "fallback to highest-elevation visible sat" << initialAttachIdx << std::endl;
     }
     else
@@ -125,7 +163,6 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                   << "highest-elevation sat" << initialAttachIdx
                   << " (el=" << LeoOrbitCalculator::RadToDeg(bestAnyElevation) << "deg)" << std::endl;
     }
-
     return initialAttachIdx;
 }
 
