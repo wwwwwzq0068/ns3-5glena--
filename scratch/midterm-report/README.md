@@ -1,24 +1,7 @@
-# Midterm Report Workspace
+# Midterm Archive Note
 
-This folder now keeps only the core midterm write-ups that are still worth
-retaining after the midterm milestone closed.
+This directory was cleared during thesis-mainline cleanup.
 
-Retained files:
-- `midterm-technical-summary.md`: technical summary draft
-- `midterm-handover-flowcharts.md`: handover flowchart notes
-- `midterm-ppt-design.md`: final slide-by-slide PPT production guide
-- `midterm-image-generation-spec.md`: image generation and figure-making instructions for the PPT
-
-Current default scenario focus:
-- `2x4` dual-plane constellation
-- `25 UE` across a seven-cell footprint
-- current baseline control group fixed as `B00`
-- UE layout generation is now organized as local offset templates plus a unified geographic conversion step
-- optional anchor-smoothing experiments may decouple the Earth-fixed anchor-grid resolution from the UE seven-cell layout radius, but this does not replace the default `B00` baseline wording
-- Current slide and figure materials are aligned with the measurement-driven baseline / improved snapshot at `research-v4.2`
-
-Cleanup note:
-- Derived figures, draft assets, scripts, tables, and speaking notes were removed
-  after the midterm phase to keep `scratch/` focused on the thesis mainline.
-
-Use this directory only as a lightweight archive of the midterm narrative.
+- Midterm-only writeups, figure plans, and PPT materials were removed.
+- The active research baseline now lives in `scratch/README.md`, `scratch/baseline-definition.md`, and `docs/current-task-memory.md`.
+- `r2-diagnostic` remains part of the active codebase, but it is a diagnosis path, not the formal baseline.

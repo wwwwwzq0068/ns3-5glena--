@@ -87,12 +87,6 @@ struct SatelliteRuntime
     /** 当前卫星在所属轨道面内的序号。 */
     uint32_t orbitSlotIndex = 0;
 
-    /** 当前卫星所属的载波复用组编号。 */
-    uint32_t carrierGroupId = 0;
-
-    /** 当前卫星使用的载波中心频率，单位 Hz。 */
-    double carrierCenterFrequencyHz = 0.0;
-
     /** 当前卫星波束所指向的小区锚点 ECEF 坐标。 */
     Vector cellAnchorEcef;
 
@@ -462,13 +456,14 @@ BuildSevenCellUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
 
     const double dx = std::sqrt(3.0) * layout.hexCellRadiusMeters;
     const double dy = 1.5 * layout.hexCellRadiusMeters;
+    // 外围 UE 放在二跳环上，让中心小区和外围 UE 之间保留一圈空白邻区。
     const std::vector<std::pair<double, double>> ringCellCenters = {
-        {-dx, 0.0},
-        {-0.5 * dx, dy},
-        {0.5 * dx, dy},
-        {dx, 0.0},
-        {0.5 * dx, -dy},
-        {-0.5 * dx, -dy},
+        {-2.0 * dx, 0.0},
+        {-dx, 2.0 * dy},
+        {dx, 2.0 * dy},
+        {2.0 * dx, 0.0},
+        {dx, -2.0 * dy},
+        {-dx, -2.0 * dy},
     };
     const std::vector<uint32_t> ringUeCounts = {3, 3, 3, 3, 2, 2};
 
@@ -508,6 +503,40 @@ BuildSevenCellUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
                                centerEastMeters - tangentialOffsetMeters * tangentEast,
                                centerNorthMeters - tangentialOffsetMeters * tangentNorth,
                                "ring");
+        }
+    }
+
+    return specs;
+}
+
+inline std::vector<UePlacementOffsetSpec>
+BuildR2DiagnosticUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
+{
+    std::vector<UePlacementOffsetSpec> specs;
+    NS_ABORT_MSG_IF(ueNum != 19, "r2-diagnostic layout currently requires ueNum == 19");
+    specs.reserve(ueNum);
+
+    const double hexRadius = layout.hexCellRadiusMeters;
+    const double dx = std::sqrt(3.0) * hexRadius;
+    const double dy = 1.5 * hexRadius;
+
+    for (int r = -2; r <= 2; ++r)
+    {
+        for (int q = -2; q <= 2; ++q)
+        {
+            const int s = -q - r;
+            const int ringDistance = std::max({std::abs(q), std::abs(r), std::abs(s)});
+            if (ringDistance > 2)
+            {
+                continue;
+            }
+
+            const double eastMeters = dx * (static_cast<double>(q) + 0.5 * static_cast<double>(r));
+            const double northMeters = dy * static_cast<double>(r);
+            const std::string role = ringDistance == 0 ? "r2-center"
+                                     : ringDistance == 1 ? "r2-ring1"
+                                                         : "r2-ring2";
+            AppendUeOffsetSpec(specs, eastMeters, northMeters, role);
         }
     }
 
@@ -556,6 +585,10 @@ BuildUePlacements(double baseLatitudeDeg,
     if (layout.layoutType == "seven-cell")
     {
         offsetSpecs = BuildSevenCellUeOffsetSpecs(ueNum, layout);
+    }
+    else if (layout.layoutType == "r2-diagnostic")
+    {
+        offsetSpecs = BuildR2DiagnosticUeOffsetSpecs(ueNum, layout);
     }
     else
     {

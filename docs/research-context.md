@@ -15,11 +15,18 @@
 - Signal-only decisions can ignore load imbalance across beams or satellites.
 
 ## Research Goals
+- Current close-out priorities for the thesis are:
+  - lower `E2E delay`
+  - lower `packet loss rate`
+  - more stable `SINR`
+  - fewer unnecessary handovers and lower `ping-pong`
+  - better `load balance`
 - Improve handover success rate.
 - Reduce unnecessary handovers and ping-pong behavior.
 - Maintain throughput continuity during serving satellite changes.
 - Keep handover delay and service interruption low.
 - Incorporate load-aware target selection rather than leaving it as an optional extension, because the thesis task explicitly requires considering both signal quality and satellite load.
+- `PHY DL TB error / TBler` and detailed antenna or beam tuning are now background diagnostics only; they are not the primary optimization target unless needed to explain `SINR`, delay, or loss.
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
@@ -30,13 +37,16 @@
 - Compare the improved strategy against the baseline handover method in the same scenario.
 
 ## Default Evaluation Metrics
+- `E2E delay`
+- `packet loss rate`
+- `mean/min SINR`
 - handover success rate
 - handover delay
 - throughput
 - service continuity
 - ping-pong count
+- load balance
 - signaling overhead
-- load balance, if modeled
 
 ## Default Files To Inspect
 - `scratch/leo-ntn-handover-baseline.cc`
