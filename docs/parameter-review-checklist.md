@@ -25,9 +25,9 @@
 当前代码已经不再统计“吞吐恢复时间”。后续分析业务连续性时，建议优先看下面这些量：
 
 - `HO_START / HO_END_OK / HO_END_ERROR / unresolved`
-- `delay_ms`
 - `packet loss rate`
 - `Average E2E delay`
+- `throughput`
 - `ping-pong`
 - 目标星 `loadScore`
 - 目标星 `remainingVisibility`
@@ -37,13 +37,10 @@
 1. 先看切换是否成功闭环  
    如果 `HO_END_ERROR` 或 `unresolved` 多，先怀疑执行链和目标稳定性。
 
-2. 再看执行时延 `delay_ms`  
-   如果成功切换很多，但 `delay_ms` 普遍偏大，说明切换准备链本身就慢。
-
-3. 再看 `packet loss rate` 和 `Average E2E delay`  
+2. 再看 `packet loss rate`、`Average E2E delay` 和 `throughput`  
    如果 `HO_END_OK` 很快，但丢包和时延仍明显恶化，更可能是切后几何、负载或业务起停口径的问题。
 
-4. 最后结合 `loadScore` 与 `remainingVisibility` 做归因  
+3. 最后结合 `loadScore` 与 `remainingVisibility` 做归因  
    如果目标星切后更拥塞、剩余可见时间更短，那么更合理的结论通常是“目标不够稳”，而不是“切换执行链本身一定有问题”。
 
 当前这套框架更适合和现在的结果导出接口保持一致，也更方便和 `e2e_flow_metrics.csv`、`handover_event_trace.csv` 直接对齐。

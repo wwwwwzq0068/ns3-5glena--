@@ -1,8 +1,12 @@
 # poisson-3ring UE Layout Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> 执行调整：当前研究文档要求正式 baseline 继续保持 `seven-cell`，因此本计划中
+> “replace seven-cell baseline / change default ueLayoutType / update baseline defaults”的步骤暂不执行。
+> 当前实现目标调整为新增可选 `ueLayoutType=poisson-3ring`，默认场景口径保持不变。
 
-**Goal:** Replace seven-cell baseline with poisson-3ring layout: 19 hex cells with truncated Poisson UE distribution.
+**Goal:** Add an optional poisson-3ring layout: 19 hex cells with truncated Poisson UE distribution, while keeping seven-cell as the formal baseline default.
 
 **Architecture:** Add new UE layout type "poisson-3ring" using truncated Poisson(λ=1.5) per cell, capped at 5 UE/cell. UE positions randomly placed within hex boundaries.
 

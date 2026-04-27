@@ -14,6 +14,7 @@ struct BaselineTraceOutputSet
 {
     std::ofstream* satAnchorTrace = nullptr;
     std::ofstream* satGroundTrackTrace = nullptr;
+    std::ofstream* satelliteStateTrace = nullptr;
     std::ofstream* handoverThroughputTrace = nullptr;
     std::ofstream* handoverEventTrace = nullptr;
     std::ofstream* phyDlTbTrace = nullptr;
@@ -25,23 +26,56 @@ InitializeBaselineTraceOutputs(const BaselineSimulationConfig& config,
 {
     NS_ABORT_MSG_IF(outputs.satAnchorTrace == nullptr ||
                         outputs.satGroundTrackTrace == nullptr ||
+                        outputs.satelliteStateTrace == nullptr ||
                         outputs.handoverThroughputTrace == nullptr ||
                         outputs.handoverEventTrace == nullptr ||
                         outputs.phyDlTbTrace == nullptr,
                     "BaselineTraceOutputSet contains null stream pointers");
 
-    const bool satAnchorReady = ResetCsvOutputStream(*outputs.satAnchorTrace,
-                                                     config.satAnchorTracePath,
-                                                     HandoverCsvHeaders::kSatAnchorTrace);
-    NS_ABORT_MSG_IF(!satAnchorReady,
-                    "Failed to open satellite anchor trace CSV: " << config.satAnchorTracePath);
-    const bool satGroundReady =
-        ResetCsvOutputStream(*outputs.satGroundTrackTrace,
-                             config.satGroundTrackTracePath,
-                             HandoverCsvHeaders::kSatGroundTrackTrace);
-    NS_ABORT_MSG_IF(!satGroundReady,
-                    "Failed to open satellite ground-track CSV: "
-                        << config.satGroundTrackTracePath);
+    if (config.enableSatAnchorTrace)
+    {
+        const bool satAnchorReady = ResetCsvOutputStream(*outputs.satAnchorTrace,
+                                                         config.satAnchorTracePath,
+                                                         HandoverCsvHeaders::kSatAnchorTrace);
+        NS_ABORT_MSG_IF(!satAnchorReady,
+                        "Failed to open satellite anchor trace CSV: "
+                            << config.satAnchorTracePath);
+    }
+    else
+    {
+        CloseOutputStream(*outputs.satAnchorTrace);
+    }
+
+    if (config.enableSatGroundTrackTrace)
+    {
+        const bool satGroundReady =
+            ResetCsvOutputStream(*outputs.satGroundTrackTrace,
+                                 config.satGroundTrackTracePath,
+                                 HandoverCsvHeaders::kSatGroundTrackTrace);
+        NS_ABORT_MSG_IF(!satGroundReady,
+                        "Failed to open satellite ground-track CSV: "
+                            << config.satGroundTrackTracePath);
+    }
+    else
+    {
+        CloseOutputStream(*outputs.satGroundTrackTrace);
+    }
+
+    if (config.enableSatelliteStateTrace)
+    {
+        const bool satelliteStateReady =
+            ResetCsvOutputStream(*outputs.satelliteStateTrace,
+                                 config.satelliteStateTracePath,
+                                 HandoverCsvHeaders::kSatelliteStateTrace);
+        NS_ABORT_MSG_IF(!satelliteStateReady,
+                        "Failed to open satellite state trace CSV: "
+                            << config.satelliteStateTracePath);
+    }
+    else
+    {
+        CloseOutputStream(*outputs.satelliteStateTrace);
+    }
+
     const bool handoverEventReady = ResetCsvOutputStream(*outputs.handoverEventTrace,
                                                          config.handoverEventTracePath,
                                                          HandoverCsvHeaders::kHandoverEventTrace);
@@ -84,6 +118,7 @@ CloseBaselineTraceOutputs(const BaselineTraceOutputSet& outputs)
 {
     NS_ABORT_MSG_IF(outputs.satAnchorTrace == nullptr ||
                         outputs.satGroundTrackTrace == nullptr ||
+                        outputs.satelliteStateTrace == nullptr ||
                         outputs.handoverThroughputTrace == nullptr ||
                         outputs.handoverEventTrace == nullptr ||
                         outputs.phyDlTbTrace == nullptr,
@@ -91,6 +126,7 @@ CloseBaselineTraceOutputs(const BaselineTraceOutputSet& outputs)
 
     CloseOutputStreams(*outputs.satAnchorTrace,
                        *outputs.satGroundTrackTrace,
+                       *outputs.satelliteStateTrace,
                        *outputs.handoverThroughputTrace,
                        *outputs.handoverEventTrace,
                        *outputs.phyDlTbTrace);

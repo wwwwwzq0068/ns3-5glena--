@@ -3,9 +3,12 @@
 `scratch/results/` is a Git-ignored staging area. Keep only outputs that still support the thesis mainline comparison on:
 - `E2E delay`
 - `packet loss rate`
-- `SINR`
+- `throughput`
+- `completed handovers`
 - `ping-pong`
-- `load balance`
+- `load balance` via Jain fairness
+
+Formal result runs should retain the per-run KPI traces, `satellite_state_trace.csv`, and the HTML/trajectory files needed for thesis scenario figures. PHY/SINR/TBler files are diagnostic only and are not retained as formal thesis outputs by default.
 
 Retain by default:
 - `exp/v4.2/B00-baseline-b00-control/`

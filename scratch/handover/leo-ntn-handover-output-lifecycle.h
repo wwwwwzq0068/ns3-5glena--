@@ -19,6 +19,9 @@ inline constexpr std::string_view kSatAnchorTrace =
 inline constexpr std::string_view kSatGroundTrackTrace =
     "time_s,sat,plane,slot,cell,subpoint_latitude_deg,subpoint_longitude_deg,"
     "subpoint_east_m,subpoint_north_m,sat_ecef_x,sat_ecef_y,sat_ecef_z\n";
+inline constexpr std::string_view kSatelliteStateTrace =
+    "time_s,sat,plane,slot,cell,anchor_grid_id,attached_ue_count,"
+    "offered_packet_rate,load_score,admission_allowed\n";
 inline constexpr std::string_view kHandoverEventTrace =
     "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,"
     "ping_pong_detected,failure_reason\n";
