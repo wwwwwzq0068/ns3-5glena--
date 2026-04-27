@@ -14,6 +14,8 @@
  * 本文件不负责保存运行时状态，也不直接承担最终统计输出。
  */
 
+#include "beam-link-budget.h"
+#include "leo-ntn-handover-output-lifecycle.h"
 #include "leo-orbit-calculator.h"
 #include "ns3/core-module.h"
 #include "wgs84-hex-grid.h"
@@ -230,20 +232,19 @@ AutoAlignOrbitToUe(double centerOverpassSeconds,
 inline void
 DumpHexGridCatalog(const std::string& path, const std::vector<Wgs84HexGridCell>& cells)
 {
-    std::ofstream out(path);
-    if (!out.is_open())
+    const bool written = WriteCsvFile(path, HandoverCsvHeaders::kHexGridCatalog, [&](std::ofstream& out) {
+        out << std::fixed << std::setprecision(8);
+        for (const auto& c : cells)
+        {
+            out << c.id << "," << c.latitudeDeg << "," << c.longitudeDeg << "," << c.altitudeMeters
+                << "," << c.eastMeters << "," << c.northMeters << "," << c.ecef.x << ","
+                << c.ecef.y << "," << c.ecef.z << "\n";
+        }
+    });
+    if (!written)
     {
         std::cout << "[Grid] warning: failed to open catalog file: " << path << std::endl;
         return;
-    }
-
-    out << "id,latitude_deg,longitude_deg,altitude_m,east_m,north_m,ecef_x,ecef_y,ecef_z\n";
-    out << std::fixed << std::setprecision(8);
-    for (const auto& c : cells)
-    {
-        out << c.id << "," << c.latitudeDeg << "," << c.longitudeDeg << "," << c.altitudeMeters << ","
-            << c.eastMeters << "," << c.northMeters << "," << c.ecef.x << "," << c.ecef.y << ","
-            << c.ecef.z << "\n";
     }
 }
 
@@ -280,16 +281,7 @@ FindHexGridCellById(const std::vector<Wgs84HexGridCell>& cells, uint32_t id)
 inline bool
 EnsureParentDirectoryForFile(const std::string& filePath)
 {
-    const std::filesystem::path path(filePath);
-    const std::filesystem::path parent = path.parent_path();
-    if (parent.empty())
-    {
-        return true;
-    }
-
-    std::error_code ec;
-    std::filesystem::create_directories(parent, ec);
-    return !ec;
+    return EnsureOutputParentDirectoryForFile(filePath);
 }
 
 /**

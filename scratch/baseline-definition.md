@@ -110,7 +110,7 @@
 - 当前固定 `NR` 下行调度器：`ofdma-rr`
 
 说明：
-- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v5.0`
+- 这套参数代表当前工作区的默认 baseline 口径；最近已发布稳定节点为 `research-v5.1`
 - 当前后续一段时间不再通过继续扩星来放大现象，而是固定当前 `2x4` 双轨、`25 UE`、`seven-cell` 场景
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认布局为：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个二跳小区共 `16 UE`，中间一圈相邻小区不放置 `UE`
@@ -123,10 +123,10 @@
 - 若需回到旧口径，可显式设置 `anchorSelectionMode=demand-nearest` 与 `demandSnapshotMode=static-layout`
 - 当前实现仍允许给锚点切换增加距离优势与持续领先门控；若要做不带排他的旧口径对照，可显式关闭 `enforceBeamExclusionRing`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
-- 当前稳定默认真实 NR PHY 为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 12x12`、`UE 1x2`，该口径自 `v4.3` 起引入，当前 `research-v5.0` 继续沿用
+- 当前稳定默认真实 NR PHY 为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 12x12`、`UE 1x2`，该口径自 `v4.3` 起引入，当前 `research-v5.1` 继续沿用
 - 当前默认 `earthFixedBeamTargetMode=grid-anchor`：真实 gNB 发射波束锁到当前卫星已分配的唯一合法 anchor hex 中心，不跟随单个 `UE`；`anchorCell` gate 默认参与真实接入/切换候选过滤
 - 当前默认 `b00BeamwidthDeg=4.0` 已按真实 PHY 总方向图收紧，并配合 `gNB 12x12 UPA + b00-custom + ideal-earth-fixed` 进一步提高发射端空间定向性，使默认口径更接近当前 hex 小区尺度
-- 几何参数 `beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb` 主要用于几何链路预算与观测口径，不代表当前稳定 PHY 默认天线的真实阵元参数
+- 几何波束参数现在从真实 PHY 默认口径自动推导：`gMax0Dbi = b00MaxGainDb + 10*log10(gnbAntennaRows * gnbAntennaColumns)`，`theta3dBRad = DegToRad(b00BeamwidthDeg)`，`slaVDb = b00MaxAttenuationDb`
 - 当前所有卫星默认共享同一个 `2 GHz / 40 MHz / 1 CC` operation band，因此若需要验证高 `PHY DL TB error rate` 是否主要来自同频干扰，应优先从当前 same-frequency 场景内解释。旧的 carrier-reuse / inter-frequency 诊断入口已经从活动工作区移除。
 - 当前代码已额外开放 `gnbAntennaElement`、`ueAntennaElement`、`beamformingMode` 与 `earthFixedBeamTargetMode` 作为诊断参数；默认真实接入/切换候选同时要求落在当前主覆盖与 anchor hex cell 约束内，`nadir-continuous` 保留为旧口径对照
 - 当前稳定默认已切换为定向天线口径；历史 `isotropic` 仍可通过命令行参数切换，供 `LEGACY-ISO` 对照与诊断使用

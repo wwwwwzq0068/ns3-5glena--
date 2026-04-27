@@ -1,6 +1,7 @@
 #include "handover/beam-link-budget.h"
 #include "handover/leo-ntn-handover-config.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -15,6 +16,17 @@ Require(bool condition, const char* message)
     if (!condition)
     {
         std::cerr << "[TEST-FAIL] " << message << std::endl;
+        std::exit(1);
+    }
+}
+
+void
+RequireNear(double actual, double expected, double tolerance, const char* message)
+{
+    if (std::abs(actual - expected) > tolerance)
+    {
+        std::cerr << "[TEST-FAIL] " << message << " actual=" << actual
+                  << " expected=" << expected << std::endl;
         std::exit(1);
     }
 }
@@ -36,6 +48,44 @@ main()
             "baseline default should use K=64 beam exclusion search");
     Require(config.gnbAntennaRows == 12 && config.gnbAntennaColumns == 12,
             "baseline default should use a 12x12 gNB array");
+
+    const BeamModelConfig defaultBeamConfig = DeriveBeamModelConfig(config);
+    const double defaultArrayGainDb =
+        10.0 * std::log10(config.gnbAntennaRows * config.gnbAntennaColumns);
+    RequireNear(defaultBeamConfig.gMax0Dbi,
+                config.b00MaxGainDb + defaultArrayGainDb,
+                1e-9,
+                "geometric peak gain should derive from b00 gain plus gNB array gain");
+    RequireNear(defaultBeamConfig.theta3dBRad,
+                LeoOrbitCalculator::DegToRad(config.b00BeamwidthDeg),
+                1e-12,
+                "geometric beamwidth should derive from b00 beamwidth");
+    RequireNear(defaultBeamConfig.slaVDb,
+                config.b00MaxAttenuationDb,
+                1e-12,
+                "geometric sidelobe attenuation should derive from b00 attenuation");
+
+    BaselineSimulationConfig customConfig = config;
+    customConfig.gnbAntennaRows = 4;
+    customConfig.gnbAntennaColumns = 8;
+    customConfig.b00MaxGainDb = 17.5;
+    customConfig.b00BeamwidthDeg = 6.0;
+    customConfig.b00MaxAttenuationDb = 24.0;
+    const BeamModelConfig customBeamConfig = DeriveBeamModelConfig(customConfig);
+    const double customArrayGainDb =
+        10.0 * std::log10(customConfig.gnbAntennaRows * customConfig.gnbAntennaColumns);
+    RequireNear(customBeamConfig.gMax0Dbi,
+                customConfig.b00MaxGainDb + customArrayGainDb,
+                1e-9,
+                "geometric peak gain should track changed PHY antenna dimensions");
+    RequireNear(customBeamConfig.theta3dBRad,
+                LeoOrbitCalculator::DegToRad(customConfig.b00BeamwidthDeg),
+                1e-12,
+                "geometric beamwidth should track changed b00 beamwidth");
+    RequireNear(customBeamConfig.slaVDb,
+                customConfig.b00MaxAttenuationDb,
+                1e-12,
+                "geometric attenuation should track changed b00 attenuation");
 
     std::cout << "[TEST-PASS] baseline defaults are aligned with the current best reuse1 profile"
               << std::endl;

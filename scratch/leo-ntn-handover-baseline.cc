@@ -11,9 +11,13 @@
 #include "ns3/nr-ue-rrc.h"
 #include "handover/beam-link-budget.h"
 #include "handover/leo-ntn-handover-config.h"
+#include "handover/leo-ntn-handover-decision.h"
+#include "handover/leo-ntn-handover-output.h"
+#include "handover/leo-ntn-handover-radio.h"
 #include "handover/leo-orbit-calculator.h"
 #include "handover/leo-ntn-handover-reporting.h"
 #include "handover/leo-ntn-handover-runtime.h"
+#include "handover/leo-ntn-handover-scenario.h"
 #include "handover/leo-ntn-handover-update.h"
 #include "handover/b00-equivalent-antenna-model.h"
 #include "handover/earth-fixed-beam-target.h"
@@ -142,15 +146,6 @@ static double g_hoHysteresisDb = 2.0;
 // 将 A->B->A 识别为 ping-pong 的时间窗口。
 static double g_pingPongWindowSeconds = 1.5;
 
-// 当前 handover 主链统一走标准 PHY/RRC MeasurementReport。
-enum class HandoverMode
-{
-    BASELINE,
-    IMPROVED,
-};
-
-static HandoverMode g_handoverMode = HandoverMode::BASELINE;
-
 enum class AnchorSelectionMode
 {
     DEMAND_NEAREST,
@@ -166,29 +161,36 @@ enum class DemandSnapshotMode
 };
 
 static DemandSnapshotMode g_demandSnapshotMode = DemandSnapshotMode::RUNTIME_UNDERSERVED_UE;
-static double g_improvedSignalWeight = 0.7;
-static double g_improvedRsrqWeight = 0.3;
-static double g_improvedLoadWeight = 0.3;
-static double g_improvedVisibilityWeight = 0.2;
-static double g_improvedMinLoadScoreDelta = 0.2;
-static double g_improvedMaxSignalGapDb = 3.0;
-static double g_improvedMinStableLeadTimeSeconds = 0.12;
-static double g_improvedMinVisibilitySeconds = 1.0;
-static double g_improvedVisibilityHorizonSeconds = 8.0;
-static double g_improvedVisibilityPredictionStepSeconds = 0.5;
-static double g_improvedMinJointScoreMargin = 0.03;
-static double g_improvedMinCandidateRsrpDbm = -110.0;
-static double g_improvedMinCandidateRsrqDb = -17.0;
-static double g_improvedServingWeakRsrpDbm = -108.0;
-static double g_improvedServingWeakRsrqDb = -15.0;
-static double g_improvedMinRsrqAdvantageDb = 0.0;
-static bool g_improvedEnableCrossLayerPhyAssist = false;
-static double g_improvedCrossLayerPhyAlpha = 0.02;
-static double g_improvedCrossLayerTblerThreshold = 0.48;
-static double g_improvedCrossLayerSinrThresholdDb = -5.0;
-static uint32_t g_improvedCrossLayerMinSamples = 50;
-static uint16_t g_measurementReportIntervalMs = 120;
-static uint8_t g_measurementMaxReportCells = 8;
+
+struct MeasurementDrivenHandoverConfig
+{
+    HandoverMode handoverMode = HandoverMode::BASELINE;
+    double improvedSignalWeight = 0.7;
+    double improvedRsrqWeight = 0.3;
+    double improvedLoadWeight = 0.3;
+    double improvedVisibilityWeight = 0.2;
+    double improvedMinLoadScoreDelta = 0.2;
+    double improvedMaxSignalGapDb = 3.0;
+    double improvedMinStableLeadTimeSeconds = 0.12;
+    double improvedMinVisibilitySeconds = 1.0;
+    double improvedVisibilityHorizonSeconds = 8.0;
+    double improvedVisibilityPredictionStepSeconds = 0.5;
+    double improvedMinJointScoreMargin = 0.03;
+    double improvedMinCandidateRsrpDbm = -110.0;
+    double improvedMinCandidateRsrqDb = -17.0;
+    double improvedServingWeakRsrpDbm = -108.0;
+    double improvedServingWeakRsrqDb = -15.0;
+    double improvedMinRsrqAdvantageDb = 0.0;
+    bool improvedEnableCrossLayerPhyAssist = false;
+    double improvedCrossLayerPhyAlpha = 0.02;
+    double improvedCrossLayerTblerThreshold = 0.48;
+    double improvedCrossLayerSinrThresholdDb = -5.0;
+    uint32_t improvedCrossLayerMinSamples = 50;
+    uint16_t measurementReportIntervalMs = 120;
+    uint8_t measurementMaxReportCells = 8;
+};
+
+static MeasurementDrivenHandoverConfig g_measurementDrivenConfig;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
 
 // 逐时刻卫星波束锚点导出文件。
@@ -949,22 +951,6 @@ ResolveSatelliteIndexFromCellId(uint16_t cellId)
     return static_cast<int32_t>(it->second);
 }
 
-static HandoverMode
-ParseHandoverMode(const std::string& handoverMode)
-{
-    if (handoverMode == "improved")
-    {
-        return HandoverMode::IMPROVED;
-    }
-    return HandoverMode::BASELINE;
-}
-
-static const char*
-ToString(HandoverMode handoverMode)
-{
-    return handoverMode == HandoverMode::IMPROVED ? "improved" : "baseline";
-}
-
 static AnchorSelectionMode
 ParseAnchorSelectionMode(const std::string& anchorSelectionMode)
 {
@@ -1000,144 +986,6 @@ ToString(DemandSnapshotMode demandSnapshotMode)
                                                                      : "runtime-underserved-ue";
 }
 
-enum class AntennaElementMode
-{
-    ISOTROPIC,
-    THREE_GPP,
-    B00_CUSTOM,
-};
-
-static AntennaElementMode
-ParseAntennaElementMode(const std::string& mode)
-{
-    if (mode == "three-gpp")
-    {
-        return AntennaElementMode::THREE_GPP;
-    }
-    if (mode == "b00-custom")
-    {
-        return AntennaElementMode::B00_CUSTOM;
-    }
-    return AntennaElementMode::ISOTROPIC;
-}
-
-static const char*
-ToString(AntennaElementMode mode)
-{
-    if (mode == AntennaElementMode::THREE_GPP)
-    {
-        return "three-gpp";
-    }
-    if (mode == AntennaElementMode::B00_CUSTOM)
-    {
-        return "b00-custom";
-    }
-    return "isotropic";
-}
-
-static Ptr<AntennaModel>
-CreateAntennaElement(AntennaElementMode mode, const BaselineSimulationConfig& cfg)
-{
-    if (mode == AntennaElementMode::THREE_GPP)
-    {
-        return CreateObject<ThreeGppAntennaModel>();
-    }
-    if (mode == AntennaElementMode::B00_CUSTOM)
-    {
-        Ptr<B00EquivalentAntennaModel> model = CreateObject<B00EquivalentAntennaModel>();
-        model->SetMaxGainDb(cfg.b00MaxGainDb);
-        model->SetBeamwidthDeg(cfg.b00BeamwidthDeg);
-        model->SetMaxAttenuationDb(cfg.b00MaxAttenuationDb);
-        return model;
-    }
-    return CreateObject<IsotropicAntennaModel>();
-}
-
-enum class BeamformingMode
-{
-    IDEAL_DIRECT_PATH,
-    IDEAL_EARTH_FIXED,
-    IDEAL_CELL_SCAN,
-    IDEAL_DIRECT_PATH_QUASI_OMNI,
-    IDEAL_CELL_SCAN_QUASI_OMNI,
-    IDEAL_QUASI_OMNI_DIRECT_PATH,
-    REALISTIC,
-};
-
-static BeamformingMode
-ParseBeamformingMode(const std::string& mode)
-{
-    if (mode == "ideal-earth-fixed")
-    {
-        return BeamformingMode::IDEAL_EARTH_FIXED;
-    }
-    if (mode == "ideal-cell-scan")
-    {
-        return BeamformingMode::IDEAL_CELL_SCAN;
-    }
-    if (mode == "ideal-direct-path-quasi-omni")
-    {
-        return BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI;
-    }
-    if (mode == "ideal-cell-scan-quasi-omni")
-    {
-        return BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI;
-    }
-    if (mode == "ideal-quasi-omni-direct-path")
-    {
-        return BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH;
-    }
-    if (mode == "realistic")
-    {
-        return BeamformingMode::REALISTIC;
-    }
-    return BeamformingMode::IDEAL_DIRECT_PATH;
-}
-
-static const char*
-ToString(BeamformingMode mode)
-{
-    switch (mode)
-    {
-    case BeamformingMode::IDEAL_EARTH_FIXED:
-        return "ideal-earth-fixed";
-    case BeamformingMode::IDEAL_CELL_SCAN:
-        return "ideal-cell-scan";
-    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
-        return "ideal-direct-path-quasi-omni";
-    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
-        return "ideal-cell-scan-quasi-omni";
-    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
-        return "ideal-quasi-omni-direct-path";
-    case BeamformingMode::REALISTIC:
-        return "realistic";
-    case BeamformingMode::IDEAL_DIRECT_PATH:
-    default:
-        return "ideal-direct-path";
-    }
-}
-
-static TypeId
-GetIdealBeamformingMethodTypeId(BeamformingMode mode)
-{
-    switch (mode)
-    {
-    case BeamformingMode::IDEAL_EARTH_FIXED:
-        return EarthFixedGnbBeamforming::GetTypeId();
-    case BeamformingMode::IDEAL_CELL_SCAN:
-        return CellScanBeamforming::GetTypeId();
-    case BeamformingMode::IDEAL_DIRECT_PATH_QUASI_OMNI:
-        return DirectPathQuasiOmniBeamforming::GetTypeId();
-    case BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI:
-        return CellScanQuasiOmniBeamforming::GetTypeId();
-    case BeamformingMode::IDEAL_QUASI_OMNI_DIRECT_PATH:
-        return QuasiOmniDirectPathBeamforming::GetTypeId();
-    case BeamformingMode::IDEAL_DIRECT_PATH:
-    default:
-        return DirectPathBeamforming::GetTypeId();
-    }
-}
-
 static std::optional<Vector>
 ResolveEarthFixedGnbAnchorPosition(const Ptr<const NetDevice>& gnbDevice)
 {
@@ -1160,22 +1008,6 @@ ResolveEarthFixedGnbAnchorPosition(const Ptr<const NetDevice>& gnbDevice)
         return std::nullopt;
     }
     return ResolveSatelliteBeamTargetEcef(satIt->second, satMobility->GetPosition());
-}
-
-static RealisticBfManager::TriggerEvent
-ParseRealisticBfTriggerEvent(const std::string& triggerEvent)
-{
-    if (triggerEvent == "delayed-update")
-    {
-        return RealisticBfManager::DELAYED_UPDATE;
-    }
-    return RealisticBfManager::SRS_COUNT;
-}
-
-static const char*
-ToString(RealisticBfManager::TriggerEvent triggerEvent)
-{
-    return triggerEvent == RealisticBfManager::DELAYED_UPDATE ? "delayed-update" : "srs-count";
 }
 
 static std::optional<uint32_t>
@@ -1253,7 +1085,8 @@ ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
                        << "\n";
     }
 
-    const double alpha = std::clamp(g_improvedCrossLayerPhyAlpha, 1e-6, 1.0);
+    const double alpha =
+        std::clamp(g_measurementDrivenConfig.improvedCrossLayerPhyAlpha, 1e-6, 1.0);
     const double corruptIndicator = params.m_corrupt ? 1.0 : 0.0;
     if (ue.recentPhySampleCount == 0)
     {
@@ -1287,160 +1120,20 @@ ReportDlPhyTbTrace(std::string, RxPacketTraceParams params)
     }
 }
 
-struct MeasurementCandidate
-{
-    uint32_t satIdx = std::numeric_limits<uint32_t>::max();
-    uint16_t cellId = 0;
-    double rsrpDbm = -std::numeric_limits<double>::infinity();
-    double rsrqDb = -std::numeric_limits<double>::infinity();
-    double loadScore = 1.0;
-    bool admissionAllowed = false;
-    double remainingVisibilitySeconds = 0.0;
-    double visibilityScore = 0.0;
-    double jointScore = -std::numeric_limits<double>::infinity();
-};
-
-static double
-PredictRemainingVisibilitySeconds(uint32_t satIdx,
-                                  const LeoOrbitCalculator::GroundPoint& ueGroundPoint,
-                                  double nowSeconds)
-{
-    if (satIdx >= g_satellites.size())
-    {
-        return 0.0;
-    }
-
-    const double horizonSeconds = std::max(0.0, g_improvedVisibilityHorizonSeconds);
-    if (horizonSeconds <= 0.0)
-    {
-        return 0.0;
-    }
-
-    const auto computeVisible = [&](double sampleTimeSeconds) {
-        return LeoOrbitCalculator::Calculate(sampleTimeSeconds,
-                                             g_satellites[satIdx].orbit,
-                                             g_gmstAtEpochRad,
-                                             ueGroundPoint,
-                                             g_carrierFrequencyHz,
-                                             g_minElevationRad)
-            .visible;
-    };
-
-    if (!computeVisible(nowSeconds))
-    {
-        return 0.0;
-    }
-
-    const double stepSeconds = std::max(0.05, g_improvedVisibilityPredictionStepSeconds);
-    const double horizonEndSeconds = nowSeconds + horizonSeconds;
-    double previousVisibleTimeSeconds = nowSeconds;
-
-    for (double probeTimeSeconds = nowSeconds + stepSeconds;
-         probeTimeSeconds <= horizonEndSeconds + 1e-9;
-         probeTimeSeconds += stepSeconds)
-    {
-        const double clampedProbeTimeSeconds = std::min(probeTimeSeconds, horizonEndSeconds);
-        if (computeVisible(clampedProbeTimeSeconds))
-        {
-            previousVisibleTimeSeconds = clampedProbeTimeSeconds;
-            continue;
-        }
-
-        double lowSeconds = previousVisibleTimeSeconds;
-        double highSeconds = clampedProbeTimeSeconds;
-        for (uint32_t iter = 0; iter < 8; ++iter)
-        {
-            const double midSeconds = 0.5 * (lowSeconds + highSeconds);
-            if (computeVisible(midSeconds))
-            {
-                lowSeconds = midSeconds;
-            }
-            else
-            {
-                highSeconds = midSeconds;
-            }
-        }
-        return std::max(0.0, lowSeconds - nowSeconds);
-    }
-
-    return horizonSeconds;
-}
-
-static double
-NormalizeMetric(double value, double minValue, double maxValue)
-{
-    if (!std::isfinite(value) || !std::isfinite(minValue) || !std::isfinite(maxValue))
-    {
-        return 0.0;
-    }
-    const double span = std::max(1e-9, maxValue - minValue);
-    return std::clamp((value - minValue) / span, 0.0, 1.0);
-}
-
-static double
-ComputeVisibilityScore(double remainingVisibilitySeconds)
-{
-    return std::clamp(remainingVisibilitySeconds /
-                          std::max(1e-9, g_improvedVisibilityHorizonSeconds),
-                      0.0,
-                      1.0);
-}
-
-static double
-ComputeJointScore(const MeasurementCandidate& candidate,
-                  double minRsrpDbm,
-                  double maxRsrpDbm,
-                  double minRsrqDb,
-                  double maxRsrqDb,
-                  double normalizedSignalWeight,
-                  double normalizedRsrqWeight,
-                  double normalizedLoadWeight,
-                  double normalizedVisibilityWeight,
-                  double sourceLoadScore,
-                  double sourceLoadPressure)
-{
-    const double rsrpScore = NormalizeMetric(candidate.rsrpDbm, minRsrpDbm, maxRsrpDbm);
-    const double rsrqScore = NormalizeMetric(candidate.rsrqDb, minRsrqDb, maxRsrqDb);
-    const double loadUtility = std::clamp(1.0 - candidate.loadScore, 0.0, 1.0);
-    const double loadReliefUtility = std::clamp(sourceLoadScore - candidate.loadScore, 0.0, 1.0);
-    return normalizedSignalWeight * rsrpScore +
-           normalizedRsrqWeight * rsrqScore +
-           normalizedLoadWeight * loadUtility +
-           normalizedVisibilityWeight * candidate.visibilityScore +
-           0.25 * sourceLoadPressure * loadReliefUtility;
-}
-
-static double
-ComputeLoadPressureFromScore(double loadScore)
-{
-    // 将负载分数按当前拥塞阈值重新归一化，便于在源站接近拥塞时更快放大负载导向。
-    const double congestionSpan = std::max(1e-9, g_loadCongestionThreshold);
-    return std::clamp(loadScore / congestionSpan, 0.0, 1.0);
-}
-
-static bool
-IsServingLinkWeak(const NrRrcSap::MeasResults& measResults)
-{
-    const double servingRsrpDbm =
-        nr::EutranMeasurementMapping::RsrpRange2Dbm(measResults.measResultPCell.rsrpResult);
-    const double servingRsrqDb =
-        nr::EutranMeasurementMapping::RsrqRange2Db(measResults.measResultPCell.rsrqResult);
-    return servingRsrpDbm <= g_improvedServingWeakRsrpDbm ||
-           servingRsrqDb <= g_improvedServingWeakRsrqDb;
-}
-
 static bool
 IsCrossLayerPhyWeak(const UeRuntime& ue)
 {
-    if (!g_improvedEnableCrossLayerPhyAssist ||
-        ue.recentPhySampleCount < g_improvedCrossLayerMinSamples)
+    if (!g_measurementDrivenConfig.improvedEnableCrossLayerPhyAssist ||
+        ue.recentPhySampleCount < g_measurementDrivenConfig.improvedCrossLayerMinSamples)
     {
         return false;
     }
 
-    const bool tblerWeak = ue.recentPhyTblerEwma >= g_improvedCrossLayerTblerThreshold;
+    const bool tblerWeak =
+        ue.recentPhyTblerEwma >= g_measurementDrivenConfig.improvedCrossLayerTblerThreshold;
     const bool sinrWeak = std::isfinite(ue.recentPhySinrDbEwma) &&
-                          ue.recentPhySinrDbEwma <= g_improvedCrossLayerSinrThresholdDb;
+                          ue.recentPhySinrDbEwma <=
+                              g_measurementDrivenConfig.improvedCrossLayerSinrThresholdDb;
     return tblerWeak || sinrWeak;
 }
 
@@ -1480,287 +1173,42 @@ ClearStableLeadTracking(UeRuntime& ue)
     ue.stableLeadSinceSeconds = -1.0;
 }
 
-static std::optional<MeasurementCandidate>
-SelectMeasurementDrivenTarget(uint16_t servingCellId,
-                              uint32_t sourceSatIdx,
-                              const UeRuntime& ue,
-                              const NrRrcSap::MeasResults& measResults)
+static MeasurementDrivenDecisionContext
+BuildMeasurementDrivenDecisionContext()
 {
-    std::vector<MeasurementCandidate> candidates;
-    candidates.reserve(measResults.measResultListEutra.size());
-
-    for (const auto& neighbour : measResults.measResultListEutra)
-    {
-        if (!neighbour.haveRsrpResult || neighbour.physCellId == servingCellId)
-        {
-            continue;
-        }
-
-        const auto satIt = g_cellToSatellite.find(neighbour.physCellId);
-        if (satIt == g_cellToSatellite.end() || satIt->second >= g_satellites.size())
-        {
-            continue;
-        }
-        if (!IsUeInsideAssignedBeam(satIt->second, ue))
-        {
-            continue;
-        }
-
-        const auto& satellite = g_satellites[satIt->second];
-        MeasurementCandidate candidate;
-        candidate.satIdx = satIt->second;
-        candidate.cellId = neighbour.physCellId;
-        candidate.rsrpDbm = nr::EutranMeasurementMapping::RsrpRange2Dbm(neighbour.rsrpResult);
-        if (neighbour.haveRsrqResult)
-        {
-            candidate.rsrqDb = nr::EutranMeasurementMapping::RsrqRange2Db(neighbour.rsrqResult);
-        }
-        candidate.loadScore = satellite.loadScore;
-        candidate.admissionAllowed = satellite.admissionAllowed;
-        candidate.remainingVisibilitySeconds =
-            PredictRemainingVisibilitySeconds(candidate.satIdx, ue.groundPoint, Simulator::Now().GetSeconds());
-        candidates.push_back(candidate);
-    }
-
-    if (candidates.empty())
-    {
-        return std::nullopt;
-    }
-
-    const double sourceLoadScore =
-        (sourceSatIdx < g_satellites.size()) ? g_satellites[sourceSatIdx].loadScore : 0.0;
-    const double sourceLoadPressure = ComputeLoadPressureFromScore(sourceLoadScore);
-    MeasurementCandidate servingCandidate;
-    servingCandidate.satIdx = sourceSatIdx;
-    servingCandidate.cellId = servingCellId;
-    servingCandidate.rsrpDbm =
-        nr::EutranMeasurementMapping::RsrpRange2Dbm(measResults.measResultPCell.rsrpResult);
-    servingCandidate.rsrqDb =
-        nr::EutranMeasurementMapping::RsrqRange2Db(measResults.measResultPCell.rsrqResult);
-    servingCandidate.loadScore = sourceLoadScore;
-    servingCandidate.admissionAllowed = true;
-    servingCandidate.remainingVisibilitySeconds =
-        PredictRemainingVisibilitySeconds(sourceSatIdx, ue.groundPoint, Simulator::Now().GetSeconds());
-
-    if (g_handoverMode == HandoverMode::BASELINE)
-    {
-        return *std::max_element(candidates.begin(),
-                                 candidates.end(),
-                                 [](const auto& lhs, const auto& rhs) {
-                                     return lhs.rsrpDbm < rhs.rsrpDbm;
-                                 });
-    }
-
-    std::vector<MeasurementCandidate> filteredCandidates;
-    filteredCandidates.reserve(candidates.size());
-    std::copy_if(candidates.begin(),
-                 candidates.end(),
-                 std::back_inserter(filteredCandidates),
-                 [](const auto& candidate) { return candidate.admissionAllowed; });
-    if (filteredCandidates.empty())
-    {
-        filteredCandidates = candidates;
-    }
-
-    if (g_improvedMinVisibilitySeconds > 0.0)
-    {
-        std::vector<MeasurementCandidate> visibilityQualifiedCandidates;
-        visibilityQualifiedCandidates.reserve(filteredCandidates.size());
-        std::copy_if(filteredCandidates.begin(),
-                     filteredCandidates.end(),
-                     std::back_inserter(visibilityQualifiedCandidates),
-                     [](const auto& candidate) {
-                         return candidate.remainingVisibilitySeconds >=
-                                g_improvedMinVisibilitySeconds;
-                     });
-        if (!visibilityQualifiedCandidates.empty())
-        {
-            filteredCandidates = std::move(visibilityQualifiedCandidates);
-        }
-    }
-
-    std::vector<MeasurementCandidate> qualityQualifiedCandidates;
-    qualityQualifiedCandidates.reserve(filteredCandidates.size());
-    std::copy_if(filteredCandidates.begin(),
-                 filteredCandidates.end(),
-                 std::back_inserter(qualityQualifiedCandidates),
-                 [](const auto& candidate) {
-                     const bool rsrpOk = candidate.rsrpDbm >= g_improvedMinCandidateRsrpDbm;
-                     const bool rsrqOk = std::isfinite(candidate.rsrqDb) &&
-                                         candidate.rsrqDb >= g_improvedMinCandidateRsrqDb;
-                     return rsrpOk && rsrqOk;
-                 });
-    if (!qualityQualifiedCandidates.empty())
-    {
-        filteredCandidates = std::move(qualityQualifiedCandidates);
-    }
-
-    // Same-frequency interference guard: a target with stronger RSRP still needs
-    // enough RSRQ advantage over serving, otherwise we risk cutting into a trap.
-    const double servingRsrqDb =
-        std::isfinite(servingCandidate.rsrqDb) ? servingCandidate.rsrqDb : -19.5;
-    const bool servingWeak = servingCandidate.rsrpDbm <= g_improvedServingWeakRsrpDbm ||
-                             servingCandidate.rsrqDb <= g_improvedServingWeakRsrqDb;
-    if (g_improvedMinRsrqAdvantageDb > 0.0 && !servingWeak)
-    {
-        std::vector<MeasurementCandidate> rsrqGuardCandidates;
-        rsrqGuardCandidates.reserve(filteredCandidates.size());
-        for (const auto& candidate : filteredCandidates)
-        {
-            const bool rsrqAdvantageOk = std::isfinite(candidate.rsrqDb) &&
-                                         candidate.rsrqDb >=
-                                             servingRsrqDb + g_improvedMinRsrqAdvantageDb;
-            if (rsrqAdvantageOk)
-            {
-                rsrqGuardCandidates.push_back(candidate);
-            }
-        }
-        if (!rsrqGuardCandidates.empty())
-        {
-            filteredCandidates = std::move(rsrqGuardCandidates);
-        }
-        else if (!filteredCandidates.empty())
-        {
-            const auto bestSignal = std::max_element(filteredCandidates.begin(),
-                                                     filteredCandidates.end(),
-                                                     [](const auto& lhs, const auto& rhs) {
-                                                         return lhs.rsrpDbm < rhs.rsrpDbm;
-                                                     });
-            if (bestSignal->rsrpDbm > servingCandidate.rsrpDbm)
-            {
-                return *bestSignal;
-            }
-        }
-    }
-
-    const auto bestSignalIt =
-        std::max_element(filteredCandidates.begin(),
-                         filteredCandidates.end(),
-                         [](const auto& lhs, const auto& rhs) {
-                             return lhs.rsrpDbm < rhs.rsrpDbm;
-                         });
-    const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
-    const bool crossLayerPhyWeak = IsCrossLayerPhyWeak(ue);
-    if (servingWeak || crossLayerPhyWeak)
-    {
-        return bestSignalCandidate;
-    }
-
-    const double dynamicMaxSignalGapDb =
-        g_improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
-    const double dynamicMinLoadScoreDelta =
-        std::max(0.05, g_improvedMinLoadScoreDelta * (1.0 - 0.5 * sourceLoadPressure));
-    const double effectiveSignalWeight =
-        std::max(0.15, g_improvedSignalWeight * (1.0 - 0.4 * sourceLoadPressure));
-    const double effectiveRsrqWeight =
-        std::max(0.0, g_improvedRsrqWeight * (1.0 - 0.2 * sourceLoadPressure));
-    const double effectiveLoadWeight = g_improvedLoadWeight + 0.6 * sourceLoadPressure;
-    const double effectiveVisibilityWeight =
-        g_improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
-
-    std::vector<MeasurementCandidate> scoredCandidates;
-    scoredCandidates.reserve(filteredCandidates.size());
-    for (const auto& candidate : filteredCandidates)
-    {
-        const double signalGapDb = bestSignalCandidate.rsrpDbm - candidate.rsrpDbm;
-        const double loadAdvantage = bestSignalCandidate.loadScore - candidate.loadScore;
-        const bool keepCandidate = candidate.cellId == bestSignalCandidate.cellId ||
-                                   signalGapDb <= dynamicMaxSignalGapDb ||
-                                   loadAdvantage >= dynamicMinLoadScoreDelta;
-        if (!keepCandidate)
-        {
-            continue;
-        }
-        scoredCandidates.push_back(candidate);
-    }
-
-    if (scoredCandidates.empty())
-    {
-        return bestSignalCandidate;
-    }
-
-    double minRsrpDbm = std::numeric_limits<double>::infinity();
-    double maxRsrpDbm = -std::numeric_limits<double>::infinity();
-    double minRsrqDb = std::numeric_limits<double>::infinity();
-    double maxRsrqDb = -std::numeric_limits<double>::infinity();
-    if (std::isfinite(servingCandidate.rsrpDbm))
-    {
-        minRsrpDbm = servingCandidate.rsrpDbm;
-        maxRsrpDbm = servingCandidate.rsrpDbm;
-    }
-    if (std::isfinite(servingCandidate.rsrqDb))
-    {
-        minRsrqDb = servingCandidate.rsrqDb;
-        maxRsrqDb = servingCandidate.rsrqDb;
-    }
-    for (const auto& candidate : scoredCandidates)
-    {
-        minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
-        maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
-        if (std::isfinite(candidate.rsrqDb))
-        {
-            minRsrqDb = std::min(minRsrqDb, candidate.rsrqDb);
-            maxRsrqDb = std::max(maxRsrqDb, candidate.rsrqDb);
-        }
-    }
-
-    const double totalWeight = std::max(
-        1e-9,
-        effectiveSignalWeight + effectiveRsrqWeight + effectiveLoadWeight + effectiveVisibilityWeight);
-    const double normalizedSignalWeight = effectiveSignalWeight / totalWeight;
-    const double normalizedRsrqWeight = effectiveRsrqWeight / totalWeight;
-    const double normalizedLoadWeight = effectiveLoadWeight / totalWeight;
-    const double normalizedVisibilityWeight = effectiveVisibilityWeight / totalWeight;
-
-    for (auto& candidate : scoredCandidates)
-    {
-        candidate.visibilityScore = ComputeVisibilityScore(candidate.remainingVisibilitySeconds);
-        candidate.jointScore = ComputeJointScore(candidate,
-                                                minRsrpDbm,
-                                                maxRsrpDbm,
-                                                minRsrqDb,
-                                                maxRsrqDb,
-                                                normalizedSignalWeight,
-                                                normalizedRsrqWeight,
-                                                normalizedLoadWeight,
-                                                normalizedVisibilityWeight,
-                                                sourceLoadScore,
-                                                sourceLoadPressure);
-    }
-
-    const auto bestJointIt =
-        std::max_element(scoredCandidates.begin(),
-                         scoredCandidates.end(),
-                         [](const auto& lhs, const auto& rhs) {
-                             if (std::abs(lhs.jointScore - rhs.jointScore) > 1e-9)
-                             {
-                                 return lhs.jointScore < rhs.jointScore;
-                             }
-                             return lhs.rsrpDbm < rhs.rsrpDbm;
-                         });
-
-    if (std::isfinite(servingCandidate.rsrpDbm))
-    {
-        servingCandidate.visibilityScore =
-            ComputeVisibilityScore(servingCandidate.remainingVisibilitySeconds);
-        servingCandidate.jointScore = ComputeJointScore(servingCandidate,
-                                                        minRsrpDbm,
-                                                        maxRsrpDbm,
-                                                        minRsrqDb,
-                                                        maxRsrqDb,
-                                                        normalizedSignalWeight,
-                                                        normalizedRsrqWeight,
-                                                        normalizedLoadWeight,
-                                                        normalizedVisibilityWeight,
-                                                        sourceLoadScore,
-                                                        sourceLoadPressure);
-        if (bestJointIt->jointScore < servingCandidate.jointScore + g_improvedMinJointScoreMargin)
-        {
-            return std::nullopt;
-        }
-    }
-
-    return *bestJointIt;
+    MeasurementDrivenDecisionContext context{g_satellites, g_cellToSatellite};
+    context.gmstAtEpochRad = g_gmstAtEpochRad;
+    context.carrierFrequencyHz = g_carrierFrequencyHz;
+    context.minElevationRad = g_minElevationRad;
+    context.loadCongestionThreshold = g_loadCongestionThreshold;
+    context.handoverMode = g_measurementDrivenConfig.handoverMode;
+    context.improvedSignalWeight = g_measurementDrivenConfig.improvedSignalWeight;
+    context.improvedRsrqWeight = g_measurementDrivenConfig.improvedRsrqWeight;
+    context.improvedLoadWeight = g_measurementDrivenConfig.improvedLoadWeight;
+    context.improvedVisibilityWeight = g_measurementDrivenConfig.improvedVisibilityWeight;
+    context.improvedMinLoadScoreDelta = g_measurementDrivenConfig.improvedMinLoadScoreDelta;
+    context.improvedMaxSignalGapDb = g_measurementDrivenConfig.improvedMaxSignalGapDb;
+    context.improvedMinVisibilitySeconds =
+        g_measurementDrivenConfig.improvedMinVisibilitySeconds;
+    context.improvedVisibilityHorizonSeconds =
+        g_measurementDrivenConfig.improvedVisibilityHorizonSeconds;
+    context.improvedVisibilityPredictionStepSeconds =
+        g_measurementDrivenConfig.improvedVisibilityPredictionStepSeconds;
+    context.improvedMinJointScoreMargin =
+        g_measurementDrivenConfig.improvedMinJointScoreMargin;
+    context.improvedMinCandidateRsrpDbm =
+        g_measurementDrivenConfig.improvedMinCandidateRsrpDbm;
+    context.improvedMinCandidateRsrqDb =
+        g_measurementDrivenConfig.improvedMinCandidateRsrqDb;
+    context.improvedServingWeakRsrpDbm =
+        g_measurementDrivenConfig.improvedServingWeakRsrpDbm;
+    context.improvedServingWeakRsrqDb =
+        g_measurementDrivenConfig.improvedServingWeakRsrqDb;
+    context.improvedMinRsrqAdvantageDb =
+        g_measurementDrivenConfig.improvedMinRsrqAdvantageDb;
+    context.isCandidateAllowed = &IsUeInsideAssignedBeam;
+    context.isCrossLayerPhyWeak = &IsCrossLayerPhyWeak;
+    return context;
 }
 
 static void
@@ -1786,24 +1234,27 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
         return;
     }
 
+    const auto decisionContext = BuildMeasurementDrivenDecisionContext();
     const bool servingWeak =
-        (g_handoverMode == HandoverMode::IMPROVED) &&
-        (IsServingLinkWeak(measResults) || IsCrossLayerPhyWeak(ue));
+        (g_measurementDrivenConfig.handoverMode == HandoverMode::IMPROVED) &&
+        (IsServingLinkWeak(decisionContext, measResults) ||
+         IsCrossLayerPhyWeak(decisionContext, ue));
 
-    const auto selectedTarget = SelectMeasurementDrivenTarget(sourceCellId,
+    const auto selectedTarget = SelectMeasurementDrivenTarget(decisionContext,
+                                                              sourceCellId,
                                                               static_cast<uint32_t>(sourceSatIdx),
                                                               ue,
                                                               measResults);
     if (!selectedTarget.has_value() || selectedTarget->cellId == 0)
     {
-        if (g_handoverMode == HandoverMode::IMPROVED)
+        if (g_measurementDrivenConfig.handoverMode == HandoverMode::IMPROVED)
         {
             ClearStableLeadTracking(ue);
         }
         return;
     }
 
-    if (g_handoverMode == HandoverMode::IMPROVED && !servingWeak)
+    if (g_measurementDrivenConfig.handoverMode == HandoverMode::IMPROVED && !servingWeak)
     {
         const double nowSeconds = Simulator::Now().GetSeconds();
         const bool sameStableLead = ue.stableLeadSourceCell == sourceCellId &&
@@ -1816,8 +1267,9 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
             return;
         }
 
-        if (g_improvedMinStableLeadTimeSeconds > 0.0 &&
-            (nowSeconds - ue.stableLeadSinceSeconds + 1e-9 < g_improvedMinStableLeadTimeSeconds))
+        if (g_measurementDrivenConfig.improvedMinStableLeadTimeSeconds > 0.0 &&
+            (nowSeconds - ue.stableLeadSinceSeconds + 1e-9 <
+             g_measurementDrivenConfig.improvedMinStableLeadTimeSeconds))
         {
             return;
         }
@@ -1835,51 +1287,25 @@ HandleMeasurementDrivenHandoverReport(uint16_t sourceCellId,
     {
         std::cout << "[HO-MEAS-TRIGGER] t=" << std::fixed << std::setprecision(3)
                   << Simulator::Now().GetSeconds() << "s"
-                  << " mode=" << ToString(g_handoverMode)
+                  << " mode=" << ToString(g_measurementDrivenConfig.handoverMode)
                   << " ue=" << *ueIdx
                   << " sourceCell=" << sourceCellId
                   << " targetCell=" << selectedTarget->cellId
                   << " targetRsrp=" << selectedTarget->rsrpDbm << "dBm";
-        if (g_handoverMode == HandoverMode::IMPROVED)
+        if (g_measurementDrivenConfig.handoverMode == HandoverMode::IMPROVED)
         {
             const double sourceLoadScore = g_satellites[sourceSatIdx].loadScore;
             std::cout << " jointScore=" << selectedTarget->jointScore
                       << " loadScore=" << selectedTarget->loadScore
                       << " sourceLoad=" << sourceLoadScore
-                      << " sourceLoadPressure=" << ComputeLoadPressureFromScore(sourceLoadScore)
+                      << " sourceLoadPressure="
+                      << ComputeLoadPressureFromScore(sourceLoadScore,
+                                                     decisionContext.loadCongestionThreshold)
                       << " remainVis=" << selectedTarget->remainingVisibilitySeconds << "s"
                       << " visScore=" << selectedTarget->visibilityScore
                       << " admission=" << (selectedTarget->admissionAllowed ? "YES" : "NO");
         }
         std::cout << std::endl;
-    }
-}
-
-static void
-InstallMeasurementDrivenHandoverAlgorithms(const BaselineSimulationConfig& config)
-{
-    g_handoverAlgorithms.clear();
-    g_handoverAlgorithms.reserve(g_satellites.size());
-
-    const uint8_t maxReportCells = static_cast<uint8_t>(
-        std::clamp<uint16_t>(config.measurementMaxReportCells, 1, 32));
-
-    for (auto& sat : g_satellites)
-    {
-        auto algorithm = CreateObject<NrLeoA3MeasurementHandoverAlgorithm>();
-        algorithm->SetAttribute("Hysteresis", DoubleValue(config.hoHysteresisDb));
-        algorithm->SetAttribute("TimeToTrigger", TimeValue(MilliSeconds(config.hoTttMs)));
-        algorithm->SetAttribute("ReportIntervalMs", UintegerValue(config.measurementReportIntervalMs));
-        algorithm->SetAttribute("MaxReportCells", UintegerValue(maxReportCells));
-        algorithm->SetAttribute("TriggerHandover", BooleanValue(false));
-        sat.rrc->SetNrHandoverManagementSapProvider(algorithm->GetNrHandoverManagementSapProvider());
-        algorithm->SetNrHandoverManagementSapUser(sat.rrc->GetNrHandoverManagementSapUser());
-        algorithm->TraceConnectWithoutContext("MeasurementReport",
-                                              MakeBoundCallback(&HandleMeasurementDrivenHandoverReport,
-                                                                sat.dev->GetCellId()));
-        sat.rrc->AggregateObject(algorithm);
-        algorithm->Initialize();
-        g_handoverAlgorithms.push_back(algorithm);
     }
 }
 
@@ -2477,31 +1903,45 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_loadCongestionThreshold = config.loadCongestionThreshold;
     g_hoHysteresisDb = config.hoHysteresisDb;
     g_pingPongWindowSeconds = config.pingPongWindowSeconds;
-    g_measurementReportIntervalMs = config.measurementReportIntervalMs;
-    g_measurementMaxReportCells =
+    g_measurementDrivenConfig.measurementReportIntervalMs = config.measurementReportIntervalMs;
+    g_measurementDrivenConfig.measurementMaxReportCells =
         static_cast<uint8_t>(std::clamp<uint16_t>(config.measurementMaxReportCells, 1, 32));
-    g_handoverMode = ParseHandoverMode(config.handoverMode);
-    g_improvedSignalWeight = config.improvedSignalWeight;
-    g_improvedLoadWeight = config.improvedLoadWeight;
-    g_improvedRsrqWeight = config.improvedRsrqWeight;
-    g_improvedVisibilityWeight = config.improvedVisibilityWeight;
-    g_improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
-    g_improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
-    g_improvedMinStableLeadTimeSeconds = config.improvedMinStableLeadTimeSeconds;
-    g_improvedMinVisibilitySeconds = config.improvedMinVisibilitySeconds;
-    g_improvedVisibilityHorizonSeconds = config.improvedVisibilityHorizonSeconds;
-    g_improvedVisibilityPredictionStepSeconds = config.improvedVisibilityPredictionStepSeconds;
-    g_improvedMinJointScoreMargin = config.improvedMinJointScoreMargin;
-    g_improvedMinCandidateRsrpDbm = config.improvedMinCandidateRsrpDbm;
-    g_improvedMinCandidateRsrqDb = config.improvedMinCandidateRsrqDb;
-    g_improvedServingWeakRsrpDbm = config.improvedServingWeakRsrpDbm;
-    g_improvedServingWeakRsrqDb = config.improvedServingWeakRsrqDb;
-    g_improvedMinRsrqAdvantageDb = config.improvedMinRsrqAdvantageDb;
-    g_improvedEnableCrossLayerPhyAssist = config.improvedEnableCrossLayerPhyAssist;
-    g_improvedCrossLayerPhyAlpha = config.improvedCrossLayerPhyAlpha;
-    g_improvedCrossLayerTblerThreshold = config.improvedCrossLayerTblerThreshold;
-    g_improvedCrossLayerSinrThresholdDb = config.improvedCrossLayerSinrThresholdDb;
-    g_improvedCrossLayerMinSamples = config.improvedCrossLayerMinSamples;
+    g_measurementDrivenConfig.handoverMode = ParseHandoverMode(config.handoverMode);
+    g_measurementDrivenConfig.improvedSignalWeight = config.improvedSignalWeight;
+    g_measurementDrivenConfig.improvedLoadWeight = config.improvedLoadWeight;
+    g_measurementDrivenConfig.improvedRsrqWeight = config.improvedRsrqWeight;
+    g_measurementDrivenConfig.improvedVisibilityWeight = config.improvedVisibilityWeight;
+    g_measurementDrivenConfig.improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
+    g_measurementDrivenConfig.improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
+    g_measurementDrivenConfig.improvedMinStableLeadTimeSeconds =
+        config.improvedMinStableLeadTimeSeconds;
+    g_measurementDrivenConfig.improvedMinVisibilitySeconds =
+        config.improvedMinVisibilitySeconds;
+    g_measurementDrivenConfig.improvedVisibilityHorizonSeconds =
+        config.improvedVisibilityHorizonSeconds;
+    g_measurementDrivenConfig.improvedVisibilityPredictionStepSeconds =
+        config.improvedVisibilityPredictionStepSeconds;
+    g_measurementDrivenConfig.improvedMinJointScoreMargin =
+        config.improvedMinJointScoreMargin;
+    g_measurementDrivenConfig.improvedMinCandidateRsrpDbm =
+        config.improvedMinCandidateRsrpDbm;
+    g_measurementDrivenConfig.improvedMinCandidateRsrqDb =
+        config.improvedMinCandidateRsrqDb;
+    g_measurementDrivenConfig.improvedServingWeakRsrpDbm =
+        config.improvedServingWeakRsrpDbm;
+    g_measurementDrivenConfig.improvedServingWeakRsrqDb =
+        config.improvedServingWeakRsrqDb;
+    g_measurementDrivenConfig.improvedMinRsrqAdvantageDb =
+        config.improvedMinRsrqAdvantageDb;
+    g_measurementDrivenConfig.improvedEnableCrossLayerPhyAssist =
+        config.improvedEnableCrossLayerPhyAssist;
+    g_measurementDrivenConfig.improvedCrossLayerPhyAlpha = config.improvedCrossLayerPhyAlpha;
+    g_measurementDrivenConfig.improvedCrossLayerTblerThreshold =
+        config.improvedCrossLayerTblerThreshold;
+    g_measurementDrivenConfig.improvedCrossLayerSinrThresholdDb =
+        config.improvedCrossLayerSinrThresholdDb;
+    g_measurementDrivenConfig.improvedCrossLayerMinSamples =
+        config.improvedCrossLayerMinSamples;
 }
 
 // ============================================================================
@@ -2526,14 +1966,7 @@ main(int argc, char* argv[])
     const auto& cfg = config;
     double orbitRaanDeg = cfg.orbitRaanDeg;
     double baseTrueAnomalyDeg = cfg.baseTrueAnomalyDeg;
-    const auto gnbAntennaElementMode = ParseAntennaElementMode(cfg.gnbAntennaElement);
-    const auto ueAntennaElementMode = ParseAntennaElementMode(cfg.ueAntennaElement);
-    const auto beamformingMode = ParseBeamformingMode(cfg.beamformingMode);
-    const auto realisticBfTriggerEvent =
-        ParseRealisticBfTriggerEvent(cfg.realisticBfTriggerEvent);
-    const bool useRealisticBeamforming = (beamformingMode == BeamformingMode::REALISTIC);
-    const uint32_t effectiveSrsSymbols =
-        (useRealisticBeamforming && cfg.srsSymbols == 0) ? 1u : cfg.srsSymbols;
+    const auto radioModes = ResolveRadioBootstrapModes(cfg);
 
     // ------------------------------
     // 3. 几何场景与链路预算参数初始化
@@ -2545,46 +1978,39 @@ main(int argc, char* argv[])
     g_gmstAtEpochRad = LeoOrbitCalculator::DegToRad(cfg.gmstAtEpochDeg);
     g_minElevationRad = LeoOrbitCalculator::DegToRad(cfg.minElevationDeg);
     g_carrierFrequencyHz = cfg.centralFrequency;
-    g_beamModelConfig.carrierFrequencyHz = cfg.centralFrequency;
-    g_beamModelConfig.txPowerDbm = cfg.gnbTxPower;
-    g_beamModelConfig.gMax0Dbi = cfg.beamMaxGainDbi;
-    g_beamModelConfig.alphaMaxRad = LeoOrbitCalculator::DegToRad(cfg.scanMaxDeg);
-    g_beamModelConfig.theta3dBRad = LeoOrbitCalculator::DegToRad(cfg.theta3dBDeg);
-    g_beamModelConfig.slaVDb = cfg.sideLobeAttenuationDb;
-    g_beamModelConfig.rxGainDbi = cfg.ueRxGainDbi;
-    g_beamModelConfig.atmLossDb = cfg.atmLossDb;
+    g_beamModelConfig = DeriveBeamModelConfig(cfg);
     ApplyGlobalMirrorConfig(config);
 
-    const bool outputDirsReady = EnsureParentDirectoryForFile(g_gridCatalogPath) &&
-                                 EnsureParentDirectoryForFile(cfg.satAnchorTracePath) &&
-                                 EnsureParentDirectoryForFile(cfg.satGroundTrackTracePath) &&
-                                 EnsureParentDirectoryForFile(cfg.handoverThroughputTracePath) &&
-                                 EnsureParentDirectoryForFile(cfg.handoverEventTracePath) &&
-                                 EnsureParentDirectoryForFile(cfg.e2eFlowMetricsPath) &&
-                                 EnsureParentDirectoryForFile(cfg.phyDlTbMetricsPath) &&
-                                 EnsureParentDirectoryForFile(cfg.phyDlTbIntervalMetricsPath) &&
-                                 (!cfg.enablePhyDlTbTrace ||
-                                  EnsureParentDirectoryForFile(cfg.phyDlTbTracePath)) &&
-                                 EnsureParentDirectoryForFile(cfg.ueLayoutPath) &&
-                                 EnsureParentDirectoryForFile(cfg.gridSvgPath) &&
-                                 EnsureParentDirectoryForFile(cfg.gridHtmlPath);
+    const bool outputDirsReady =
+        EnsureParentDirectoriesForFiles(g_gridCatalogPath,
+                                        cfg.satAnchorTracePath,
+                                        cfg.satGroundTrackTracePath,
+                                        cfg.handoverThroughputTracePath,
+                                        cfg.handoverEventTracePath,
+                                        cfg.e2eFlowMetricsPath,
+                                        cfg.phyDlTbMetricsPath,
+                                        cfg.phyDlTbIntervalMetricsPath,
+                                        cfg.ueLayoutPath,
+                                        cfg.gridSvgPath,
+                                        cfg.gridHtmlPath) &&
+        (!cfg.enablePhyDlTbTrace || EnsureParentDirectoryForFile(cfg.phyDlTbTracePath));
     NS_ABORT_MSG_IF(!outputDirsReady, "Failed to create simulation output directories");
 
-    if (beamformingMode == BeamformingMode::IDEAL_CELL_SCAN ||
-        beamformingMode == BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI ||
-        beamformingMode == BeamformingMode::REALISTIC)
+    if (radioModes.beamformingMode == BeamformingMode::IDEAL_CELL_SCAN ||
+        radioModes.beamformingMode == BeamformingMode::IDEAL_CELL_SCAN_QUASI_OMNI ||
+        radioModes.beamformingMode == BeamformingMode::REALISTIC)
     {
-        std::cout << "[DIAG-WARN] beamformingMode=" << ToString(beamformingMode)
+        std::cout << "[DIAG-WARN] beamformingMode=" << ToString(radioModes.beamformingMode)
                   << " is intended for short diagnostic runs in the current stack; "
                      "it may trigger NR PHY control/beam-update assertions and should not "
                      "be treated as the formal B00/I31 baseline by default"
                   << std::endl;
     }
-    if (useRealisticBeamforming && cfg.srsSymbols == 0)
+    if (radioModes.useRealisticBeamforming && cfg.srsSymbols == 0)
     {
         std::cout << "[DIAG-INFO] beamformingMode=realistic requires SRS feedback; "
                      "automatically promoting srsSymbols from 0 to "
-                  << effectiveSrsSymbols << " for this run" << std::endl;
+                  << radioModes.effectiveSrsSymbols << " for this run" << std::endl;
     }
 
     // 生成用于波束锚定和后续可视化的六边形网格。
@@ -2637,12 +2063,13 @@ main(int argc, char* argv[])
         std::cout << std::fixed << std::setprecision(3)
                   << "[BeamModel] mode=" << (g_useWgs84HexGrid ? "HEX_GRID" : "FIXED_ANCHOR")
                   << " alphaMax=" << cfg.scanMaxDeg << "deg"
-                  << " theta3dB=" << cfg.theta3dBDeg << "deg"
+                  << " theta3dB=" << cfg.b00BeamwidthDeg << "deg"
+                  << " gMax0=" << g_beamModelConfig.gMax0Dbi << "dBi"
                   << " gnbArray=" << cfg.gnbAntennaRows << "x" << cfg.gnbAntennaColumns
                   << " ueArray=" << cfg.ueAntennaRows << "x" << cfg.ueAntennaColumns
-                  << " gnbElem=" << ToString(gnbAntennaElementMode)
-                  << " ueElem=" << ToString(ueAntennaElementMode)
-                  << " beamforming=" << ToString(beamformingMode)
+                  << " gnbElem=" << ToString(radioModes.gnbAntennaElementMode)
+                  << " ueElem=" << ToString(radioModes.ueAntennaElementMode)
+                  << " beamforming=" << ToString(radioModes.beamformingMode)
                   << " earthFixedTarget=" << ToString(g_earthFixedBeamTargetMode)
                   << " shadowing=" << (cfg.shadowingEnabled ? "on" : "off") << std::endl;
         std::cout << "[Carrier] centralFrequency=" << cfg.centralFrequency / 1e9 << "GHz"
@@ -2653,18 +2080,20 @@ main(int argc, char* argv[])
                      "carrier orthogonalization is diagnostic-only unless inter-frequency "
                      "measurement support is added"
                   << std::endl;
-        if (useRealisticBeamforming)
+        if (radioModes.useRealisticBeamforming)
         {
             std::cout << "[BeamModel] realisticTrigger="
-                      << ToString(realisticBfTriggerEvent)
+                      << ToString(radioModes.realisticBfTriggerEvent)
                       << " updatePeriodicity=" << cfg.realisticBfUpdatePeriodicity
                       << " updateDelay=" << cfg.realisticBfUpdateDelayMs << "ms"
-                      << " effectiveSrsSymbols=" << effectiveSrsSymbols
+                      << " effectiveSrsSymbols=" << radioModes.effectiveSrsSymbols
                       << std::endl;
         }
         std::cout << "[A3-Measure] source=PHY MeasurementReport"
-                  << " reportInterval=" << g_measurementReportIntervalMs << "ms"
-                  << " maxReportCells=" << static_cast<uint32_t>(g_measurementMaxReportCells)
+                  << " reportInterval="
+                  << g_measurementDrivenConfig.measurementReportIntervalMs << "ms"
+                  << " maxReportCells="
+                  << static_cast<uint32_t>(g_measurementDrivenConfig.measurementMaxReportCells)
                   << std::endl;
         std::cout << "[Constellation] satellites=" << cfg.gNbNum
                   << " planes=" << cfg.orbitPlaneCount
@@ -2696,37 +2125,55 @@ main(int argc, char* argv[])
         }
         std::cout << std::endl;
         std::cout << "[Handover] a3=measurement-report"
-                  << " mode=" << ToString(g_handoverMode)
+                  << " mode=" << ToString(g_measurementDrivenConfig.handoverMode)
                   << " hysteresis=" << g_hoHysteresisDb << "dB"
                   << " ttt=" << static_cast<double>(cfg.hoTttMs) / 1000.0 << "s"
-                  << " improvedSignalWeight=" << g_improvedSignalWeight
-                  << " improvedLoadWeight=" << g_improvedLoadWeight
+                  << " improvedSignalWeight="
+                  << g_measurementDrivenConfig.improvedSignalWeight
+                  << " improvedLoadWeight=" << g_measurementDrivenConfig.improvedLoadWeight
                   << " pingPongWindow=" << g_pingPongWindowSeconds << "s";
-        if (g_handoverMode == HandoverMode::IMPROVED)
+        if (g_measurementDrivenConfig.handoverMode == HandoverMode::IMPROVED)
         {
-            std::cout << " improvedVisibilityWeight=" << g_improvedVisibilityWeight
-                      << " improvedRsrqWeight=" << g_improvedRsrqWeight
-                      << " improvedMinVisibility=" << g_improvedMinVisibilitySeconds << "s"
-                      << " improvedVisibilityHorizon=" << g_improvedVisibilityHorizonSeconds
+            std::cout << " improvedVisibilityWeight="
+                      << g_measurementDrivenConfig.improvedVisibilityWeight
+                      << " improvedRsrqWeight=" << g_measurementDrivenConfig.improvedRsrqWeight
+                      << " improvedMinVisibility="
+                      << g_measurementDrivenConfig.improvedMinVisibilitySeconds << "s"
+                      << " improvedVisibilityHorizon="
+                      << g_measurementDrivenConfig.improvedVisibilityHorizonSeconds
                       << "s"
-                      << " improvedMinLoadScoreDelta=" << g_improvedMinLoadScoreDelta
-                      << " improvedMaxSignalGapDb=" << g_improvedMaxSignalGapDb
-                      << " improvedMinStableLead=" << g_improvedMinStableLeadTimeSeconds << "s"
-                      << " improvedVisibilityStep=" << g_improvedVisibilityPredictionStepSeconds
+                      << " improvedMinLoadScoreDelta="
+                      << g_measurementDrivenConfig.improvedMinLoadScoreDelta
+                      << " improvedMaxSignalGapDb="
+                      << g_measurementDrivenConfig.improvedMaxSignalGapDb
+                      << " improvedMinStableLead="
+                      << g_measurementDrivenConfig.improvedMinStableLeadTimeSeconds << "s"
+                      << " improvedVisibilityStep="
+                      << g_measurementDrivenConfig.improvedVisibilityPredictionStepSeconds
                       << "s"
-                      << " improvedMinJointScoreMargin=" << g_improvedMinJointScoreMargin
-                      << " improvedMinCandidateRsrp=" << g_improvedMinCandidateRsrpDbm << "dBm"
-                      << " improvedMinCandidateRsrq=" << g_improvedMinCandidateRsrqDb << "dB"
-                      << " improvedServingWeakRsrp=" << g_improvedServingWeakRsrpDbm << "dBm"
-                      << " improvedServingWeakRsrq=" << g_improvedServingWeakRsrqDb << "dB"
+                      << " improvedMinJointScoreMargin="
+                      << g_measurementDrivenConfig.improvedMinJointScoreMargin
+                      << " improvedMinCandidateRsrp="
+                      << g_measurementDrivenConfig.improvedMinCandidateRsrpDbm << "dBm"
+                      << " improvedMinCandidateRsrq="
+                      << g_measurementDrivenConfig.improvedMinCandidateRsrqDb << "dB"
+                      << " improvedServingWeakRsrp="
+                      << g_measurementDrivenConfig.improvedServingWeakRsrpDbm << "dBm"
+                      << " improvedServingWeakRsrq="
+                      << g_measurementDrivenConfig.improvedServingWeakRsrqDb << "dB"
                       << " crossLayerPhyAssist="
-                      << (g_improvedEnableCrossLayerPhyAssist ? "ON" : "OFF");
-            if (g_improvedEnableCrossLayerPhyAssist)
+                      << (g_measurementDrivenConfig.improvedEnableCrossLayerPhyAssist ? "ON"
+                                                                                      : "OFF");
+            if (g_measurementDrivenConfig.improvedEnableCrossLayerPhyAssist)
             {
-                std::cout << " crossLayerPhyAlpha=" << g_improvedCrossLayerPhyAlpha
-                          << " crossLayerTblerTh=" << g_improvedCrossLayerTblerThreshold
-                          << " crossLayerSinrTh=" << g_improvedCrossLayerSinrThresholdDb << "dB"
-                          << " crossLayerMinSamples=" << g_improvedCrossLayerMinSamples;
+                std::cout << " crossLayerPhyAlpha="
+                          << g_measurementDrivenConfig.improvedCrossLayerPhyAlpha
+                          << " crossLayerTblerTh="
+                          << g_measurementDrivenConfig.improvedCrossLayerTblerThreshold
+                          << " crossLayerSinrTh="
+                          << g_measurementDrivenConfig.improvedCrossLayerSinrThresholdDb << "dB"
+                          << " crossLayerMinSamples="
+                          << g_measurementDrivenConfig.improvedCrossLayerMinSamples;
             }
         }
         std::cout << std::endl;
@@ -2792,15 +2239,6 @@ main(int argc, char* argv[])
     // ------------------------------
     // 4. NR/EPC 与信道配置
     // ------------------------------
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(10)));
-    Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod", TimeValue(MilliSeconds(50)));
-    Config::SetDefault("ns3::NrAnr::Threshold", UintegerValue(0));
-    if (cfg.forceRlcAmForEpc)
-    {
-        Config::SetDefault("ns3::NrGnbRrc::EpsBearerToRlcMapping",
-                           EnumValue(NrGnbRrc::RLC_AM_ALWAYS));
-    }
-
     if (g_printOrbitCheck)
     {
         std::cout << "=== Orbit math check: Kepler/ECI/ECEF/ENU (0~100s, step 10s) ===" << std::endl;
@@ -2833,68 +2271,12 @@ main(int argc, char* argv[])
         }
     }
 
-    Ptr<NrHelper> nrHelper = CreateObject<NrHelper>();
-    Ptr<NrPointToPointEpcHelper> nrEpcHelper = CreateObject<NrPointToPointEpcHelper>();
-    nrEpcHelper->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(0)));
-    nrHelper->SetEpcHelper(nrEpcHelper);
-
-    Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
-    channelHelper->ConfigureFactories("NTN-Rural", "LOS", "ThreeGpp");
-    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(cfg.shadowingEnabled));
-
-    CcBwpCreator ccBwpCreator;
-    CcBwpCreator::SimpleOperationBandConf bandConf(cfg.centralFrequency, cfg.bandwidth, 1);
-    OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
-    std::vector<std::reference_wrapper<OperationBandInfo>> bandRefs{std::ref(band)};
-    channelHelper->AssignChannelsToBands(bandRefs);
-    BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({band});
-
-    nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(cfg.gnbTxPower));
-    nrHelper->SetUePhyAttribute("TxPower", DoubleValue(cfg.ueTxPower));
-
-    nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerOfdmaRR"));
-    nrHelper->SetSchedulerAttribute("EnableSrsInFSlots", BooleanValue(cfg.enableSrsInFSlots));
-    nrHelper->SetSchedulerAttribute("EnableSrsInUlSlots", BooleanValue(cfg.enableSrsInUlSlots));
-    nrHelper->SetSchedulerAttribute("SrsSymbols", UintegerValue(effectiveSrsSymbols));
-    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(cfg.ueAntennaRows));
-    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(cfg.ueAntennaColumns));
-    nrHelper->SetUeAntennaAttribute("AntennaElement",
-                                    PointerValue(CreateAntennaElement(ueAntennaElementMode, cfg)));
-    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(cfg.gnbAntennaRows));
-    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(cfg.gnbAntennaColumns));
-    nrHelper->SetGnbAntennaAttribute("AntennaElement",
-                                     PointerValue(CreateAntennaElement(gnbAntennaElementMode, cfg)));
-
-    EarthFixedGnbBeamforming::SetAnchorResolver(&ResolveEarthFixedGnbAnchorPosition);
     g_phyDlTbIntervals.clear();
-    Ptr<BeamformingHelperBase> beamformingHelper;
-    if (useRealisticBeamforming)
-    {
-        Ptr<RealisticBeamformingHelper> realisticBeamformingHelper =
-            CreateObject<RealisticBeamformingHelper>();
-        realisticBeamformingHelper->SetBeamformingMethod(
-            RealisticBeamformingAlgorithm::GetTypeId());
-        nrHelper->SetGnbBeamManagerTypeId(RealisticBfManager::GetTypeId());
-        nrHelper->SetGnbBeamManagerAttribute("TriggerEvent",
-                                             EnumValue(realisticBfTriggerEvent));
-        nrHelper->SetGnbBeamManagerAttribute("UpdatePeriodicity",
-                                             UintegerValue(cfg.realisticBfUpdatePeriodicity));
-        nrHelper->SetGnbBeamManagerAttribute("UpdateDelay",
-                                             TimeValue(MilliSeconds(cfg.realisticBfUpdateDelayMs)));
-        beamformingHelper = realisticBeamformingHelper;
-    }
-    else
-    {
-        Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
-        idealBeamformingHelper->SetAttribute(
-            "BeamformingMethod",
-            TypeIdValue(GetIdealBeamformingMethodTypeId(beamformingMode)));
-        idealBeamformingHelper->SetAttribute(
-            "BeamformingPeriodicity",
-            TimeValue(MilliSeconds(cfg.beamformingPeriodicityMs)));
-        beamformingHelper = idealBeamformingHelper;
-    }
-    nrHelper->SetBeamformingHelper(beamformingHelper);
+    auto radioBootstrap =
+        BuildNrRadioBootstrap(cfg, radioModes, &ResolveEarthFixedGnbAnchorPosition);
+    Ptr<NrHelper> nrHelper = radioBootstrap.nrHelper;
+    Ptr<NrPointToPointEpcHelper> nrEpcHelper = radioBootstrap.nrEpcHelper;
+    BandwidthPartInfoPtrVector allBwps = radioBootstrap.allBwps;
 
     // ------------------------------
     // 5. 节点创建与初始位置部署
@@ -3087,7 +2469,8 @@ main(int argc, char* argv[])
     }
 
     InstallStaticNeighbourRelations();
-    InstallMeasurementDrivenHandoverAlgorithms(cfg);
+    InstallMeasurementDrivenHandoverAlgorithms(
+        g_satellites, g_handoverAlgorithms, cfg, &HandleMeasurementDrivenHandoverReport);
 
     auto remoteHostWithAddr = nrEpcHelper->SetupRemoteHost("100Gb/s", 2500, Seconds(0.0));
     Ptr<Node> remoteHost = remoteHostWithAddr.first;
@@ -3097,152 +2480,29 @@ main(int argc, char* argv[])
 
     Ipv4InterfaceContainer ueIpIface = nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
     Ipv4StaticRoutingHelper routingHelper;
-    if (cfg.disableUeIpv4Forwarding)
-    {
-        for (uint32_t ueIdx = 0; ueIdx < ueNodes.GetN(); ++ueIdx)
-        {
-            Ptr<Ipv4> ueIpv4 = ueNodes.Get(ueIdx)->GetObject<Ipv4>();
-            if (!ueIpv4)
-            {
-                continue;
-            }
-            for (uint32_t ifIdx = 0; ifIdx < ueIpv4->GetNInterfaces(); ++ifIdx)
-            {
-                ueIpv4->SetForwarding(ifIdx, false);
-            }
-        }
-    }
-
-    g_ues.clear();
-    g_ues.reserve(cfg.ueNum);
-    g_imsiToUe.clear();
+    DisableUeIpv4ForwardingIfRequested(cfg, ueNodes);
 
     // ------------------------------
     // 7. UE 初始接入与业务安装
     // ------------------------------
-    // 为每个 UE 单独选择初始服务星和业务端口。
-    for (uint32_t ueIdx = 0; ueIdx < cfg.ueNum; ++ueIdx)
-    {
-        UeRuntime ue;
-        ue.node = ueNodes.Get(ueIdx);
-        ue.dev = DynamicCast<NrUeNetDevice>(ueNetDev.Get(ueIdx));
-        ue.groundPoint = uePlacements[ueIdx].groundPoint;
-        ue.placementRole = uePlacements[ueIdx].role;
-        ue.eastOffsetMeters = uePlacements[ueIdx].eastOffsetMeters;
-        ue.northOffsetMeters = uePlacements[ueIdx].northOffsetMeters;
-        ResetUeRuntime(ue, cfg.gNbNum);
-
-        uint32_t initialAttachIdx = 0;
-        uint32_t bestVisibleIdx = 0;
-        uint32_t bestAnyIdx = 0;
-        uint32_t bestEligibleIdx = 0;
-        double bestEligibleRsrp = -std::numeric_limits<double>::infinity();
-        double bestVisibleElevation = -std::numeric_limits<double>::infinity();
-        double bestAnyElevation = -std::numeric_limits<double>::infinity();
-        for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
-        {
-            const auto state = LeoOrbitCalculator::Calculate(0.0,
-                                                             g_satellites[satIdx].orbit,
-                                                             g_gmstAtEpochRad,
-                                                             ue.groundPoint,
-                                                             cfg.centralFrequency,
-                                                             g_minElevationRad);
-            const auto budget = CalculateEarthFixedBeamBudget(
-                state.ecef,
-                ue.groundPoint.ecef,
-                ResolveSatelliteBeamTargetEcef(satIdx, state.ecef),
-                g_beamModelConfig);
-
-            const bool accessAllowed =
-                !g_enforceBeamCoverageForRealLinks ||
-                (budget.beamLocked &&
-                 budget.offBoresightAngleRad <= g_beamModelConfig.theta3dBRad &&
-                 IsUeInSatelliteAnchorCell(satIdx, ue));
-            if (state.elevationRad > bestAnyElevation)
-            {
-                bestAnyElevation = state.elevationRad;
-                bestAnyIdx = satIdx;
-            }
-            if (state.visible && state.elevationRad > bestVisibleElevation)
-            {
-                bestVisibleElevation = state.elevationRad;
-                bestVisibleIdx = satIdx;
-            }
-            if (state.visible && accessAllowed && budget.rsrpDbm > bestEligibleRsrp)
-            {
-                bestEligibleRsrp = budget.rsrpDbm;
-                bestEligibleIdx = satIdx;
-            }
-        }
-
-        if (std::isfinite(bestEligibleRsrp))
-        {
-            initialAttachIdx = bestEligibleIdx;
-        }
-        else if (std::isfinite(bestVisibleElevation))
-        {
-            initialAttachIdx = bestVisibleIdx;
-            if (cfg.startupVerbose)
-            {
-                std::cout << "[Setup] warning: ue" << ueIdx
-                          << " visible satellites exist but none satisfy real-link access gate at t=0, "
-                          << "fallback to highest-elevation visible sat" << initialAttachIdx
-                          << std::endl;
-            }
-        }
-        else
-        {
-            initialAttachIdx = bestAnyIdx;
-            if (cfg.startupVerbose)
-            {
-                std::cout << "[Setup] warning: ue" << ueIdx
-                          << " no visible satellite at t=0, attaching to "
-                          << "highest-elevation sat" << initialAttachIdx
-                          << " (el=" << LeoOrbitCalculator::RadToDeg(bestAnyElevation) << "deg)"
-                          << std::endl;
-            }
-        }
-
-        ue.initialAttachIdx = initialAttachIdx;
-
-        nrHelper->AttachToGnb(ueNetDev.Get(ueIdx), g_satelliteGnbDevices[initialAttachIdx]);
-
-        Ptr<Ipv4StaticRouting> ueStaticRouting =
-            routingHelper.GetStaticRouting(ueNodes.Get(ueIdx)->GetObject<Ipv4>());
-        ueStaticRouting->SetDefaultRoute(nrEpcHelper->GetUeDefaultGatewayAddress(), 1);
-
-        const uint16_t dlPort = static_cast<uint16_t>(1234 + ueIdx);
-        UdpServerHelper ueUdpServer(dlPort);
-        ApplicationContainer serverApps = ueUdpServer.Install(ueNodes.Get(ueIdx));
-
-        UdpClientHelper dlClient(ueIpIface.GetAddress(ueIdx), dlPort);
-        dlClient.SetAttribute("PacketSize", UintegerValue(cfg.udpPacketSize));
-        dlClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-        dlClient.SetAttribute("Interval", TimeValue(Seconds(1.0 / cfg.lambda)));
-        ApplicationContainer clientApps = dlClient.Install(remoteHost);
-
-        // 为每个 UE 建立独立的专用承载，确保业务流和切换统计可区分。
-        NrEpsBearer bearer(NrEpsBearer::GBR_CONV_VOICE);
-        Ptr<NrEpcTft> tft = Create<NrEpcTft>();
-        NrEpcTft::PacketFilter dlpf;
-        dlpf.localPortStart = dlPort;
-        dlpf.localPortEnd = dlPort;
-        tft->Add(dlpf);
-        nrHelper->ActivateDedicatedEpsBearer(ueNetDev.Get(ueIdx), bearer, tft);
-
-        serverApps.Start(Seconds(cfg.appStartTime));
-        clientApps.Start(Seconds(cfg.appStartTime));
-        serverApps.Stop(Seconds(cfg.simTime));
-        clientApps.Stop(Seconds(cfg.simTime));
-
-        ue.dlPort = dlPort;
-        ue.server = serverApps.Get(0)->GetObject<UdpServer>();
-        if (ue.dev)
-        {
-            g_imsiToUe[ue.dev->GetImsi()] = ueIdx;
-        }
-        g_ues.push_back(ue);
-    }
+    UeScenarioInstallContext ueScenarioContext{g_satellites, g_ues, g_imsiToUe};
+    ueScenarioContext.hexGridCells = &g_hexGridCells;
+    ueScenarioContext.gmstAtEpochRad = g_gmstAtEpochRad;
+    ueScenarioContext.minElevationRad = g_minElevationRad;
+    ueScenarioContext.beamModelConfig = g_beamModelConfig;
+    ueScenarioContext.resolveSatelliteBeamTargetEcef = &ResolveSatelliteBeamTargetEcef;
+    InstallUeInitialAttachAndTraffic(ueScenarioContext,
+                                     cfg,
+                                     ueNodes,
+                                     ueNetDev,
+                                     gNbNetDev,
+                                     uePlacements,
+                                     ueIpIface,
+                                     remoteHost,
+                                     nrHelper,
+                                     nrEpcHelper,
+                                     routingHelper,
+                                     [](const Ptr<NrUeNetDevice>&) {});
 
     FlowMonitorHelper flowMonitorHelper;
     NodeContainer flowMonitorNodes;
@@ -3260,66 +2520,12 @@ main(int argc, char* argv[])
     Config::Connect(
         "/NodeList/*/DeviceList/*/ComponentCarrierMapUe/*/NrUePhy/SpectrumPhy/RxPacketTraceUe",
         MakeCallback(&ReportDlPhyTbTrace));
-    if (g_satAnchorTrace.is_open())
-    {
-        g_satAnchorTrace.close();
-    }
-    if (g_satGroundTrackTrace.is_open())
-    {
-        g_satGroundTrackTrace.close();
-    }
-    if (g_handoverThroughputTrace.is_open())
-    {
-        g_handoverThroughputTrace.close();
-    }
-    if (g_handoverEventTrace.is_open())
-    {
-        g_handoverEventTrace.close();
-    }
-    if (g_phyDlTbTrace.is_open())
-    {
-        g_phyDlTbTrace.close();
-    }
-    g_satAnchorTrace.open(cfg.satAnchorTracePath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_satAnchorTrace.is_open(),
-                    "Failed to open satellite anchor trace CSV: " << cfg.satAnchorTracePath);
-    g_satAnchorTrace
-        << "time_s,sat,plane,slot,cell,anchor_grid_id,anchor_latitude_deg,anchor_longitude_deg,"
-        << "anchor_east_m,anchor_north_m\n";
-    g_satGroundTrackTrace.open(cfg.satGroundTrackTracePath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_satGroundTrackTrace.is_open(),
-                    "Failed to open satellite ground-track CSV: "
-                        << cfg.satGroundTrackTracePath);
-    g_satGroundTrackTrace
-        << "time_s,sat,plane,slot,cell,subpoint_latitude_deg,subpoint_longitude_deg,"
-        << "subpoint_east_m,subpoint_north_m,sat_ecef_x,sat_ecef_y,sat_ecef_z\n";
-    g_handoverEventTrace.open(cfg.handoverEventTracePath, std::ios::out | std::ios::trunc);
-    NS_ABORT_MSG_IF(!g_handoverEventTrace.is_open(),
-                    "Failed to open handover event trace CSV: " << cfg.handoverEventTracePath);
-    g_handoverEventTrace
-        << "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,"
-        << "ping_pong_detected,failure_reason\n";
-    g_handoverEventTrace.flush();
-    if (cfg.enablePhyDlTbTrace)
-    {
-        g_phyDlTbTrace.open(cfg.phyDlTbTracePath, std::ios::out | std::ios::trunc);
-        NS_ABORT_MSG_IF(!g_phyDlTbTrace.is_open(),
-                        "Failed to open PHY DL TB trace CSV: " << cfg.phyDlTbTracePath);
-        g_phyDlTbTrace
-            << "time_s,ue,cell,serving_sat,rnti,bwp,frame,subframe,slot,sym_start,num_sym,"
-            << "tb_size,mcs,rank,rv,rb_assigned,cqi,sinr_db,min_sinr_db,tbler,corrupt\n";
-    }
-    if (cfg.enableHandoverThroughputTrace)
-    {
-        g_handoverThroughputTrace.open(cfg.handoverThroughputTracePath,
-                                       std::ios::out | std::ios::trunc);
-        NS_ABORT_MSG_IF(!g_handoverThroughputTrace.is_open(),
-                        "Failed to open handover throughput trace CSV: "
-                            << cfg.handoverThroughputTracePath);
-        g_handoverThroughputTrace
-            << "time_s,ue,serving_cell,serving_sat,throughput_mbps,delta_rx_packets,"
-            << "total_rx_packets,in_handover,active_ho_id,pending_source_cell,pending_target_cell\n";
-    }
+    const BaselineTraceOutputSet traceOutputs{&g_satAnchorTrace,
+                                              &g_satGroundTrackTrace,
+                                              &g_handoverThroughputTrace,
+                                              &g_handoverEventTrace,
+                                              &g_phyDlTbTrace};
+    InitializeBaselineTraceOutputs(cfg, traceOutputs);
 
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrGnbNetDevice/NrGnbRrc/HandoverStart",
                     MakeCallback(&ReportHandoverStart));
@@ -3371,7 +2577,8 @@ main(int argc, char* argv[])
                       << " role=" << ue.placementRole
                       << " offset=(" << ue.eastOffsetMeters / 1000.0 << "kmE,"
                       << ue.northOffsetMeters / 1000.0 << "kmN)"
-                      << " handoverMode=" << ToString(g_handoverMode) << std::endl;
+                      << " handoverMode="
+                      << ToString(g_measurementDrivenConfig.handoverMode) << std::endl;
         }
     }
 
@@ -3419,26 +2626,7 @@ main(int argc, char* argv[])
                     "Failed to write PHY DL TB interval metrics CSV: "
                         << cfg.phyDlTbIntervalMetricsPath);
 
-    if (g_satAnchorTrace.is_open())
-    {
-        g_satAnchorTrace.close();
-    }
-    if (g_satGroundTrackTrace.is_open())
-    {
-        g_satGroundTrackTrace.close();
-    }
-    if (g_handoverThroughputTrace.is_open())
-    {
-        g_handoverThroughputTrace.close();
-    }
-    if (g_handoverEventTrace.is_open())
-    {
-        g_handoverEventTrace.close();
-    }
-    if (g_phyDlTbTrace.is_open())
-    {
-        g_phyDlTbTrace.close();
-    }
+    CloseBaselineTraceOutputs(traceOutputs);
 
     if (cfg.runGridSvgScript)
     {
