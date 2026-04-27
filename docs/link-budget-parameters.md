@@ -139,7 +139,7 @@ $$P_{\text{rx}} \approx P_{\text{tx}} + G_{\text{tx}} + G_{\text{rx}} - L_{\text
 
 ## 七、当前工作区口径
 
-- 已发布稳定节点：`research-v5.1`
+- 已发布稳定节点：`research-v6.0`
 - 当前默认真实天线配置：`gNB b00-custom + UE three-gpp`
 - 当前默认波束方法：`ideal-earth-fixed`
 

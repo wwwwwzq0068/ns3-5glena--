@@ -40,7 +40,24 @@ main()
 
     Require(config.ueLayoutType == "seven-cell", "baseline default should keep seven-cell layout");
     Require(config.ueNum == 25, "baseline default should keep 25 UE");
+    RequireNear(config.poissonLambda, 1.5, 1e-12, "poisson layout default lambda should be 1.5");
+    Require(config.maxUePerCell == 5, "poisson layout default should cap each cell at 5 UE");
+    Require(config.ueLayoutRandomSeed == 42, "poisson layout default seed should be deterministic");
     Require(config.handoverMode == "baseline", "baseline default should keep A3 baseline mode");
+    Require(ResolveEffectiveBeamExclusionMode(config) == "ring",
+            "baseline default should keep one-ring beam anchor exclusion");
+    Require(ResolveEffectiveRealLinkGateMode(config) == "beam-and-anchor",
+            "baseline default should keep beam-plus-anchor real-link gating");
+    Require(!config.enableSatAnchorTrace,
+            "baseline default should keep satellite anchor trace disabled");
+    Require(!config.enableSatGroundTrackTrace,
+            "baseline default should keep satellite ground-track trace disabled");
+    Require(!config.enableFlowMonitor,
+            "baseline default should keep FlowMonitor disabled");
+    Require(!config.enablePhyDlTbStats,
+            "baseline default should keep PHY DL TB stats disabled");
+    Require(!config.printMeasurementDecisionDiagnostics,
+            "baseline default should keep measurement decision diagnostics disabled");
 
     Require(config.earthFixedBeamTargetMode == "grid-anchor",
             "baseline default should enable grid-anchor beam targeting");

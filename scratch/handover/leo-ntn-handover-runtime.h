@@ -21,6 +21,7 @@
 #include "ns3/network-module.h"
 #include "ns3/nr-module.h"
 #include "leo-orbit-calculator.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -28,6 +29,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <utility>
@@ -134,6 +136,9 @@ struct UeRuntime
 
     /** UE 所在地面点。 */
     LeoOrbitCalculator::GroundPoint groundPoint;
+
+    /** 静态 UE 地面点最近的 hex 小区编号；0 表示当前未缓存。 */
+    uint32_t homeGridId = 0;
 
     /** 当前 UE 下行业务流使用的 UDP 目标端口。 */
     uint16_t dlPort = 0;
@@ -285,7 +290,7 @@ struct UeRuntime
 
 struct UeLayoutConfig
 {
-    /** UE 部署类型：`line` 或 `seven-cell`。 */
+    /** UE 部署类型：`line`、`seven-cell`、`r2-diagnostic` 或 `poisson-3ring`。 */
     std::string layoutType = "seven-cell";
 
     /** 线性部署时相邻 UE 的东西向间距。 */
@@ -299,6 +304,15 @@ struct UeLayoutConfig
 
     /** 外围 6 个小区内局部散点相对各自小区中心的偏移尺度。 */
     double ringPointOffsetMeters = 5000.0;
+
+    /** poisson-3ring 布局中每个 hex cell 的泊松均值。 */
+    double poissonLambda = 1.5;
+
+    /** poisson-3ring 布局中单个 hex cell 的 UE 数上限。 */
+    uint32_t maxUePerCell = 5;
+
+    /** poisson-3ring 布局的确定性随机种子。 */
+    uint32_t randomSeed = 42;
 };
 
 struct UePlacement
@@ -543,6 +557,157 @@ BuildR2DiagnosticUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
     return specs;
 }
 
+struct HexOffsetCenter
+{
+    double eastMeters = 0.0;
+    double northMeters = 0.0;
+    uint32_t ringDistance = 0;
+};
+
+inline std::vector<HexOffsetCenter>
+BuildTwoRingHexOffsetCenters(double hexRadiusMeters)
+{
+    std::vector<HexOffsetCenter> centers;
+    centers.reserve(19);
+
+    const double dx = std::sqrt(3.0) * hexRadiusMeters;
+    const double dy = 1.5 * hexRadiusMeters;
+
+    for (int ring = 0; ring <= 2; ++ring)
+    {
+        for (int r = -2; r <= 2; ++r)
+        {
+            for (int q = -2; q <= 2; ++q)
+            {
+                const int s = -q - r;
+                const int ringDistance = std::max({std::abs(q), std::abs(r), std::abs(s)});
+                if (ringDistance != ring)
+                {
+                    continue;
+                }
+
+                HexOffsetCenter center;
+                center.eastMeters =
+                    dx * (static_cast<double>(q) + 0.5 * static_cast<double>(r));
+                center.northMeters = dy * static_cast<double>(r);
+                center.ringDistance = static_cast<uint32_t>(ringDistance);
+                centers.push_back(center);
+            }
+        }
+    }
+
+    return centers;
+}
+
+inline uint32_t
+SampleTruncatedPoisson(double lambda, uint32_t maxUePerCell, std::mt19937& rng)
+{
+    std::poisson_distribution<uint32_t> distribution(lambda);
+    return std::min(distribution(rng), maxUePerCell);
+}
+
+inline std::pair<double, double>
+SamplePointInPointyHex(double hexRadiusMeters, std::mt19937& rng)
+{
+    const double halfWidth = 0.5 * std::sqrt(3.0) * hexRadiusMeters;
+    std::uniform_real_distribution<double> eastDistribution(-halfWidth, halfWidth);
+    std::uniform_real_distribution<double> northDistribution(-hexRadiusMeters, hexRadiusMeters);
+
+    while (true)
+    {
+        const double east = eastDistribution(rng);
+        const double north = northDistribution(rng);
+        const double absEast = std::abs(east);
+        const double absNorth = std::abs(north);
+
+        const double maxEast =
+            absNorth <= 0.5 * hexRadiusMeters
+                ? halfWidth
+                : std::sqrt(3.0) * (hexRadiusMeters - absNorth);
+        if (absEast <= maxEast)
+        {
+            return {east, north};
+        }
+    }
+}
+
+inline std::string
+PoissonThreeRingRole(uint32_t ringDistance)
+{
+    return ringDistance == 0 ? "p3-center" : ringDistance == 1 ? "p3-ring1" : "p3-ring2";
+}
+
+inline std::vector<uint32_t>
+BuildPoissonThreeRingCellCounts(uint32_t ueNum, const UeLayoutConfig& layout, std::mt19937& rng)
+{
+    const uint32_t cellCount = 19;
+    std::vector<uint32_t> counts(cellCount, 0);
+    uint32_t total = 0;
+
+    for (uint32_t cellIdx = 0; cellIdx < cellCount; ++cellIdx)
+    {
+        counts[cellIdx] =
+            SampleTruncatedPoisson(layout.poissonLambda, layout.maxUePerCell, rng);
+        total += counts[cellIdx];
+    }
+
+    std::uniform_int_distribution<uint32_t> cellDistribution(0, cellCount - 1);
+    while (total < ueNum)
+    {
+        const uint32_t cellIdx = cellDistribution(rng);
+        if (counts[cellIdx] >= layout.maxUePerCell)
+        {
+            continue;
+        }
+        ++counts[cellIdx];
+        ++total;
+    }
+
+    while (total > ueNum)
+    {
+        const uint32_t cellIdx = cellDistribution(rng);
+        if (counts[cellIdx] == 0)
+        {
+            continue;
+        }
+        --counts[cellIdx];
+        --total;
+    }
+
+    return counts;
+}
+
+inline std::vector<UePlacementOffsetSpec>
+BuildPoissonThreeRingUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
+{
+    NS_ABORT_MSG_IF(layout.poissonLambda <= 0.0, "poissonLambda must be > 0");
+    NS_ABORT_MSG_IF(layout.maxUePerCell == 0, "maxUePerCell must be >= 1");
+    NS_ABORT_MSG_IF(ueNum > 19 * layout.maxUePerCell,
+                    "poisson-3ring requires ueNum <= 19 * maxUePerCell");
+
+    std::mt19937 rng(layout.randomSeed);
+    const auto hexCenters = BuildTwoRingHexOffsetCenters(layout.hexCellRadiusMeters);
+    const auto cellCounts = BuildPoissonThreeRingCellCounts(ueNum, layout, rng);
+
+    std::vector<UePlacementOffsetSpec> specs;
+    specs.reserve(ueNum);
+    for (uint32_t cellIdx = 0; cellIdx < hexCenters.size(); ++cellIdx)
+    {
+        const auto& center = hexCenters[cellIdx];
+        for (uint32_t ueIdx = 0; ueIdx < cellCounts[cellIdx]; ++ueIdx)
+        {
+            const auto [localEastMeters, localNorthMeters] =
+                SamplePointInPointyHex(layout.hexCellRadiusMeters, rng);
+            AppendUeOffsetSpec(specs,
+                               center.eastMeters + localEastMeters,
+                               center.northMeters + localNorthMeters,
+                               PoissonThreeRingRole(center.ringDistance));
+        }
+    }
+
+    return specs;
+}
+
 inline std::vector<UePlacement>
 BuildUePlacementsFromOffsetSpecs(double baseLatitudeDeg,
                                  double baseLongitudeDeg,
@@ -589,6 +754,10 @@ BuildUePlacements(double baseLatitudeDeg,
     else if (layout.layoutType == "r2-diagnostic")
     {
         offsetSpecs = BuildR2DiagnosticUeOffsetSpecs(ueNum, layout);
+    }
+    else if (layout.layoutType == "poisson-3ring")
+    {
+        offsetSpecs = BuildPoissonThreeRingUeOffsetSpecs(ueNum, layout);
     }
     else
     {

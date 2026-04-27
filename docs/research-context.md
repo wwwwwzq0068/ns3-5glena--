@@ -18,15 +18,15 @@
 - Current close-out priorities for the thesis are:
   - lower `E2E delay`
   - lower `packet loss rate`
-  - more stable `SINR`
+  - higher throughput
+  - fewer completed handovers when they are unnecessary
   - fewer unnecessary handovers and lower `ping-pong`
-  - better `load balance`
+  - better `load balance` by Jain fairness
 - Improve handover success rate.
 - Reduce unnecessary handovers and ping-pong behavior.
 - Maintain throughput continuity during serving satellite changes.
-- Keep handover delay and service interruption low.
 - Incorporate load-aware target selection rather than leaving it as an optional extension, because the thesis task explicitly requires considering both signal quality and satellite load.
-- `PHY DL TB error / TBler` and detailed antenna or beam tuning are now background diagnostics only; they are not the primary optimization target unless needed to explain `SINR`, delay, or loss.
+- `SINR`, `PHY DL TB error / TBler`, detailed antenna tuning, handover delay, and signaling overhead are now diagnostics only; they are not part of the formal thesis result table.
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
@@ -39,14 +39,10 @@
 ## Default Evaluation Metrics
 - `E2E delay`
 - `packet loss rate`
-- `mean/min SINR`
-- handover success rate
-- handover delay
 - throughput
-- service continuity
+- completed handovers
 - ping-pong count
-- load balance
-- signaling overhead
+- load balance by Jain fairness
 
 ## Default Files To Inspect
 - `scratch/leo-ntn-handover-baseline.cc`

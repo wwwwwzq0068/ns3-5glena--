@@ -115,7 +115,8 @@ IsUeInInitialAnchorCell(const UeScenarioInstallContext& context,
                         uint32_t satIdx)
 {
     const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
-    if (!config.enforceAnchorCellForRealLinks || !RequiresDiscreteAnchorCellGate(beamTargetMode))
+    if (ResolveEffectiveRealLinkGateMode(config) != "beam-and-anchor" ||
+        !RequiresDiscreteAnchorCellGate(beamTargetMode))
     {
         return true;
     }
@@ -141,6 +142,7 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                              uint32_t ueIdx)
 {
     const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
+    const std::string realLinkGateMode = ResolveEffectiveRealLinkGateMode(config);
     uint32_t initialAttachIdx = 0;
     uint32_t bestVisibleIdx = 0;
     uint32_t bestAnyIdx = 0;
@@ -169,10 +171,11 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                                                           context.beamModelConfig);
 
         const bool accessAllowed =
-            !config.enforceBeamCoverageForRealLinks ||
+            realLinkGateMode == "off" ||
             (budget.beamLocked &&
              budget.offBoresightAngleRad <= context.beamModelConfig.theta3dBRad &&
-             IsUeInInitialAnchorCell(context, config, ue, satIdx));
+             (realLinkGateMode == "beam-only" ||
+              IsUeInInitialAnchorCell(context, config, ue, satIdx)));
         if (state.elevationRad > bestAnyElevation)
         {
             bestAnyElevation = state.elevationRad;

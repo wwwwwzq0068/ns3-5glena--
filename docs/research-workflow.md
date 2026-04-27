@@ -2,9 +2,10 @@
 
 ## 版本定义
 - 当前研究主阶段定义为 `4.2`。
-- 最近已发布稳定节点为 `5.1`（`research-v5.1`）。
+- 最近已发布稳定节点为 `6.0`（`research-v6.0`）。
 - `research-v5.0` 是在 `research-v4.3` 定向天线默认口径基础上完成 thesis-mainline 清理与文档收口后的发布包。
 - `research-v5.1` 是在 `research-v5.0` 基础上的结构与口径收口包：主仿真入口继续下放无线 bootstrap、UE 初始接入/业务安装和 trace 输出生命周期，几何波束参数改为从真实 PHY `b00-* + gNB` 阵列规模自动推导。
+- `research-v6.0` 是正式论文输出链收口包：固定 baseline / full improved 两组比较，默认保留业务、切换、负载公平性和轨迹/HTML 示意材料，PHY/SINR/TBler 只作为诊断入口。
 - 当前 `4.2` 是当前 measurement-driven baseline / improved 对照主线的最新稳定收口快照。
 - 这里的 `4.2 / 4.2.x` 指本仓库中的“毕设/研究工作版本”，不是 ns-3 框架本身的版本号。
 - ns-3 框架版本仍然保持为 `3.46`，不要改动根目录的 `VERSION` 文件去表达研究版本。
@@ -16,7 +17,7 @@
 - `4.2` 提供当前默认 baseline / improved 语义：
   - `seven-cell` baseline 场景与两阶段 `UE` 位置生成逻辑
   - 统一 `MeasurementReport` 驱动的 `A3` baseline / improved 目标选择与 `ping-pong` 统计
-  - `sat_anchor_trace.csv`、`ue_layout.csv`、`hex_grid_cells.svg`、`handover_event_trace.csv` 等结果输出链
+  - `sat_anchor_trace.csv`、`sat_ground_track.csv`、`satellite_state_trace.csv`、`ue_layout.csv`、`hex_grid_cells.html`、`handover_event_trace.csv` 等结果输出链
   - `disableUeIpv4Forwarding`、`forceRlcAmForEpc` 等稳定性控制项
 - `4.2` 还纳入：
   - 移除旧的几何 `beam budget/custom A3` handover 代理链与其派生脚本输出
@@ -74,6 +75,7 @@
   - `research-v4.2`
   - `research-v5.0`
   - `research-v5.1`
+  - `research-v6.0`
 
 ## 当前执行原则
 - 当前先固定 `B00` 基线，再围绕传统 A3 baseline 和改进策略开展对比设计。

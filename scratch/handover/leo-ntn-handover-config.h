@@ -33,6 +33,9 @@ struct BaselineSimulationConfig
     double ueSpacingMeters = 40000.0;
     double ueCenterSpacingMeters = 6000.0;
     double ueRingPointOffsetMeters = 5000.0;
+    double poissonLambda = 1.5;
+    uint32_t maxUePerCell = 5;
+    uint32_t ueLayoutRandomSeed = 42;
 
     double satAltitudeMeters = 600000.0;
     double orbitEccentricity = 0.0;
@@ -73,7 +76,9 @@ struct BaselineSimulationConfig
     double hexCellRadiusKm = 20.0;
     uint32_t gridNearestK = 3;
     bool enforceBeamExclusionRing = true;
+    std::string beamExclusionMode;
     uint32_t beamExclusionCandidateK = 64;
+    std::string realLinkGateMode;
     bool enforceBeamCoverageForRealLinks = true;
     bool enforceAnchorCellForRealLinks = true;
     bool preferDemandAnchorCells = true;
@@ -89,18 +94,23 @@ struct BaselineSimulationConfig
         std::string(PROJECT_SOURCE_PATH) + "/scratch/plotting/plot_hex_grid_svg.py";
     std::string satAnchorTracePath = JoinOutputPath(outputDir, "sat_anchor_trace.csv");
     std::string satGroundTrackTracePath = JoinOutputPath(outputDir, "sat_ground_track.csv");
+    std::string satelliteStateTracePath = JoinOutputPath(outputDir, "satellite_state_trace.csv");
+    bool enableSatAnchorTrace = false;
+    bool enableSatGroundTrackTrace = false;
+    bool enableSatelliteStateTrace = true;
     std::string ueLayoutPath = JoinOutputPath(outputDir, "ue_layout.csv");
-    std::string gridSvgPath = JoinOutputPath(outputDir, "hex_grid_cells.svg");
     std::string gridHtmlPath = JoinOutputPath(outputDir, "hex_grid_cells.html");
     std::string handoverThroughputTracePath =
         JoinOutputPath(outputDir, "handover_dl_throughput_trace.csv");
     std::string handoverEventTracePath = JoinOutputPath(outputDir, "handover_event_trace.csv");
     std::string e2eFlowMetricsPath = JoinOutputPath(outputDir, "e2e_flow_metrics.csv");
+    bool enableFlowMonitor = false;
     std::string phyDlTbMetricsPath = JoinOutputPath(outputDir, "phy_dl_tb_metrics.csv");
     std::string phyDlTbIntervalMetricsPath =
         JoinOutputPath(outputDir, "phy_dl_tb_interval_metrics.csv");
     std::string phyDlTbTracePath = JoinOutputPath(outputDir, "phy_dl_tb_trace.csv");
     double phyDlTbIntervalSeconds = 1.0;
+    bool enablePhyDlTbStats = false;
     bool enablePhyDlTbTrace = false;
 
     double centralFrequency = 2e9;
@@ -164,13 +174,14 @@ struct BaselineSimulationConfig
     bool printGridAnchorEvents = false;
     bool printKpiReports = false;
     bool printNrtEvents = false;
+    bool printMeasurementDecisionDiagnostics = false;
     bool printOrbitCheck = false;
     bool printRrcStateTransitions = false;
     bool startupVerbose = false;
     double kpiIntervalSeconds = 2.0;
     bool printSimulationProgress = true;
     double progressReportIntervalSeconds = 2.0;
-    bool runGridSvgScript = true;
+    bool runGridHtmlScript = true;
     double throughputReportIntervalSeconds = 0.0;
     bool enableHandoverThroughputTrace = true;
     double handoverThroughputTraceIntervalSeconds = 0.005;
@@ -212,6 +223,9 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("ueSpacingMeters", config.ueSpacingMeters);
     addArg("ueCenterSpacingMeters", config.ueCenterSpacingMeters);
     addArg("ueRingPointOffsetMeters", config.ueRingPointOffsetMeters);
+    addArg("poissonLambda", config.poissonLambda);
+    addArg("maxUePerCell", config.maxUePerCell);
+    addArg("ueLayoutRandomSeed", config.ueLayoutRandomSeed);
     addArg("satAltitudeMeters", config.satAltitudeMeters);
     addArg("orbitEccentricity", config.orbitEccentricity);
     addArg("orbitInclinationDeg", config.orbitInclinationDeg);
@@ -249,7 +263,9 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("hexCellRadiusKm", config.hexCellRadiusKm);
     addArg("gridNearestK", config.gridNearestK);
     addArg("enforceBeamExclusionRing", config.enforceBeamExclusionRing);
+    addArg("beamExclusionMode", config.beamExclusionMode);
     addArg("beamExclusionCandidateK", config.beamExclusionCandidateK);
+    addArg("realLinkGateMode", config.realLinkGateMode);
     addArg("enforceBeamCoverageForRealLinks", config.enforceBeamCoverageForRealLinks);
     addArg("enforceAnchorCellForRealLinks", config.enforceAnchorCellForRealLinks);
     addArg("preferDemandAnchorCells", config.preferDemandAnchorCells);
@@ -318,27 +334,33 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("printGridAnchorEvents", config.printGridAnchorEvents);
     addArg("printKpiReports", config.printKpiReports);
     addArg("printNrtEvents", config.printNrtEvents);
+    addArg("printMeasurementDecisionDiagnostics", config.printMeasurementDecisionDiagnostics);
     addArg("printOrbitCheck", config.printOrbitCheck);
     addArg("printRrcStateTransitions", config.printRrcStateTransitions);
     addArg("startupVerbose", config.startupVerbose);
     addArg("kpiIntervalSeconds", config.kpiIntervalSeconds);
     addArg("printSimulationProgress", config.printSimulationProgress);
     addArg("progressReportIntervalSeconds", config.progressReportIntervalSeconds);
-    addArg("runGridSvgScript", config.runGridSvgScript);
+    addArg("runGridHtmlScript", config.runGridHtmlScript);
     addArg("plotHexGridScriptPath", config.plotHexGridScriptPath);
     addArg("satAnchorTracePath", config.satAnchorTracePath);
     addArg("satGroundTrackTracePath", config.satGroundTrackTracePath);
+    addArg("satelliteStateTracePath", config.satelliteStateTracePath);
+    addArg("enableSatAnchorTrace", config.enableSatAnchorTrace);
+    addArg("enableSatGroundTrackTrace", config.enableSatGroundTrackTrace);
+    addArg("enableSatelliteStateTrace", config.enableSatelliteStateTrace);
     addArg("ueLayoutPath", config.ueLayoutPath);
-    addArg("gridSvgPath", config.gridSvgPath);
     addArg("gridHtmlPath", config.gridHtmlPath);
     addArg("throughputReportIntervalSeconds", config.throughputReportIntervalSeconds);
     addArg("handoverThroughputTracePath", config.handoverThroughputTracePath);
     addArg("handoverEventTracePath", config.handoverEventTracePath);
     addArg("e2eFlowMetricsPath", config.e2eFlowMetricsPath);
+    addArg("enableFlowMonitor", config.enableFlowMonitor);
     addArg("phyDlTbMetricsPath", config.phyDlTbMetricsPath);
     addArg("phyDlTbIntervalMetricsPath", config.phyDlTbIntervalMetricsPath);
     addArg("phyDlTbTracePath", config.phyDlTbTracePath);
     addArg("phyDlTbIntervalSeconds", config.phyDlTbIntervalSeconds);
+    addArg("enablePhyDlTbStats", config.enablePhyDlTbStats);
     addArg("enablePhyDlTbTrace", config.enablePhyDlTbTrace);
     addArg("enableHandoverThroughputTrace", config.enableHandoverThroughputTrace);
     addArg("handoverThroughputTraceIntervalSeconds", config.handoverThroughputTraceIntervalSeconds);
@@ -347,6 +369,30 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("enableSrsInFSlots", config.enableSrsInFSlots);
     addArg("enableSrsInUlSlots", config.enableSrsInUlSlots);
     addArg("srsSymbols", config.srsSymbols);
+}
+
+inline std::string
+ResolveEffectiveBeamExclusionMode(const BaselineSimulationConfig& config)
+{
+    if (!config.beamExclusionMode.empty())
+    {
+        return config.beamExclusionMode;
+    }
+    return config.enforceBeamExclusionRing ? "ring" : "off";
+}
+
+inline std::string
+ResolveEffectiveRealLinkGateMode(const BaselineSimulationConfig& config)
+{
+    if (!config.realLinkGateMode.empty())
+    {
+        return config.realLinkGateMode;
+    }
+    if (!config.enforceBeamCoverageForRealLinks)
+    {
+        return "off";
+    }
+    return config.enforceAnchorCellForRealLinks ? "beam-and-anchor" : "beam-only";
 }
 
 inline void
@@ -358,8 +404,9 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
         JoinOutputPath(defaultOutputDir, "sat_anchor_trace.csv");
     const std::string defaultSatGroundTrackTracePath =
         JoinOutputPath(defaultOutputDir, "sat_ground_track.csv");
+    const std::string defaultSatelliteStateTracePath =
+        JoinOutputPath(defaultOutputDir, "satellite_state_trace.csv");
     const std::string defaultUeLayoutPath = JoinOutputPath(defaultOutputDir, "ue_layout.csv");
-    const std::string defaultGridSvgPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.svg");
     const std::string defaultGridHtmlPath = JoinOutputPath(defaultOutputDir, "hex_grid_cells.html");
     const std::string defaultHandoverThroughputTracePath =
         JoinOutputPath(defaultOutputDir, "handover_dl_throughput_trace.csv");
@@ -387,13 +434,15 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
     {
         config.satGroundTrackTracePath = JoinOutputPath(config.outputDir, "sat_ground_track.csv");
     }
+    if (config.satelliteStateTracePath == defaultSatelliteStateTracePath &&
+        config.outputDir != defaultOutputDir)
+    {
+        config.satelliteStateTracePath =
+            JoinOutputPath(config.outputDir, "satellite_state_trace.csv");
+    }
     if (config.ueLayoutPath == defaultUeLayoutPath && config.outputDir != defaultOutputDir)
     {
         config.ueLayoutPath = JoinOutputPath(config.outputDir, "ue_layout.csv");
-    }
-    if (config.gridSvgPath == defaultGridSvgPath && config.outputDir != defaultOutputDir)
-    {
-        config.gridSvgPath = JoinOutputPath(config.outputDir, "hex_grid_cells.svg");
     }
     if (config.gridHtmlPath == defaultGridHtmlPath && config.outputDir != defaultOutputDir)
     {
@@ -433,6 +482,15 @@ ResolveBaselineOutputPaths(BaselineSimulationConfig& config)
 }
 
 inline void
+ApplyBaselineDerivedOutputConfig(BaselineSimulationConfig& config)
+{
+    if (config.enablePhyDlTbTrace)
+    {
+        config.enablePhyDlTbStats = true;
+    }
+}
+
+inline void
 ApplyBaselineDerivedLocationConfig(BaselineSimulationConfig& config)
 {
     if (config.lockCellAnchorToUe)
@@ -457,8 +515,9 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.simTime <= 0.0, "simTime must be > 0");
     NS_ABORT_MSG_IF(config.appStartTime < 0.0, "appStartTime must be >= 0");
     NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell" &&
-                        config.ueLayoutType != "r2-diagnostic",
-                    "ueLayoutType must be one of: line, seven-cell, r2-diagnostic");
+                        config.ueLayoutType != "r2-diagnostic" &&
+                        config.ueLayoutType != "poisson-3ring",
+                    "ueLayoutType must be one of: line, seven-cell, r2-diagnostic, poisson-3ring");
     NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueCenterSpacingMeters <= 0.0, "ueCenterSpacingMeters must be > 0");
     NS_ABORT_MSG_IF(config.ueRingPointOffsetMeters <= 0.0,
@@ -467,6 +526,13 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "seven-cell layout currently requires ueNum == 25");
     NS_ABORT_MSG_IF(config.ueLayoutType == "r2-diagnostic" && config.ueNum != 19,
                     "r2-diagnostic layout currently requires ueNum == 19");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" && config.poissonLambda <= 0.0,
+                    "poissonLambda must be > 0");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" && config.maxUePerCell == 0,
+                    "maxUePerCell must be >= 1");
+    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" &&
+                        config.ueNum > 19 * config.maxUePerCell,
+                    "poisson-3ring requires ueNum <= 19 * maxUePerCell");
     NS_ABORT_MSG_IF(config.orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");
     NS_ABORT_MSG_IF(config.orbitEccentricity < 0.0 || config.orbitEccentricity >= 1.0,
@@ -515,8 +581,9 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "realisticBfUpdatePeriodicity must be >= 1");
     NS_ABORT_MSG_IF(config.realisticBfUpdateDelayMs < 0.0,
                     "realisticBfUpdateDelayMs must be >= 0");
-    NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved",
-                    "handoverMode must be either 'baseline' or 'improved'");
+    NS_ABORT_MSG_IF(config.handoverMode != "baseline" && config.handoverMode != "improved" &&
+                        config.handoverMode != "improved-score-only",
+                    "handoverMode must be one of: 'baseline', 'improved', 'improved-score-only'");
     NS_ABORT_MSG_IF(config.measurementMaxReportCells == 0,
                     "measurementMaxReportCells must be >= 1");
     NS_ABORT_MSG_IF(config.improvedSignalWeight < 0.0, "improvedSignalWeight must be >= 0");
@@ -569,8 +636,16 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.anchorGridHexRadiusKm <= 0.0, "anchorGridHexRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.hexCellRadiusKm <= 0.0, "hexCellRadiusKm must be > 0");
     NS_ABORT_MSG_IF(config.gridNearestK == 0, "gridNearestK must be >= 1");
-    NS_ABORT_MSG_IF(config.enforceBeamExclusionRing && config.beamExclusionCandidateK == 0,
-                    "beamExclusionCandidateK must be >= 1 when enforceBeamExclusionRing is true");
+    const std::string beamExclusionMode = ResolveEffectiveBeamExclusionMode(config);
+    const std::string realLinkGateMode = ResolveEffectiveRealLinkGateMode(config);
+    NS_ABORT_MSG_IF(beamExclusionMode != "ring" && beamExclusionMode != "overlap-only" &&
+                        beamExclusionMode != "off",
+                    "beamExclusionMode must be one of: ring, overlap-only, off");
+    NS_ABORT_MSG_IF(realLinkGateMode != "beam-and-anchor" && realLinkGateMode != "beam-only" &&
+                        realLinkGateMode != "off",
+                    "realLinkGateMode must be one of: beam-and-anchor, beam-only, off");
+    NS_ABORT_MSG_IF(beamExclusionMode != "off" && config.beamExclusionCandidateK == 0,
+                    "beamExclusionCandidateK must be >= 1 when beam exclusion is enabled");
     NS_ABORT_MSG_IF(config.anchorSelectionMode != "demand-nearest" &&
                         config.anchorSelectionMode != "demand-max-ue-near-nadir",
                     "anchorSelectionMode must be one of: demand-nearest, demand-max-ue-near-nadir");
@@ -582,8 +657,9 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.anchorGridHysteresisSeconds < 0.0,
                     "anchorGridHysteresisSeconds must be >= 0");
     NS_ABORT_MSG_IF(config.outputDir.empty(), "outputDir must not be empty");
-    NS_ABORT_MSG_IF(config.phyDlTbIntervalSeconds <= 0.0,
-                    "phyDlTbIntervalSeconds must be > 0");
+    NS_ABORT_MSG_IF((config.enablePhyDlTbStats || config.enablePhyDlTbTrace) &&
+                        config.phyDlTbIntervalSeconds <= 0.0,
+                    "phyDlTbIntervalSeconds must be > 0 when PHY DL TB stats are enabled");
     NS_ABORT_MSG_IF(config.progressReportIntervalSeconds <= 0.0,
                     "progressReportIntervalSeconds must be > 0");
     NS_ABORT_MSG_IF(config.pingPongWindowSeconds <= 0.0,

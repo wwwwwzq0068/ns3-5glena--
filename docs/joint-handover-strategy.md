@@ -238,8 +238,9 @@ TTT 由标准 A3 测量配置管理，不再使用旧的手工 `manualHoCandidat
 - 第一版先实现"带门控的联合目标选择"，不同时改场景口径、baseline 参数和日志体系
 - 第一版先用剩余可见时间表达候选的稳定服务能力，不把它单独改造成新的触发主链
 - 第一版优先观察：
-  - handover success rate
-  - handover delay
-  - throughput continuity
+  - E2E delay
+  - packet loss rate
+  - throughput
+  - completed handovers
   - ping-pong count
-  - load balance
+  - Jain load fairness

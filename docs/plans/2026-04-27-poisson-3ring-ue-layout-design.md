@@ -1,5 +1,9 @@
 # UE 布局重构设计：poisson-3ring
 
+> 执行调整：当前研究口径仍要求正式 baseline 保持 `seven-cell`。本设计中的“替代
+> `seven-cell` 作为正式 baseline”暂不执行；当前实现只新增
+> `ueLayoutType=poisson-3ring` 作为可选场景入口，默认 baseline 不变。
+
 ## 背景
 
 当前 `seven-cell` 布局存在核心问题：
@@ -9,7 +13,7 @@
 
 ## 设计目标
 
-设计新的 `poisson-3ring` 布局替代 `seven-cell` 作为正式 baseline：
+设计新的 `poisson-3ring` 可选布局，用于补充观察空间负载分布：
 - 小区数接近卫星数，让每颗卫星有足够候选小区
 - 降低 UE 密度，每小区平均 1-2 UE
 - 使用泊松分布模拟真实负载差异，允许空置小区
@@ -96,7 +100,7 @@ for each cell in 19 cells:
 1. 8 颗卫星不再出现明显过剩
 2. 切换现象能正常暴露
 3. baseline / improved 能拉开差异
-4. E2E delay、packet loss、SINR、ping-pong、load balance 可统计
+4. E2E delay、packet loss、throughput、completed handovers、ping-pong、Jain load fairness 可统计
 
 ## 文档更新
 
