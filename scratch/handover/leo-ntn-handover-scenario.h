@@ -42,6 +42,48 @@ struct UeScenarioInstallContext
     double gmstAtEpochRad = 0.0;
     double minElevationRad = 0.0;
     BeamModelConfig beamModelConfig;
+    Vector (*resolveSatelliteBeamTargetEcef)(uint32_t satIdx, const Vector& satEcef) = nullptr;
+};
+
+struct UeScenarioInstallInputs
+{
+    UeScenarioInstallInputs(const NodeContainer& ueNodesIn,
+                            const NetDeviceContainer& ueNetDevIn,
+                            const NetDeviceContainer& gNbNetDevIn,
+                            const std::vector<UePlacement>& uePlacementsIn,
+                            const Ipv4InterfaceContainer& ueIpIfaceIn,
+                            Ptr<Node> remoteHostIn,
+                            Ptr<NrHelper> nrHelperIn,
+                            Ptr<NrPointToPointEpcHelper> nrEpcHelperIn,
+                            Ipv4StaticRoutingHelper& routingHelperIn)
+        : ueNodes(ueNodesIn),
+          ueNetDev(ueNetDevIn),
+          gNbNetDev(gNbNetDevIn),
+          uePlacements(uePlacementsIn),
+          ueIpIface(ueIpIfaceIn),
+          remoteHost(remoteHostIn),
+          nrHelper(nrHelperIn),
+          nrEpcHelper(nrEpcHelperIn),
+          routingHelper(routingHelperIn)
+    {
+    }
+
+    const NodeContainer& ueNodes;
+    const NetDeviceContainer& ueNetDev;
+    const NetDeviceContainer& gNbNetDev;
+    const std::vector<UePlacement>& uePlacements;
+    const Ipv4InterfaceContainer& ueIpIface;
+    Ptr<Node> remoteHost;
+    Ptr<NrHelper> nrHelper;
+    Ptr<NrPointToPointEpcHelper> nrEpcHelper;
+    Ipv4StaticRoutingHelper& routingHelper;
+};
+
+struct NoopUeTransportBootstrap
+{
+    void operator()(const Ptr<NrUeNetDevice>&) const
+    {
+    }
 };
 
 inline void
@@ -115,9 +157,12 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                                                          ue.groundPoint,
                                                          config.centralFrequency,
                                                          context.minElevationRad);
-        const Vector beamTargetEcef = ResolveEarthFixedBeamTarget(state.ecef,
-                                                                  context.satellites[satIdx].cellAnchorEcef,
-                                                                  beamTargetMode);
+        const Vector beamTargetEcef =
+            context.resolveSatelliteBeamTargetEcef
+                ? context.resolveSatelliteBeamTargetEcef(satIdx, state.ecef)
+                : ResolveEarthFixedBeamTarget(state.ecef,
+                                              context.satellites[satIdx].cellAnchorEcef,
+                                              beamTargetMode);
         const auto budget = CalculateEarthFixedBeamBudget(state.ecef,
                                                           ue.groundPoint.ecef,
                                                           beamTargetEcef,
@@ -152,16 +197,25 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
     else if (std::isfinite(bestVisibleElevation))
     {
         initialAttachIdx = bestVisibleIdx;
-        std::cout << "[Setup] warning: ue" << ueIdx
-                  << " visible satellites exist but none satisfy real-link access gate at t=0, "
-                  << "fallback to highest-elevation visible sat" << initialAttachIdx << std::endl;
+        if (config.startupVerbose)
+        {
+            std::cout << "[Setup] warning: ue" << ueIdx
+                      << " visible satellites exist but none satisfy real-link access gate at t=0, "
+                      << "fallback to highest-elevation visible sat" << initialAttachIdx
+                      << std::endl;
+        }
     }
     else
     {
         initialAttachIdx = bestAnyIdx;
-        std::cout << "[Setup] warning: ue" << ueIdx << " no visible satellite at t=0, attaching to "
-                  << "highest-elevation sat" << initialAttachIdx
-                  << " (el=" << LeoOrbitCalculator::RadToDeg(bestAnyElevation) << "deg)" << std::endl;
+        if (config.startupVerbose)
+        {
+            std::cout << "[Setup] warning: ue" << ueIdx
+                      << " no visible satellite at t=0, attaching to highest-elevation sat"
+                      << initialAttachIdx
+                      << " (el=" << LeoOrbitCalculator::RadToDeg(bestAnyElevation) << "deg)"
+                      << std::endl;
+        }
     }
     return initialAttachIdx;
 }
@@ -229,6 +283,7 @@ InstallUeInitialAttachAndTraffic(UeScenarioInstallContext& context,
         serverApps.Stop(Seconds(config.simTime));
         clientApps.Stop(Seconds(config.simTime));
 
+        ue.dlPort = dlPort;
         ue.server = serverApps.Get(0)->GetObject<UdpServer>();
         if (ue.dev)
         {
@@ -236,6 +291,63 @@ InstallUeInitialAttachAndTraffic(UeScenarioInstallContext& context,
         }
         context.ues.push_back(ue);
     }
+}
+
+template <typename BootstrapTransportCallback>
+inline void
+InstallUeInitialAttachAndTraffic(UeScenarioInstallContext& context,
+                                 const BaselineSimulationConfig& config,
+                                 const UeScenarioInstallInputs& inputs,
+                                 BootstrapTransportCallback&& bootstrapTransportCallback)
+{
+    InstallUeInitialAttachAndTraffic(context,
+                                     config,
+                                     inputs.ueNodes,
+                                     inputs.ueNetDev,
+                                     inputs.gNbNetDev,
+                                     inputs.uePlacements,
+                                     inputs.ueIpIface,
+                                     inputs.remoteHost,
+                                     inputs.nrHelper,
+                                     inputs.nrEpcHelper,
+                                     inputs.routingHelper,
+                                     bootstrapTransportCallback);
+}
+
+inline void
+InstallUeInitialAttachAndTraffic(UeScenarioInstallContext& context,
+                                 const BaselineSimulationConfig& config,
+                                 const UeScenarioInstallInputs& inputs)
+{
+    InstallUeInitialAttachAndTraffic(
+        context, config, inputs, NoopUeTransportBootstrap{});
+}
+
+inline void
+InstallUeInitialAttachAndTraffic(UeScenarioInstallContext& context,
+                                 const BaselineSimulationConfig& config,
+                                 const NodeContainer& ueNodes,
+                                 const NetDeviceContainer& ueNetDev,
+                                 const NetDeviceContainer& gNbNetDev,
+                                 const std::vector<UePlacement>& uePlacements,
+                                 const Ipv4InterfaceContainer& ueIpIface,
+                                 Ptr<Node> remoteHost,
+                                 Ptr<NrHelper> nrHelper,
+                                 Ptr<NrPointToPointEpcHelper> nrEpcHelper,
+                                 Ipv4StaticRoutingHelper& routingHelper)
+{
+    InstallUeInitialAttachAndTraffic(context,
+                                     config,
+                                     ueNodes,
+                                     ueNetDev,
+                                     gNbNetDev,
+                                     uePlacements,
+                                     ueIpIface,
+                                     remoteHost,
+                                     nrHelper,
+                                     nrEpcHelper,
+                                     routingHelper,
+                                     NoopUeTransportBootstrap{});
 }
 
 } // namespace ns3

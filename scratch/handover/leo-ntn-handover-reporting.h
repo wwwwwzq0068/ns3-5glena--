@@ -14,6 +14,7 @@
  * 当前本文件只处理控制台摘要输出，不负责事件级实时日志。
  */
 
+#include "leo-ntn-handover-output-lifecycle.h"
 #include "leo-ntn-handover-runtime.h"
 #include "ns3/flow-monitor-module.h"
 #include <cmath>
@@ -531,50 +532,44 @@ PrintE2eFlowSummary(const E2eFlowAggregate& aggregate)
 inline bool
 WriteE2eFlowMetricsCsv(const std::string& path, const E2eFlowAggregate& aggregate)
 {
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
-    if (!out.is_open())
-    {
-        return false;
-    }
-
-    out << "ue,dl_port,matched_flow,tx_packets,rx_packets,lost_packets,loss_rate_percent,tx_bytes,"
-        << "rx_bytes,offered_mbps,throughput_mbps,mean_delay_ms,mean_jitter_ms\n";
-
-    out << std::fixed << std::setprecision(3);
-    for (const auto& summary : aggregate.perUe)
-    {
-        out << summary.ueIndex << "," << summary.dlPort << "," << (summary.hasMatchedFlow ? 1 : 0)
-            << "," << summary.txPackets << "," << summary.rxPackets << "," << summary.lostPackets
-            << "," << summary.packetLossRatePercent << "," << summary.txBytes << ","
-            << summary.rxBytes << "," << summary.averageOfferedMbps << ","
-            << summary.averageThroughputMbps << ",";
-        if (std::isfinite(summary.meanDelayMs))
+    return WriteCsvFile(path, HandoverCsvHeaders::kE2eFlowMetrics, [&](std::ofstream& out) {
+        out << std::fixed << std::setprecision(3);
+        for (const auto& summary : aggregate.perUe)
         {
-            out << summary.meanDelayMs;
+            out << summary.ueIndex << "," << summary.dlPort << ","
+                << (summary.hasMatchedFlow ? 1 : 0) << "," << summary.txPackets << ","
+                << summary.rxPackets << "," << summary.lostPackets << ","
+                << summary.packetLossRatePercent << "," << summary.txBytes << ","
+                << summary.rxBytes << "," << summary.averageOfferedMbps << ","
+                << summary.averageThroughputMbps << ",";
+            if (std::isfinite(summary.meanDelayMs))
+            {
+                out << summary.meanDelayMs;
+            }
+            out << ",";
+            if (std::isfinite(summary.meanJitterMs))
+            {
+                out << summary.meanJitterMs;
+            }
+            out << "\n";
+        }
+
+        out << "TOTAL,,," << aggregate.totalTxPackets << "," << aggregate.totalRxPackets << ","
+            << aggregate.totalLostPackets << "," << aggregate.packetLossRatePercent << ","
+            << aggregate.totalTxBytes << "," << aggregate.totalRxBytes << ","
+            << aggregate.totalAverageOfferedMbps << "," << aggregate.totalAverageThroughputMbps
+            << ",";
+        if (std::isfinite(aggregate.meanDelayMs))
+        {
+            out << aggregate.meanDelayMs;
         }
         out << ",";
-        if (std::isfinite(summary.meanJitterMs))
+        if (std::isfinite(aggregate.meanJitterMs))
         {
-            out << summary.meanJitterMs;
+            out << aggregate.meanJitterMs;
         }
         out << "\n";
-    }
-
-    out << "TOTAL,,," << aggregate.totalTxPackets << "," << aggregate.totalRxPackets << ","
-        << aggregate.totalLostPackets << "," << aggregate.packetLossRatePercent << ","
-        << aggregate.totalTxBytes << "," << aggregate.totalRxBytes << ","
-        << aggregate.totalAverageOfferedMbps << "," << aggregate.totalAverageThroughputMbps << ",";
-    if (std::isfinite(aggregate.meanDelayMs))
-    {
-        out << aggregate.meanDelayMs;
-    }
-    out << ",";
-    if (std::isfinite(aggregate.meanJitterMs))
-    {
-        out << aggregate.meanJitterMs;
-    }
-    out << "\n";
-    return true;
+    });
 }
 
 /**
@@ -671,54 +666,47 @@ PrintPhyDlTbSummary(const PhyDlTbAggregate& aggregate)
 inline bool
 WritePhyDlTbMetricsCsv(const std::string& path, const PhyDlTbAggregate& aggregate)
 {
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
-    if (!out.is_open())
-    {
-        return false;
-    }
-
-    out << "ue,tb_count,corrupt_tb_count,corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
-
-    out << std::fixed << std::setprecision(6);
-    for (const auto& summary : aggregate.perUe)
-    {
-        out << summary.ueIndex << "," << summary.tbCount << "," << summary.corruptTbCount << ","
-            << summary.corruptTbRatePercent << ",";
-        if (std::isfinite(summary.meanTbler))
+    return WriteCsvFile(path, HandoverCsvHeaders::kPhyDlTbMetrics, [&](std::ofstream& out) {
+        out << std::fixed << std::setprecision(6);
+        for (const auto& summary : aggregate.perUe)
         {
-            out << summary.meanTbler;
+            out << summary.ueIndex << "," << summary.tbCount << "," << summary.corruptTbCount
+                << "," << summary.corruptTbRatePercent << ",";
+            if (std::isfinite(summary.meanTbler))
+            {
+                out << summary.meanTbler;
+            }
+            out << ",";
+            if (std::isfinite(summary.meanSinrDb))
+            {
+                out << summary.meanSinrDb;
+            }
+            out << ",";
+            if (std::isfinite(summary.minSinrDb))
+            {
+                out << summary.minSinrDb;
+            }
+            out << "\n";
+        }
+
+        out << "TOTAL," << aggregate.totalTbCount << "," << aggregate.totalCorruptTbCount << ","
+            << aggregate.corruptTbRatePercent << ",";
+        if (std::isfinite(aggregate.meanTbler))
+        {
+            out << aggregate.meanTbler;
         }
         out << ",";
-        if (std::isfinite(summary.meanSinrDb))
+        if (std::isfinite(aggregate.meanSinrDb))
         {
-            out << summary.meanSinrDb;
+            out << aggregate.meanSinrDb;
         }
         out << ",";
-        if (std::isfinite(summary.minSinrDb))
+        if (std::isfinite(aggregate.minSinrDb))
         {
-            out << summary.minSinrDb;
+            out << aggregate.minSinrDb;
         }
         out << "\n";
-    }
-
-    out << "TOTAL," << aggregate.totalTbCount << "," << aggregate.totalCorruptTbCount << ","
-        << aggregate.corruptTbRatePercent << ",";
-    if (std::isfinite(aggregate.meanTbler))
-    {
-        out << aggregate.meanTbler;
-    }
-    out << ",";
-    if (std::isfinite(aggregate.meanSinrDb))
-    {
-        out << aggregate.meanSinrDb;
-    }
-    out << ",";
-    if (std::isfinite(aggregate.minSinrDb))
-    {
-        out << aggregate.minSinrDb;
-    }
-    out << "\n";
-    return true;
+    });
 }
 
 /**
@@ -761,39 +749,30 @@ BuildPhyDlTbIntervalAggregate(const std::map<uint64_t, PhyDlTbIntervalAccumulato
 inline bool
 WritePhyDlTbIntervalMetricsCsv(const std::string& path, const PhyDlTbIntervalAggregate& aggregate)
 {
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
-    if (!out.is_open())
-    {
-        return false;
-    }
-
-    out << "interval_index,window_start_s,window_end_s,tb_count,corrupt_tb_count,"
-           "corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
-
-    out << std::fixed << std::setprecision(6);
-    for (const auto& summary : aggregate.intervals)
-    {
-        out << summary.intervalIndex << "," << summary.windowStartSeconds << ","
-            << summary.windowEndSeconds << "," << summary.tbCount << ","
-            << summary.corruptTbCount << "," << summary.corruptTbRatePercent << ",";
-        if (std::isfinite(summary.meanTbler))
+    return WriteCsvFile(path, HandoverCsvHeaders::kPhyDlTbIntervalMetrics, [&](std::ofstream& out) {
+        out << std::fixed << std::setprecision(6);
+        for (const auto& summary : aggregate.intervals)
         {
-            out << summary.meanTbler;
+            out << summary.intervalIndex << "," << summary.windowStartSeconds << ","
+                << summary.windowEndSeconds << "," << summary.tbCount << ","
+                << summary.corruptTbCount << "," << summary.corruptTbRatePercent << ",";
+            if (std::isfinite(summary.meanTbler))
+            {
+                out << summary.meanTbler;
+            }
+            out << ",";
+            if (std::isfinite(summary.meanSinrDb))
+            {
+                out << summary.meanSinrDb;
+            }
+            out << ",";
+            if (std::isfinite(summary.minSinrDb))
+            {
+                out << summary.minSinrDb;
+            }
+            out << "\n";
         }
-        out << ",";
-        if (std::isfinite(summary.meanSinrDb))
-        {
-            out << summary.meanSinrDb;
-        }
-        out << ",";
-        if (std::isfinite(summary.minSinrDb))
-        {
-            out << summary.minSinrDb;
-        }
-        out << "\n";
-    }
-
-    return true;
+    });
 }
 
 /**

@@ -1,8 +1,6 @@
-# Simulation Results Staging
+# Simulation Results Retention
 
-Keep only results that still serve the thesis mainline.
-
-Current comparison priority:
+`scratch/results/` is a Git-ignored staging area. Keep only outputs that still support the thesis mainline comparison on:
 - `E2E delay`
 - `packet loss rate`
 - `SINR`
@@ -20,10 +18,9 @@ Retain by default:
 - `manual/formal-r2diag19-40s-ofdma/`
 - `manual/r2diag40-baseline-no-exclusion-rerun/`
 
-Remove:
-- loose top-level CSV / SVG / HTML outputs after ad hoc runs
-- carrier-reuse / inter-frequency diagnosis
-- beamwidth / sidelobe / plane-offset / overpass-gap scans
+Remove by default:
+- loose top-level `CSV` / `SVG` / `HTML` outputs from ad hoc runs
+- carrier-reuse, inter-frequency, beamwidth, sidelobe, plane-offset, and overpass-gap diagnostics
 - smoke runs, startup checks, and parameter sweep leftovers
 
-This directory is Git-ignored and should stay small.
+If a result must survive cleanup, record its purpose, key parameters, and conclusion in `docs/current-task-memory.md` or another active research note.

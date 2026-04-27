@@ -12,9 +12,11 @@
  * - 让后续继续收紧主脚本时，有一个统一的配置入口。
  */
 
+#include "beam-link-budget.h"
 #include "earth-fixed-beam-target.h"
 #include "leo-ntn-handover-utils.h"
 #include "ns3/core-module.h"
+#include <cmath>
 #include <string>
 
 namespace ns3
@@ -107,13 +109,8 @@ struct BaselineSimulationConfig
     uint32_t udpPacketSize = 1000;
     double gnbTxPower = 100.0;
     double ueTxPower = 23.0;
-    // 几何波束参数（v4.3 注：用于几何链路预算/观测口径，不代表 PHY 默认天线阵元参数）
-    // beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb 用于 BeamModelConfig 几何估算
-    // PHY 真实天线参数由 gnbAntennaElement/ueAntennaElement 和 b00-* 参数控制
-    double beamMaxGainDbi = 38.0;
+    // 几何波束的峰值、宽度和旁瓣衰减由 b00-* PHY 参数与 gNB 阵列规模推导。
     double scanMaxDeg = 60.0;
-    double theta3dBDeg = 4.0;
-    double sideLobeAttenuationDb = 30.0;
     double ueRxGainDbi = 0.0;
     double atmLossDb = 0.5;
     uint32_t ueAntennaRows = 1;
@@ -184,6 +181,24 @@ struct BaselineSimulationConfig
     uint32_t srsSymbols = 0;
 };
 
+inline BeamModelConfig
+DeriveBeamModelConfig(const BaselineSimulationConfig& config)
+{
+    BeamModelConfig beamConfig;
+    beamConfig.carrierFrequencyHz = config.centralFrequency;
+    beamConfig.txPowerDbm = config.gnbTxPower;
+    const double antennaElementCount =
+        static_cast<double>(config.gnbAntennaRows) * config.gnbAntennaColumns;
+    const double arrayGainDb = 10.0 * std::log10(antennaElementCount);
+    beamConfig.gMax0Dbi = config.b00MaxGainDb + arrayGainDb;
+    beamConfig.alphaMaxRad = LeoOrbitCalculator::DegToRad(config.scanMaxDeg);
+    beamConfig.theta3dBRad = LeoOrbitCalculator::DegToRad(config.b00BeamwidthDeg);
+    beamConfig.slaVDb = config.b00MaxAttenuationDb;
+    beamConfig.rxGainDbi = config.ueRxGainDbi;
+    beamConfig.atmLossDb = config.atmLossDb;
+    return beamConfig;
+}
+
 inline void
 RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& config)
 {
@@ -251,10 +266,7 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("udpPacketSize", config.udpPacketSize);
     addArg("gnbTxPower", config.gnbTxPower);
     addArg("ueTxPower", config.ueTxPower);
-    addArg("beamMaxGainDbi", config.beamMaxGainDbi);
     addArg("scanMaxDeg", config.scanMaxDeg);
-    addArg("theta3dBDeg", config.theta3dBDeg);
-    addArg("sideLobeAttenuationDb", config.sideLobeAttenuationDb);
     addArg("ueRxGainDbi", config.ueRxGainDbi);
     addArg("atmLossDb", config.atmLossDb);
     addArg("ueAntennaRows", config.ueAntennaRows);
@@ -470,11 +482,11 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
                     "plane1OverpassGapSeconds must be > 0");
     NS_ABORT_MSG_IF(config.scanMaxDeg <= 0.0 || config.scanMaxDeg >= 90.0,
                     "scanMaxDeg must satisfy 0 < scanMaxDeg < 90");
-    NS_ABORT_MSG_IF(config.theta3dBDeg <= 0.0, "theta3dBDeg must be > 0");
     NS_ABORT_MSG_IF(config.ueAntennaRows == 0, "ueAntennaRows must be >= 1");
     NS_ABORT_MSG_IF(config.ueAntennaColumns == 0, "ueAntennaColumns must be >= 1");
     NS_ABORT_MSG_IF(config.gnbAntennaRows == 0, "gnbAntennaRows must be >= 1");
     NS_ABORT_MSG_IF(config.gnbAntennaColumns == 0, "gnbAntennaColumns must be >= 1");
+    NS_ABORT_MSG_IF(config.b00BeamwidthDeg <= 0.0, "b00BeamwidthDeg must be > 0");
     NS_ABORT_MSG_IF(config.ueAntennaElement != "isotropic" &&
                         config.ueAntennaElement != "three-gpp" &&
                         config.ueAntennaElement != "b00-custom",

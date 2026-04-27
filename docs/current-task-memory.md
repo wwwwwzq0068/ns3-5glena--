@@ -1,8 +1,8 @@
 # 当前任务记忆
 
 ## 当前版本状态
-- 最近已发布稳定节点：`5.0`（Git tag：`research-v5.0`）
-- 当前工作区主线与 `research-v5.0` 对齐；该版本在 `research-v4.3` 的定向天线默认口径基础上，完成 thesis-mainline 清理、`19 UE r2-diagnostic` 保留和 focused tests 补齐
+- 最近已发布稳定节点：`5.1`（Git tag：`research-v5.1`）
+- 当前工作区主线与 `research-v5.1` 对齐；该版本在 `research-v5.0` 的 thesis-mainline 清理基础上，完成主脚本继续瘦身、无线/场景/输出 helper 拆分、几何波束参数自动统一到真实 PHY 默认口径，以及 focused tests 补齐
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
 ## 当前 baseline 快照
@@ -69,11 +69,13 @@
 - `b00MaxGainDb = 20.0`
 - `b00BeamwidthDeg = 4.0`
 - `b00MaxAttenuationDb = 30.0`
+- 几何波束 `BeamModelConfig` 的峰值、宽度和衰减由 `b00-*` 与 `gNB 12x12` 自动推导
 - `earthFixedBeamTargetMode = grid-anchor`
 - `phyDlTbIntervalSeconds = 1.0 s`
 
 ## 当前已确认实现
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
+- `main()` 当前已进一步把无线 bootstrap、UE 初始接入/业务安装、trace 输出生命周期分别下放到 `scratch/handover/leo-ntn-handover-radio.h`、`scratch/handover/leo-ntn-handover-scenario.h` 与 `scratch/handover/leo-ntn-handover-output.h`，主脚本继续朝“场景装配 + 时序调度 + 汇总收尾”收口
 - 当前 `UE` 位置生成逻辑已收口为“两阶段”实现：先生成局部东-北平面偏移模板，再统一转换为 `WGS84` 地理点和 `ECEF`
 - 当前默认 `UE` 布局为 `seven-cell`：中心小区 `3x3` 密集簇 `9 UE`，外围 `6` 个二跳小区共 `16 UE`，中心与外围之间保留一圈空白邻区以降低同频干扰
 - 当前默认波束锚点启用一圈排他：一个卫星波束占用某个 hex 中心后，该中心及其周围一圈邻区都不会再被其它卫星选作最终落点
@@ -84,6 +86,7 @@
 - 当前默认真实 NR beamforming 使用 `ideal-earth-fixed + earthFixedBeamTargetMode=grid-anchor`：`gNB` 侧真实 PHY 发射波束锁到当前卫星已分配的唯一合法 anchor hex 中心，不跟着单个 `UE` 跑；`UE` 侧仍按当前服务卫星做 direct-path 接收对准
 - 当前默认真实 `MeasurementReport` 候选会同时受连续波束主覆盖与 anchor hex cell 门控约束，避免接入/切换到明显不属于当前波束落点的小区
 - 当前默认 `b00BeamwidthDeg` 已从早期 `15.0` 收紧到 `4.0`，并将 `gNB` 阵列规模提升到 `12x12`；它们一起把真实 PHY 覆盖压回当前 hex 小区尺度附近，作为当前 same-frequency baseline 的默认物理口径
+- 当前几何链路预算不再维护独立的 `beamMaxGainDbi/theta3dBDeg/sideLobeAttenuationDb` 手写参数，而是由 `b00MaxGainDb + 10*log10(gnbAntennaRows * gnbAntennaColumns)`、`b00BeamwidthDeg` 和 `b00MaxAttenuationDb` 推导，避免几何观测口径与真实 PHY 默认口径分叉
 - 当前 `NrChannelHelper` 已配置 `NTN-Rural + LOS + ThreeGpp`，并开启 `ShadowingEnabled`
 - baseline 与 improved 都通过 `NrLeoA3MeasurementHandoverAlgorithm` 注册标准 A3 测量，并在同一份 `MeasurementReport` 上做目标选择
 - `handoverMode = baseline` 时，直接选择最强测量邻区
@@ -94,6 +97,7 @@
 - 当前已支持按成功切换序列自动统计短时 `ping-pong`
 - 当前默认关闭 `SRS` 调度相关项，避免与 handover 主线无关的 `PHY fatal`
 - 旧的 inter-frequency / carrier-reuse / beamwidth / sidelobe 等诊断入口已经从活动工作区移除，当前仓库只保留 thesis 主线和 `19 UE` 诊断入口
+- focused tests 当前除 `grid-anchor / earth-fixed target / plane0 offset / r2-diagnostic layout / baseline defaults` 外，还新增 `test-baseline-config-helpers.cc`，用于保护输出路径重定向和派生位置配置逻辑
 
 ## 当前负载接口状态
 - `SatelliteRuntime` 已具备 `attachedUeCount`、`offeredPacketRate`、`loadScore`、`admissionAllowed`

@@ -12,6 +12,12 @@
  * - 自由空间路径损耗；
  * - 最终得到的近似 RSRP。
  *
+ * 当前几何波束的峰值、宽度和旁瓣衰减不再单独手写，而是由真实 PHY
+ * `b00-custom` 参数和 gNB 阵列规模推导：
+ * - `gMax0Dbi = b00MaxGainDb + 10*log10(gnbAntennaRows * gnbAntennaColumns)`；
+ * - `theta3dBRad = DegToRad(b00BeamwidthDeg)`；
+ * - `slaVDb = b00MaxAttenuationDb`。
+ *
  * 本文件不涉及切换决策，只提供链路质量估计。
  */
 
@@ -32,16 +38,16 @@ struct BeamModelConfig
     /** 发射功率，单位 dBm。 */
     double txPowerDbm = 30.0;
 
-    /** 波束中心最大增益，单位 dBi。 */
+    /** 波束中心最大增益，单位 dBi，由 PHY 阵元峰值增益与 gNB 阵列增益推导。 */
     double gMax0Dbi = 38.0;
 
     /** 最大允许扫描角，超过该角度后认为波束无法锁定。 */
     double alphaMaxRad = LeoOrbitCalculator::DegToRad(60.0);
 
-    /** 半功率波束宽度，单位弧度。 */
+    /** 几何方向图宽度参数，单位弧度，由 b00BeamwidthDeg 推导。 */
     double theta3dBRad = LeoOrbitCalculator::DegToRad(4.0);
 
-    /** 垂直方向旁瓣衰减上限，单位 dB。 */
+    /** 方向图衰减上限，单位 dB，由 b00MaxAttenuationDb 推导。 */
     double slaVDb = 30.0;
 
     /** 接收端天线增益，单位 dBi。 */

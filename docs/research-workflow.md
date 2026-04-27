@@ -2,8 +2,9 @@
 
 ## 版本定义
 - 当前研究主阶段定义为 `4.2`。
-- 最近已发布稳定节点为 `5.0`（`research-v5.0`）。
+- 最近已发布稳定节点为 `5.1`（`research-v5.1`）。
 - `research-v5.0` 是在 `research-v4.3` 定向天线默认口径基础上完成 thesis-mainline 清理与文档收口后的发布包。
+- `research-v5.1` 是在 `research-v5.0` 基础上的结构与口径收口包：主仿真入口继续下放无线 bootstrap、UE 初始接入/业务安装和 trace 输出生命周期，几何波束参数改为从真实 PHY `b00-* + gNB` 阵列规模自动推导。
 - 当前 `4.2` 是当前 measurement-driven baseline / improved 对照主线的最新稳定收口快照。
 - 这里的 `4.2 / 4.2.x` 指本仓库中的“毕设/研究工作版本”，不是 ns-3 框架本身的版本号。
 - ns-3 框架版本仍然保持为 `3.46`，不要改动根目录的 `VERSION` 文件去表达研究版本。
@@ -72,6 +73,7 @@
 - 推荐 tag 形式：
   - `research-v4.2`
   - `research-v5.0`
+  - `research-v5.1`
 
 ## 当前执行原则
 - 当前先固定 `B00` 基线，再围绕传统 A3 baseline 和改进策略开展对比设计。

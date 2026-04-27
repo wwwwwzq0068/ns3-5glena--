@@ -1,6 +1,6 @@
 # LEO-NTN 仿真链路预算参数说明
 
-这份文档只做一件事：把当前工作区里“几何链路预算参数”和“真实 PHY 默认天线参数”分开说明，避免把两套口径混在一起。
+这份文档只做一件事：说明当前工作区里几何链路预算如何从真实 PHY 默认天线参数推导，避免再维护两套手写口径。
 
 ## 一、发射功率
 
@@ -19,13 +19,13 @@
 
 ### 2.1 几何链路预算口径
 
-这组参数服务于 [beam-link-budget.h](/Users/mac/Desktop/workspace/ns-3.46/scratch/handover/beam-link-budget.h) 的几何估算，不直接等于当前 NR PHY 阵元模型：
+这组参数服务于 [beam-link-budget.h](/Users/mac/Desktop/workspace/ns-3.46/scratch/handover/beam-link-budget.h) 的几何估算。当前不再提供 `beamMaxGainDbi`、`theta3dBDeg`、`sideLobeAttenuationDb` 三个独立命令行参数，而是从真实 PHY 配置自动推导：
 
 | 参数 | 变量名 | 默认值 | 说明 |
 |------|--------|--------|------|
-| 波束峰值增益 | `beamMaxGainDbi` | `38.0 dBi` | 几何主瓣中心最大增益 |
-| 波束宽度参数 | `theta3dBDeg` | `4.0°` | clipped-parabolic 公式分母参数 |
-| 旁瓣衰减上限 | `sideLobeAttenuationDb` | `30.0 dB` | 几何离轴损耗封顶 |
+| 波束峰值增益 | `gMax0Dbi` | `b00MaxGainDb + 10*log10(gnbAntennaRows * gnbAntennaColumns)` | 几何主瓣中心最大增益 |
+| 波束宽度参数 | `theta3dBRad` | `DegToRad(b00BeamwidthDeg)` | clipped-parabolic 公式分母参数 |
+| 旁瓣衰减上限 | `slaVDb` | `b00MaxAttenuationDb` | 几何离轴损耗封顶 |
 | UE 接收增益 | `ueRxGainDbi` | `0.0 dBi` | 几何链路预算里的 UE 增益口径 |
 
 当前几何损耗形式为：
@@ -38,7 +38,7 @@ Loss_geo = min(12 * (psi / theta)^2, Amax)
 - `psi = 2°`、`theta = 4°` 时，损耗约为 `3 dB`
 - `psi = 4°` 时，损耗约为 `12 dB`
 
-也就是说，`theta3dBDeg=4°` 更接近“公式参数”，不是严格意义上的“整束 -3 dB 宽度”。
+也就是说，`b00BeamwidthDeg=4°` 在几何估算里也更接近“公式参数”，不是严格意义上的“整束 -3 dB 宽度”。
 
 ### 2.2 真实 PHY 默认天线口径
 
@@ -75,14 +75,14 @@ Loss_elem = min(12 * (psi / theta_elem)^2, Aelem_max)
 ## 三、阵列规模与总增益解释
 
 当前默认阵列规模：
-- 卫星端：`8 x 8 = 64` 阵元
+- 卫星端：`12 x 12 = 144` 阵元
 - UE 端：`1 x 2 = 2` 阵元
 
 如果只做非常粗略的 boresight 叠加估算：
 - 阵元峰值增益约 `20 dBi`
-- `64` 阵元阵列因子上限约 `18 dB`
+- `144` 阵元阵列因子上限约 `21.6 dB`
 
-所以总主轴方向增益量级可以接近几何口径里的 `38 dBi`。  
+所以当前默认几何主轴方向增益量级约为 `41.6 dBi`。  
 但这只是数量级解释，不等价于：
 - 实际发射 `EIRP`
 - 实测 NR `RSRP`
@@ -139,7 +139,7 @@ $$P_{\text{rx}} \approx P_{\text{tx}} + G_{\text{tx}} + G_{\text{rx}} - L_{\text
 
 ## 七、当前工作区口径
 
-- 已发布稳定节点：`research-v5.0`
+- 已发布稳定节点：`research-v5.1`
 - 当前默认真实天线配置：`gNB b00-custom + UE three-gpp`
 - 当前默认波束方法：`ideal-earth-fixed`
 
