@@ -8,7 +8,7 @@
  *
  * 设计目标：
  * - 将默认值、命令行绑定和参数合法性检查从主脚本中抽离；
- * - 保持 baseline 场景口径不变，只减少主流程里的样板代码；
+ * - 保持 baseline 场景参数集中管理，只减少主流程里的样板代码；
  * - 让后续继续收紧主脚本时，有一个统一的配置入口。
  */
 
@@ -24,15 +24,12 @@ namespace ns3
 
 struct BaselineSimulationConfig
 {
-    double simTime = 60.0;
+    double simTime = 40.0;
     double appStartTime = 1.0;
 
     uint16_t gNbNum = 8;
-    uint32_t ueNum = 25;
-    std::string ueLayoutType = "seven-cell";
-    double ueSpacingMeters = 40000.0;
-    double ueCenterSpacingMeters = 6000.0;
-    double ueRingPointOffsetMeters = 5000.0;
+    uint32_t ueNum = 30;
+    std::string ueLayoutType = "poisson-3ring";
     double poissonLambda = 1.5;
     uint32_t maxUePerCell = 5;
     uint32_t ueLayoutRandomSeed = 42;
@@ -76,11 +73,11 @@ struct BaselineSimulationConfig
     double hexCellRadiusKm = 20.0;
     uint32_t gridNearestK = 3;
     bool enforceBeamExclusionRing = true;
-    std::string beamExclusionMode;
+    std::string beamExclusionMode = "overlap-only";
     uint32_t beamExclusionCandidateK = 64;
-    std::string realLinkGateMode;
+    std::string realLinkGateMode = "beam-only";
     bool enforceBeamCoverageForRealLinks = true;
-    bool enforceAnchorCellForRealLinks = true;
+    bool enforceAnchorCellForRealLinks = false;
     bool preferDemandAnchorCells = true;
     std::string anchorSelectionMode = "demand-max-ue-near-nadir";
     std::string demandSnapshotMode = "runtime-underserved-ue";
@@ -157,9 +154,9 @@ struct BaselineSimulationConfig
     double improvedVisibilityHorizonSeconds = 8.0;
     double improvedVisibilityPredictionStepSeconds = 0.5;
     double improvedMinJointScoreMargin = 0.03;
-    double improvedMinCandidateRsrpDbm = -110.0;
+    double improvedMinCandidateRsrpDbm = -118.0;
     double improvedMinCandidateRsrqDb = -17.0;
-    double improvedServingWeakRsrpDbm = -108.0;
+    double improvedServingWeakRsrpDbm = -118.0;
     double improvedServingWeakRsrqDb = -15.0;
     double improvedMinRsrqAdvantageDb = 0.0;  // Minimum RSRQ advantage over serving for same-frequency candidates
     bool improvedEnableCrossLayerPhyAssist = false;
@@ -220,9 +217,6 @@ RegisterBaselineCommandLineOptions(CommandLine& cmd, BaselineSimulationConfig& c
     addArg("gNbNum", config.gNbNum);
     addArg("ueNum", config.ueNum);
     addArg("ueLayoutType", config.ueLayoutType);
-    addArg("ueSpacingMeters", config.ueSpacingMeters);
-    addArg("ueCenterSpacingMeters", config.ueCenterSpacingMeters);
-    addArg("ueRingPointOffsetMeters", config.ueRingPointOffsetMeters);
     addArg("poissonLambda", config.poissonLambda);
     addArg("maxUePerCell", config.maxUePerCell);
     addArg("ueLayoutRandomSeed", config.ueLayoutRandomSeed);
@@ -514,24 +508,11 @@ ValidateBaselineSimulationConfig(BaselineSimulationConfig& config)
     NS_ABORT_MSG_IF(config.ueNum == 0, "ueNum must be >= 1");
     NS_ABORT_MSG_IF(config.simTime <= 0.0, "simTime must be > 0");
     NS_ABORT_MSG_IF(config.appStartTime < 0.0, "appStartTime must be >= 0");
-    NS_ABORT_MSG_IF(config.ueLayoutType != "line" && config.ueLayoutType != "seven-cell" &&
-                        config.ueLayoutType != "r2-diagnostic" &&
-                        config.ueLayoutType != "poisson-3ring",
-                    "ueLayoutType must be one of: line, seven-cell, r2-diagnostic, poisson-3ring");
-    NS_ABORT_MSG_IF(config.ueSpacingMeters <= 0.0, "ueSpacingMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueCenterSpacingMeters <= 0.0, "ueCenterSpacingMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueRingPointOffsetMeters <= 0.0,
-                    "ueRingPointOffsetMeters must be > 0");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "seven-cell" && config.ueNum != 25,
-                    "seven-cell layout currently requires ueNum == 25");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "r2-diagnostic" && config.ueNum != 19,
-                    "r2-diagnostic layout currently requires ueNum == 19");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" && config.poissonLambda <= 0.0,
-                    "poissonLambda must be > 0");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" && config.maxUePerCell == 0,
-                    "maxUePerCell must be >= 1");
-    NS_ABORT_MSG_IF(config.ueLayoutType == "poisson-3ring" &&
-                        config.ueNum > 19 * config.maxUePerCell,
+    NS_ABORT_MSG_IF(config.ueLayoutType != "poisson-3ring",
+                    "ueLayoutType must be poisson-3ring");
+    NS_ABORT_MSG_IF(config.poissonLambda <= 0.0, "poissonLambda must be > 0");
+    NS_ABORT_MSG_IF(config.maxUePerCell == 0, "maxUePerCell must be >= 1");
+    NS_ABORT_MSG_IF(config.ueNum > 19 * config.maxUePerCell,
                     "poisson-3ring requires ueNum <= 19 * maxUePerCell");
     NS_ABORT_MSG_IF(config.orbitPlaneCount == 0, "orbitPlaneCount must be >= 1");
     NS_ABORT_MSG_IF(config.gNbNum < config.orbitPlaneCount, "gNbNum must be >= orbitPlaneCount");

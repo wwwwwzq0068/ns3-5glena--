@@ -112,11 +112,11 @@ enum class RealLinkGateMode
 };
 
 // 当前卫星波束锚点排他模式：关闭 / 只禁同格 / 同格加一圈邻格都禁。
-static BeamExclusionMode g_beamExclusionMode = BeamExclusionMode::RING;
+static BeamExclusionMode g_beamExclusionMode = BeamExclusionMode::OVERLAP_ONLY;
 // 启用波束排他时，用于搜索可用锚点的最近候选数。
 static uint32_t g_beamExclusionCandidateK = 32;
 // 真实接入/切换候选 gate：关闭 / 只看主波束 / 主波束加 anchor 小区同时门控。
-static RealLinkGateMode g_realLinkGateMode = RealLinkGateMode::BEAM_AND_ANCHOR;
+static RealLinkGateMode g_realLinkGateMode = RealLinkGateMode::BEAM_ONLY;
 // 是否优先把卫星锚点分配到实际存在 UE 的 hex 小区。
 static bool g_preferDemandAnchorCells = true;
 static EarthFixedBeamTargetMode g_earthFixedBeamTargetMode =
@@ -194,9 +194,9 @@ struct MeasurementDrivenHandoverConfig
     double improvedVisibilityHorizonSeconds = 8.0;
     double improvedVisibilityPredictionStepSeconds = 0.5;
     double improvedMinJointScoreMargin = 0.03;
-    double improvedMinCandidateRsrpDbm = -110.0;
+    double improvedMinCandidateRsrpDbm = -118.0;
     double improvedMinCandidateRsrqDb = -17.0;
-    double improvedServingWeakRsrpDbm = -108.0;
+    double improvedServingWeakRsrpDbm = -118.0;
     double improvedServingWeakRsrqDb = -15.0;
     double improvedMinRsrqAdvantageDb = 0.0;
     bool improvedEnableCrossLayerPhyAssist = false;
@@ -2171,7 +2171,7 @@ main(int argc, char* argv[])
         std::cout << "[DIAG-WARN] beamformingMode=" << ToString(radioModes.beamformingMode)
                   << " is intended for short diagnostic runs in the current stack; "
                      "it may trigger NR PHY control/beam-update assertions and should not "
-                     "be treated as the formal B00/I31 baseline by default"
+                     "be treated as the formal thesis baseline by default"
                   << std::endl;
     }
     if (radioModes.useRealisticBeamforming && cfg.srsSymbols == 0)
@@ -2274,34 +2274,13 @@ main(int argc, char* argv[])
                   << " overpassGap=" << cfg.overpassGapSeconds << "s"
                   << " plane1OverpassGap=" << cfg.plane1OverpassGapSeconds << "s"
                   << std::endl;
-        std::cout << "[UE-Layout] type=" << cfg.ueLayoutType;
-        if (cfg.ueLayoutType == "seven-cell")
-        {
-            std::cout << " groups=center(9)+ring(16 across 6 two-hop cells)"
-                      << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
-                      << " centerSpacing=" << cfg.ueCenterSpacingMeters / 1000.0 << "km"
-                      << " ringPointOffset=" << cfg.ueRingPointOffsetMeters / 1000.0 << "km";
-        }
-        else if (cfg.ueLayoutType == "r2-diagnostic")
-        {
-            std::cout << " window=two-ring(19 hex centers)"
-                      << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
-                      << " baselineReplacement=no";
-        }
-        else if (cfg.ueLayoutType == "poisson-3ring")
-        {
-            std::cout << " cells=19(two-ring)"
-                      << " lambda=" << cfg.poissonLambda
-                      << " maxUePerCell=" << cfg.maxUePerCell
-                      << " seed=" << cfg.ueLayoutRandomSeed
-                      << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
-                      << " baselineReplacement=no";
-        }
-        else
-        {
-            std::cout << " spacing=" << cfg.ueSpacingMeters / 1000.0 << "km";
-        }
-        std::cout << std::endl;
+        std::cout << "[UE-Layout] type=" << cfg.ueLayoutType
+                  << " cells=19(two-ring)"
+                  << " lambda=" << cfg.poissonLambda
+                  << " maxUePerCell=" << cfg.maxUePerCell
+                  << " seed=" << cfg.ueLayoutRandomSeed
+                  << " layoutHexRadius=" << cfg.hexCellRadiusKm << "km"
+                  << std::endl;
         std::cout << "[Handover] a3=measurement-report"
                   << " mode=" << ToString(g_measurementDrivenConfig.handoverMode)
                   << " hysteresis=" << g_hoHysteresisDb << "dB"
@@ -2478,10 +2457,7 @@ main(int argc, char* argv[])
 
     UeLayoutConfig ueLayout;
     ueLayout.layoutType = cfg.ueLayoutType;
-    ueLayout.lineSpacingMeters = cfg.ueSpacingMeters;
     ueLayout.hexCellRadiusMeters = cfg.hexCellRadiusKm * 1000.0;
-    ueLayout.centerSpacingMeters = cfg.ueCenterSpacingMeters;
-    ueLayout.ringPointOffsetMeters = cfg.ueRingPointOffsetMeters;
     ueLayout.poissonLambda = cfg.poissonLambda;
     ueLayout.maxUePerCell = cfg.maxUePerCell;
     ueLayout.randomSeed = cfg.ueLayoutRandomSeed;

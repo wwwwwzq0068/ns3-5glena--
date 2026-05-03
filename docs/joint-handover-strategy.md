@@ -6,7 +6,7 @@
 - improved 必须复用当前真实 `PHY/RRC MeasurementReport` 入口，不能回退到旧的几何 handover 代理链
 
 ## 1. 算法定义
-- 当前 improved 保持 baseline 场景口径不变，仍在 `2x4`、`25 UE`、`seven-cell` 条件下做对照
+- 当前 improved 保持 baseline 场景口径不变，仍在 `2x4 + poisson-3ring + overlap-only + beam-only` 条件下做对照
 - baseline 保持"`MeasurementReport + RSRP + hysteresis + TTT`"语义，不把负载项回写到 baseline
 - improved 的核心思路是：对同一批 A3 上报候选先做门控过滤，再计算"信号质量 + 可见性效用 + 负载效用"的联合得分，选择综合分数最高的目标星；当源站负载更高时，进一步增强负载导向，优先把 UE 送往更轻载的候选星
 - improved 不再通过 `UpdateConstellation()` 中的几何观测链触发切换，而是在测量回调中完成目标选择

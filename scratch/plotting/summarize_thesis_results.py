@@ -9,7 +9,7 @@ import math
 import statistics
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 RUN_SUMMARY_FIELDS = [
@@ -87,18 +87,18 @@ def _safe_int(value: Optional[str], default: int = 0) -> int:
         return default
 
 
-def _read_csv(path: Path) -> List[Dict[str, str]]:
+def _read_csv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
     if not path.exists():
         raise FileNotFoundError(f"missing required file: {path}")
     with path.open("r", newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(_clean_csv_lines(handle))
         if not reader.fieldnames:
             raise RuntimeError(f"empty or invalid csv: {path}")
-        return list(reader)
+        return list(reader), list(reader.fieldnames)
 
 
-def _require_columns(path: Path, rows: List[Dict[str, str]], required: Iterable[str]) -> None:
-    columns = set(rows[0].keys()) if rows else set()
+def _require_columns(path: Path, fieldnames: Iterable[str], required: Iterable[str]) -> None:
+    columns = set(fieldnames)
     missing = set(required).difference(columns)
     if missing:
         raise RuntimeError(f"{path} missing required columns: {sorted(missing)}")
@@ -106,10 +106,10 @@ def _require_columns(path: Path, rows: List[Dict[str, str]], required: Iterable[
 
 def _read_e2e_metrics(run_dir: Path) -> Dict[str, float]:
     path = run_dir / "e2e_flow_metrics.csv"
-    rows = _read_csv(path)
+    rows, fieldnames = _read_csv(path)
     _require_columns(
         path,
-        rows,
+        fieldnames,
         ["ue", "loss_rate_percent", "throughput_mbps", "mean_delay_ms"],
     )
     total = next((row for row in rows if row.get("ue", "").strip() == "TOTAL"), None)
@@ -124,8 +124,8 @@ def _read_e2e_metrics(run_dir: Path) -> Dict[str, float]:
 
 def _read_handover_metrics(run_dir: Path) -> Dict[str, int]:
     path = run_dir / "handover_event_trace.csv"
-    rows = _read_csv(path)
-    _require_columns(path, rows, ["event", "ping_pong_detected"])
+    rows, fieldnames = _read_csv(path)
+    _require_columns(path, fieldnames, ["event", "ping_pong_detected"])
     completed = sum(1 for row in rows if row.get("event", "").strip() == "HO_END_OK")
     ping_pong = sum(1 for row in rows if _safe_int(row.get("ping_pong_detected")) == 1)
     return {"completed_ho": completed, "ping_pong_count": ping_pong}
@@ -141,20 +141,22 @@ def _jain_index(values: List[float]) -> float:
 
 def _read_satellite_state_metrics(run_dir: Path) -> Dict[str, float]:
     path = run_dir / "satellite_state_trace.csv"
-    rows = _read_csv(path)
-    _require_columns(path, rows, ["time_s", "sat", "attached_ue_count"])
+    rows, fieldnames = _read_csv(path)
+    _require_columns(path, fieldnames, ["time_s", "sat", "attached_ue_count"])
 
     by_time: Dict[str, Dict[str, float]] = defaultdict(dict)
+    sat_keys: set[str] = set()
     for row in rows:
         time_key = row.get("time_s", "").strip()
         sat_key = row.get("sat", "").strip()
         if not time_key or not sat_key:
             continue
+        sat_keys.add(sat_key)
         by_time[time_key][sat_key] = _safe_float(row.get("attached_ue_count"), 0.0)
 
     jain_values: List[float] = []
     for sat_values in by_time.values():
-        values = list(sat_values.values())
+        values = [sat_values.get(sat_key, 0.0) for sat_key in sorted(sat_keys)]
         value = _jain_index(values)
         if math.isfinite(value):
             jain_values.append(value)
@@ -166,11 +168,17 @@ def _read_satellite_state_metrics(run_dir: Path) -> Dict[str, float]:
 
 def _discover_runs(results_root: Path) -> List[Dict[str, object]]:
     runs: List[Dict[str, object]] = []
+    seed_sets: Dict[str, set[str]] = {}
     for mode in ("baseline", "improved"):
         mode_dir = results_root / mode
         if not mode_dir.exists():
+            seed_sets[mode] = set()
             continue
-        for run_dir in sorted(path for path in mode_dir.iterdir() if path.is_dir()):
+        run_dirs = sorted(
+            path for path in mode_dir.iterdir() if path.is_dir() and path.name.startswith("seed-")
+        )
+        seed_sets[mode] = {path.name for path in run_dirs}
+        for run_dir in run_dirs:
             runs.append(
                 {
                     "mode": mode,
@@ -179,8 +187,16 @@ def _discover_runs(results_root: Path) -> List[Dict[str, object]]:
                     "path": run_dir,
                 }
             )
-    if not runs:
-        raise RuntimeError(f"no baseline/improved run directories found under {results_root}")
+    missing_modes = [mode for mode in ("baseline", "improved") if not seed_sets.get(mode)]
+    if missing_modes:
+        raise RuntimeError(
+            f"missing formal run directories for modes {missing_modes} under {results_root}"
+        )
+    if seed_sets["baseline"] != seed_sets["improved"]:
+        raise RuntimeError(
+            "baseline and improved formal runs must use the same seed directories: "
+            f"baseline={sorted(seed_sets['baseline'])}, improved={sorted(seed_sets['improved'])}"
+        )
     return runs
 
 
@@ -274,67 +290,19 @@ def _write_rows(path: Path, fieldnames: List[str], rows: List[Dict[str, object]]
             writer.writerow({field: _format_value(row.get(field, "")) for field in fieldnames})
 
 
-def _try_write_plots(
-    output_dir: Path,
-    run_summaries: List[Dict[str, object]],
-    comparison_rows: List[Dict[str, object]],
-) -> None:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except Exception as exc:
-        print(f"[WARN] matplotlib unavailable; skipping PNG plots: {exc}")
-        return
-
-    if comparison_rows:
-        metrics = [str(row["metric"]) for row in comparison_rows]
-        baseline = [float(row["baseline_mean"]) for row in comparison_rows]
-        improved = [float(row["improved_mean"]) for row in comparison_rows]
-        x_positions = list(range(len(metrics)))
-        width = 0.38
-        fig, ax = plt.subplots(figsize=(11, 5.5))
-        ax.bar([x - width / 2 for x in x_positions], baseline, width, label="baseline")
-        ax.bar([x + width / 2 for x in x_positions], improved, width, label="improved")
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(metrics, rotation=25, ha="right")
-        ax.set_ylabel("metric value")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(output_dir / "paper_kpi_comparison.png", dpi=180)
-        plt.close(fig)
-
-    by_mode: Dict[str, List[Dict[str, object]]] = defaultdict(list)
-    for row in run_summaries:
-        by_mode[str(row["mode"])].append(row)
-    fig, ax = plt.subplots(figsize=(9, 4.8))
-    for mode, rows in sorted(by_mode.items()):
-        xs = list(range(1, len(rows) + 1))
-        ys = [float(row["load_balance_jain"]) for row in rows]
-        ax.plot(xs, ys, marker="o", label=mode)
-    ax.set_xlabel("run index")
-    ax.set_ylabel("Jain load fairness")
-    ax.set_ylim(0.0, 1.05)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_dir / "load_balance_jain_timeseries.png", dpi=180)
-    plt.close(fig)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--results-root",
         type=Path,
-        default=Path("scratch/results/formal"),
+        default=Path("scratch/results/formal/v6.1-poisson3ring-overlap-beamonly-40s"),
         help="Formal results root containing baseline/ and improved/ run directories.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory for summary CSV/PNG outputs. Defaults to <results-root>/summary.",
+        help="Directory for summary CSV outputs. Defaults to <results-root>/summary.",
     )
     return parser.parse_args()
 
@@ -352,7 +320,6 @@ def main() -> int:
     _write_rows(output_dir / "run_summary.csv", RUN_SUMMARY_FIELDS, run_summaries)
     _write_rows(output_dir / "paper_kpi_summary.csv", SUMMARY_FIELDS, mode_rows)
     _write_rows(output_dir / "paper_kpi_comparison.csv", COMPARISON_FIELDS, comparisons)
-    _try_write_plots(output_dir, run_summaries, comparisons)
 
     print(f"[OK] wrote thesis summaries to {output_dir}")
     return 0

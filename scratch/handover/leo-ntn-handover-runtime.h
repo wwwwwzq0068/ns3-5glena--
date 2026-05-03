@@ -290,20 +290,11 @@ struct UeRuntime
 
 struct UeLayoutConfig
 {
-    /** UE 部署类型：`line`、`seven-cell`、`r2-diagnostic` 或 `poisson-3ring`。 */
-    std::string layoutType = "seven-cell";
-
-    /** 线性部署时相邻 UE 的东西向间距。 */
-    double lineSpacingMeters = 0.0;
+    /** UE 部署类型；当前主线只支持 `poisson-3ring`。 */
+    std::string layoutType = "poisson-3ring";
 
     /** 中心小区与六个外围小区共用的 hex 半径。 */
     double hexCellRadiusMeters = 20000.0;
-
-    /** 中心小区内 3x3 密集簇的格点间距。 */
-    double centerSpacingMeters = 6000.0;
-
-    /** 外围 6 个小区内局部散点相对各自小区中心的偏移尺度。 */
-    double ringPointOffsetMeters = 5000.0;
 
     /** poisson-3ring 布局中每个 hex cell 的泊松均值。 */
     double poissonLambda = 1.5;
@@ -420,141 +411,6 @@ AppendUeOffsetSpec(std::vector<UePlacementOffsetSpec>& specs,
     spec.northOffsetMeters = northOffsetMeters;
     spec.role = role;
     specs.push_back(spec);
-}
-
-inline void
-AppendRectGridOffsetSpecs(std::vector<UePlacementOffsetSpec>& specs,
-                          double centerEastMeters,
-                          double centerNorthMeters,
-                          int rowMin,
-                          int rowMax,
-                          int colMin,
-                          int colMax,
-                          double spacingMeters,
-                          const std::string& role)
-{
-    for (int row = rowMin; row <= rowMax; ++row)
-    {
-        for (int col = colMin; col <= colMax; ++col)
-        {
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters + static_cast<double>(col) * spacingMeters,
-                               centerNorthMeters + static_cast<double>(row) * spacingMeters,
-                               role);
-        }
-    }
-}
-
-inline std::vector<UePlacementOffsetSpec>
-BuildLineUeOffsetSpecs(uint32_t ueNum, double ueSpacingMeters)
-{
-    std::vector<UePlacementOffsetSpec> specs;
-    specs.reserve(ueNum);
-    const double center = (static_cast<double>(ueNum) - 1.0) / 2.0;
-    for (uint32_t i = 0; i < ueNum; ++i)
-    {
-        AppendUeOffsetSpec(specs, (static_cast<double>(i) - center) * ueSpacingMeters, 0.0, "line");
-    }
-    return specs;
-}
-
-inline std::vector<UePlacementOffsetSpec>
-BuildSevenCellUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
-{
-    std::vector<UePlacementOffsetSpec> specs;
-    NS_ABORT_MSG_IF(ueNum != 25, "seven-cell layout currently requires ueNum == 25");
-    specs.reserve(ueNum);
-
-    AppendRectGridOffsetSpecs(
-        specs, 0.0, 0.0, -1, 1, -1, 1, layout.centerSpacingMeters, "center");
-
-    const double dx = std::sqrt(3.0) * layout.hexCellRadiusMeters;
-    const double dy = 1.5 * layout.hexCellRadiusMeters;
-    // 外围 UE 放在二跳环上，让中心小区和外围 UE 之间保留一圈空白邻区。
-    const std::vector<std::pair<double, double>> ringCellCenters = {
-        {-2.0 * dx, 0.0},
-        {-dx, 2.0 * dy},
-        {dx, 2.0 * dy},
-        {2.0 * dx, 0.0},
-        {dx, -2.0 * dy},
-        {-dx, -2.0 * dy},
-    };
-    const std::vector<uint32_t> ringUeCounts = {3, 3, 3, 3, 2, 2};
-
-    for (uint32_t cellIdx = 0; cellIdx < ringCellCenters.size(); ++cellIdx)
-    {
-        const auto& [centerEastMeters, centerNorthMeters] = ringCellCenters[cellIdx];
-        const uint32_t count = ringUeCounts[cellIdx];
-        const double norm = std::hypot(centerEastMeters, centerNorthMeters);
-        const double dirEast = centerEastMeters / norm;
-        const double dirNorth = centerNorthMeters / norm;
-        const double tangentEast = -dirNorth;
-        const double tangentNorth = dirEast;
-
-        if (count == 3)
-        {
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters - layout.ringPointOffsetMeters * dirEast,
-                               centerNorthMeters - layout.ringPointOffsetMeters * dirNorth,
-                               "ring");
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters + layout.ringPointOffsetMeters * tangentEast,
-                               centerNorthMeters + layout.ringPointOffsetMeters * tangentNorth,
-                               "ring");
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters - layout.ringPointOffsetMeters * tangentEast,
-                               centerNorthMeters - layout.ringPointOffsetMeters * tangentNorth,
-                               "ring");
-        }
-        else
-        {
-            const double tangentialOffsetMeters = 0.75 * layout.ringPointOffsetMeters;
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters + tangentialOffsetMeters * tangentEast,
-                               centerNorthMeters + tangentialOffsetMeters * tangentNorth,
-                               "ring");
-            AppendUeOffsetSpec(specs,
-                               centerEastMeters - tangentialOffsetMeters * tangentEast,
-                               centerNorthMeters - tangentialOffsetMeters * tangentNorth,
-                               "ring");
-        }
-    }
-
-    return specs;
-}
-
-inline std::vector<UePlacementOffsetSpec>
-BuildR2DiagnosticUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
-{
-    std::vector<UePlacementOffsetSpec> specs;
-    NS_ABORT_MSG_IF(ueNum != 19, "r2-diagnostic layout currently requires ueNum == 19");
-    specs.reserve(ueNum);
-
-    const double hexRadius = layout.hexCellRadiusMeters;
-    const double dx = std::sqrt(3.0) * hexRadius;
-    const double dy = 1.5 * hexRadius;
-
-    for (int r = -2; r <= 2; ++r)
-    {
-        for (int q = -2; q <= 2; ++q)
-        {
-            const int s = -q - r;
-            const int ringDistance = std::max({std::abs(q), std::abs(r), std::abs(s)});
-            if (ringDistance > 2)
-            {
-                continue;
-            }
-
-            const double eastMeters = dx * (static_cast<double>(q) + 0.5 * static_cast<double>(r));
-            const double northMeters = dy * static_cast<double>(r);
-            const std::string role = ringDistance == 0 ? "r2-center"
-                                     : ringDistance == 1 ? "r2-ring1"
-                                                         : "r2-ring2";
-            AppendUeOffsetSpec(specs, eastMeters, northMeters, role);
-        }
-    }
-
-    return specs;
 }
 
 struct HexOffsetCenter
@@ -680,6 +536,8 @@ BuildPoissonThreeRingCellCounts(uint32_t ueNum, const UeLayoutConfig& layout, st
 inline std::vector<UePlacementOffsetSpec>
 BuildPoissonThreeRingUeOffsetSpecs(uint32_t ueNum, const UeLayoutConfig& layout)
 {
+    NS_ABORT_MSG_IF(layout.layoutType != "poisson-3ring",
+                    "Only poisson-3ring UE layout is supported");
     NS_ABORT_MSG_IF(layout.poissonLambda <= 0.0, "poissonLambda must be > 0");
     NS_ABORT_MSG_IF(layout.maxUePerCell == 0, "maxUePerCell must be >= 1");
     NS_ABORT_MSG_IF(ueNum > 19 * layout.maxUePerCell,
@@ -746,23 +604,8 @@ BuildUePlacements(double baseLatitudeDeg,
                   uint32_t ueNum,
                   const UeLayoutConfig& layout)
 {
-    std::vector<UePlacementOffsetSpec> offsetSpecs;
-    if (layout.layoutType == "seven-cell")
-    {
-        offsetSpecs = BuildSevenCellUeOffsetSpecs(ueNum, layout);
-    }
-    else if (layout.layoutType == "r2-diagnostic")
-    {
-        offsetSpecs = BuildR2DiagnosticUeOffsetSpecs(ueNum, layout);
-    }
-    else if (layout.layoutType == "poisson-3ring")
-    {
-        offsetSpecs = BuildPoissonThreeRingUeOffsetSpecs(ueNum, layout);
-    }
-    else
-    {
-        offsetSpecs = BuildLineUeOffsetSpecs(ueNum, layout.lineSpacingMeters);
-    }
+    const std::vector<UePlacementOffsetSpec> offsetSpecs =
+        BuildPoissonThreeRingUeOffsetSpecs(ueNum, layout);
 
     return BuildUePlacementsFromOffsetSpecs(
         baseLatitudeDeg, baseLongitudeDeg, altitudeMeters, offsetSpecs);

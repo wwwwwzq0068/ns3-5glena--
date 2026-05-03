@@ -20,7 +20,7 @@
 
 这一节现在只保留一个更稳的判断框架：
 
-> 当前 `B00` 高竞争场景下，业务连续性变差，到底主要来自切换执行链本身，还是来自切后几何和负载条件不理想？
+> 当前 `2x4 + poisson-3ring + overlap-only + beam-only` 场景下，业务连续性变差，到底主要来自切换执行链本身，还是来自切后几何和负载条件不理想？
 
 当前代码已经不再统计“吞吐恢复时间”。后续分析业务连续性时，建议优先看下面这些量：
 
@@ -52,7 +52,7 @@
 ### P1: 测量上报周期与TTT关系不合理
 
 **现状**：
-- 以下数值对应本审核问题形成时的快照，不代表当前 `B00` 默认值
+- 以下数值对应本审核问题形成时的历史快照，不代表当前默认值
 - `measurementReportIntervalMs = 120 ms`
 - `hoTttMs = 200 ms`
 
@@ -206,7 +206,7 @@ LEO-NTN 切换决策窗口通常在 **秒级**，参数设置应与此匹配。
 | `updateIntervalMs` | 100 | 100 | 一致 |
 | `measurementReportIntervalMs` | 120 | 120 | 一致 |
 | `hoHysteresisDb` | 2.0 | 2.0 | 一致 |
-| `hoTttMs` | 200 | 200 | 历史审核快照，不代表当前 `B00` 默认值 |
+| `hoTttMs` | 200 | 200 | 历史审核快照，不代表当前默认值 |
 | `improvedSignalWeight` | 0.7 | 0.7 | 一致 |
 | `improvedLoadWeight` | 0.3 | 0.3 | 一致 |
 | `improvedVisibilityWeight` | 0.2 | 0.2 | 一致 |

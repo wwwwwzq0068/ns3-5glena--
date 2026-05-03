@@ -133,9 +133,10 @@ main()
 
     {
         BaselineSimulationConfig config;
-        Require(ResolveEffectiveBeamExclusionMode(config) == "ring",
-                "default beam exclusion mode should keep one-ring anchor exclusion");
+        Require(ResolveEffectiveBeamExclusionMode(config) == "overlap-only",
+                "default beam exclusion mode should allow adjacent anchors while preventing exact overlap");
 
+        config.beamExclusionMode.clear();
         config.enforceBeamExclusionRing = false;
         Require(ResolveEffectiveBeamExclusionMode(config) == "off",
                 "legacy beam exclusion flag should still disable anchor exclusion");
@@ -152,9 +153,10 @@ main()
 
     {
         BaselineSimulationConfig config;
-        Require(ResolveEffectiveRealLinkGateMode(config) == "beam-and-anchor",
-                "default real-link gate mode should keep beam-plus-anchor gating");
+        Require(ResolveEffectiveRealLinkGateMode(config) == "beam-only",
+                "default real-link gate mode should use beam-only gating");
 
+        config.realLinkGateMode.clear();
         config.enforceAnchorCellForRealLinks = false;
         Require(ResolveEffectiveRealLinkGateMode(config) == "beam-only",
                 "legacy anchor-cell boolean should still allow beam-only gating");
