@@ -5,8 +5,8 @@
 - 最近稳定节点定位为 `6.1`（建议 Git tag：`research-v6.1`）。
 - `research-v5.0` 是在 `research-v4.3` 定向天线默认口径基础上完成 thesis-mainline 清理与文档收口后的发布包。
 - `research-v5.1` 是在 `research-v5.0` 基础上的结构与口径收口包：主仿真入口继续下放无线 bootstrap、UE 初始接入/业务安装和 trace 输出生命周期，几何波束参数改为从真实 PHY `b00-* + gNB` 阵列规模自动推导。
-- `research-v6.0` 是正式论文输出链收口包：固定 baseline / full improved 两组比较，默认保留业务、切换、负载公平性和轨迹/HTML 示意材料，PHY/SINR/TBler 只作为诊断入口。
-- `research-v6.1` 是正式论文场景收口包：唯一主场景固定为 `2x4 + poisson-3ring + overlap-only + beam-only`，唯一正式比较为 baseline / full improved。
+- `research-v6.0` 是正式论文输出链收口包：固定 baseline / full improved 两组比较，默认保留业务、切换、负载公平性和轨迹/HTML 示意材料。
+- `research-v6.1` 是正式论文场景与代码瘦身收口包：唯一主场景固定为 `2x4 + poisson-3ring + overlap-only + beam-only`，唯一正式比较为 baseline / improved。
 - 这里的 `6.1 / 6.1.x` 指本仓库中的“毕设/研究工作版本”，不是 ns-3 框架本身的版本号。
 - ns-3 框架版本仍然保持为 `3.46`，不要改动根目录的 `VERSION` 文件去表达研究版本。
 

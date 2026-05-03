@@ -54,21 +54,12 @@ main()
                 -118.0,
                 1e-12,
                 "improved default should use the relaxed -118 dBm serving weak-link gate");
-    Require(ResolveEffectiveBeamExclusionMode(config) == "overlap-only",
-            "baseline default should allow adjacent anchors while preventing exact overlap");
-    Require(ResolveEffectiveRealLinkGateMode(config) == "beam-only",
-            "baseline default should use beam-only real-link gating");
     Require(!config.enableSatAnchorTrace,
             "baseline default should keep satellite anchor trace disabled");
     Require(!config.enableSatGroundTrackTrace,
             "baseline default should keep satellite ground-track trace disabled");
     Require(!config.enableFlowMonitor,
             "baseline default should keep FlowMonitor disabled");
-    Require(!config.enablePhyDlTbStats,
-            "baseline default should keep PHY DL TB stats disabled");
-    Require(!config.printMeasurementDecisionDiagnostics,
-            "baseline default should keep measurement decision diagnostics disabled");
-
     Require(config.earthFixedBeamTargetMode == "grid-anchor",
             "baseline default should enable grid-anchor beam targeting");
     Require(config.beamExclusionCandidateK == 64,

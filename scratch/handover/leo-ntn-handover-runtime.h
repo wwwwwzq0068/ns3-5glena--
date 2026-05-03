@@ -236,21 +236,6 @@ struct UeRuntime
     /** 当前 pending 切换已捕获到的失败原因。 */
     HandoverFailureReason pendingFailureReason = HandoverFailureReason::NONE;
 
-    /** PHY 下行已统计到的传输块总数。 */
-    uint64_t phyDlTbCount = 0;
-
-    /** PHY 下行被判定为损坏的传输块总数。 */
-    uint64_t phyDlCorruptTbCount = 0;
-
-    /** PHY 下行 TBler 累加值，用于计算平均 TBler。 */
-    double phyDlTblerSum = 0.0;
-
-    /** PHY 下行 SINR(dB) 累加值，用于计算平均 SINR。 */
-    double phyDlSinrDbSum = 0.0;
-
-    /** PHY 下行观测到的最小 SINR(dB)。 */
-    double phyDlMinSinrDb = std::numeric_limits<double>::infinity();
-
     /** 最近 PHY 下行样本数，用于跨层门控预热。 */
     uint32_t recentPhySampleCount = 0;
 
@@ -354,11 +339,6 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.handoverTraceSequence = 0;
     ue.activeHandoverTraceId = 0;
     ue.pendingFailureReason = HandoverFailureReason::NONE;
-    ue.phyDlTbCount = 0;
-    ue.phyDlCorruptTbCount = 0;
-    ue.phyDlTblerSum = 0.0;
-    ue.phyDlSinrDbSum = 0.0;
-    ue.phyDlMinSinrDb = std::numeric_limits<double>::infinity();
     ue.recentPhySampleCount = 0;
     ue.recentPhyCorruptRateEwma = 0.0;
     ue.recentPhyTblerEwma = 0.0;

@@ -17,8 +17,8 @@ Formal thesis output compares only:
 - `improved`: full signal/load/visibility-aware handover strategy with the existing stability
   and gating protections enabled.
 
-`improved-score-only` remains a diagnostic mode but is not part of the formal thesis output
-path.
+The old `improved-score-only` diagnostic mode has been removed from the active reproduction
+package.
 
 ## Metric Boundary
 
@@ -40,8 +40,8 @@ The formal result metrics intentionally exclude:
 - handover delay
 - signaling overhead
 
-PHY-layer statistics remain available only as a hidden diagnostic path. Formal runs and
-summary scripts do not require `enablePhyDlTbStats=true`.
+PHY-layer CSV statistics are no longer part of the active reproduction output. Formal runs
+and summary scripts do not require a PHY TB statistics switch.
 
 ## Formal Directory Layout
 

@@ -27,7 +27,7 @@
 - Reduce unnecessary handovers and ping-pong behavior.
 - Maintain throughput continuity during serving satellite changes.
 - Incorporate load-aware target selection rather than leaving it as an optional extension, because the thesis task explicitly requires considering both signal quality and satellite load.
-- `SINR`, `PHY DL TB error / TBler`, detailed antenna tuning, handover delay, and signaling overhead are now diagnostics only; they are not part of the formal thesis result table.
+- `SINR`, `PHY DL TB error / TBler`, detailed antenna tuning, and signaling overhead are no longer part of the formal thesis result table or active reproduction output.
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.

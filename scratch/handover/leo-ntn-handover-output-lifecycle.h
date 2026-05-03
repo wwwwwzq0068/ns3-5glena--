@@ -25,20 +25,12 @@ inline constexpr std::string_view kSatelliteStateTrace =
 inline constexpr std::string_view kHandoverEventTrace =
     "time_s,ue,ho_id,event,source_cell,target_cell,source_sat,target_sat,delay_ms,"
     "ping_pong_detected,failure_reason\n";
-inline constexpr std::string_view kPhyDlTbTrace =
-    "time_s,ue,cell,serving_sat,rnti,bwp,frame,subframe,slot,sym_start,num_sym,"
-    "tb_size,mcs,rank,rv,rb_assigned,cqi,sinr_db,min_sinr_db,tbler,corrupt\n";
 inline constexpr std::string_view kHandoverThroughputTrace =
     "time_s,ue,serving_cell,serving_sat,throughput_mbps,delta_rx_packets,"
     "total_rx_packets,in_handover,active_ho_id,pending_source_cell,pending_target_cell\n";
 inline constexpr std::string_view kE2eFlowMetrics =
     "ue,dl_port,matched_flow,tx_packets,rx_packets,lost_packets,loss_rate_percent,tx_bytes,"
     "rx_bytes,offered_mbps,throughput_mbps,mean_delay_ms,mean_jitter_ms\n";
-inline constexpr std::string_view kPhyDlTbMetrics =
-    "ue,tb_count,corrupt_tb_count,corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
-inline constexpr std::string_view kPhyDlTbIntervalMetrics =
-    "interval_index,window_start_s,window_end_s,tb_count,corrupt_tb_count,"
-    "corrupt_tb_rate_percent,mean_tbler,mean_sinr_db,min_sinr_db\n";
 } // namespace HandoverCsvHeaders
 
 inline bool

@@ -19,11 +19,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,16 +33,11 @@ enum class HandoverMode
 {
     BASELINE,
     IMPROVED,
-    IMPROVED_SCORE_ONLY,
 };
 
 inline HandoverMode
 ParseHandoverMode(const std::string& handoverMode)
 {
-    if (handoverMode == "improved-score-only")
-    {
-        return HandoverMode::IMPROVED_SCORE_ONLY;
-    }
     if (handoverMode == "improved")
     {
         return HandoverMode::IMPROVED;
@@ -59,8 +52,6 @@ ToString(HandoverMode handoverMode)
     {
     case HandoverMode::IMPROVED:
         return "improved";
-    case HandoverMode::IMPROVED_SCORE_ONLY:
-        return "improved-score-only";
     case HandoverMode::BASELINE:
     default:
         return "baseline";
@@ -69,12 +60,6 @@ ToString(HandoverMode handoverMode)
 
 inline bool
 UsesJointScoreSelection(HandoverMode handoverMode)
-{
-    return handoverMode != HandoverMode::BASELINE;
-}
-
-inline bool
-UsesGuardedImprovedSelection(HandoverMode handoverMode)
 {
     return handoverMode == HandoverMode::IMPROVED;
 }
@@ -91,94 +76,6 @@ struct MeasurementCandidate
     double visibilityScore = 0.0;
     double jointScore = -std::numeric_limits<double>::infinity();
 };
-
-enum class MeasurementDecisionResolution
-{
-    NONE,
-    BASELINE_BEST_SIGNAL,
-    NO_CANDIDATES,
-    RSRQ_FALLBACK_BEST_SIGNAL,
-    SERVING_WEAK_BEST_SIGNAL,
-    CROSS_LAYER_WEAK_BEST_SIGNAL,
-    SCORED_SET_EMPTY_BEST_SIGNAL,
-    JOINT_MARGIN_BLOCKED,
-    JOINT_BEST_SELECTED,
-};
-
-inline const char*
-ToString(MeasurementDecisionResolution resolution)
-{
-    switch (resolution)
-    {
-    case MeasurementDecisionResolution::BASELINE_BEST_SIGNAL:
-        return "baseline-best-signal";
-    case MeasurementDecisionResolution::NO_CANDIDATES:
-        return "no-candidates";
-    case MeasurementDecisionResolution::RSRQ_FALLBACK_BEST_SIGNAL:
-        return "rsrq-fallback-best-signal";
-    case MeasurementDecisionResolution::SERVING_WEAK_BEST_SIGNAL:
-        return "serving-weak-best-signal";
-    case MeasurementDecisionResolution::CROSS_LAYER_WEAK_BEST_SIGNAL:
-        return "cross-layer-weak-best-signal";
-    case MeasurementDecisionResolution::SCORED_SET_EMPTY_BEST_SIGNAL:
-        return "scored-set-empty-best-signal";
-    case MeasurementDecisionResolution::JOINT_MARGIN_BLOCKED:
-        return "joint-margin-blocked";
-    case MeasurementDecisionResolution::JOINT_BEST_SELECTED:
-        return "joint-best-selected";
-    case MeasurementDecisionResolution::NONE:
-    default:
-        return "none";
-    }
-}
-
-struct MeasurementDecisionDebugInfo
-{
-    size_t rawCandidateCount = 0;
-    size_t admissionAllowedCandidateCount = 0;
-    size_t visibilityQualifiedCandidateCount = 0;
-    size_t qualityQualifiedCandidateCount = 0;
-    size_t scoredCandidateCount = 0;
-    bool servingWeak = false;
-    bool crossLayerWeak = false;
-    double servingRsrpDbm = -std::numeric_limits<double>::infinity();
-    double servingRsrqDb = -std::numeric_limits<double>::infinity();
-    uint16_t bestSignalCellId = 0;
-    double bestSignalRsrpDbm = -std::numeric_limits<double>::infinity();
-    double bestSignalLoadScore = 0.0;
-    double bestSignalRemainingVisibilitySeconds = 0.0;
-    uint16_t bestJointCellId = 0;
-    double bestJointScore = -std::numeric_limits<double>::infinity();
-    double servingJointScore = -std::numeric_limits<double>::infinity();
-    uint16_t selectedCellId = 0;
-    MeasurementDecisionResolution resolution = MeasurementDecisionResolution::NONE;
-};
-
-inline std::string
-FormatMeasurementDecisionDebugInfo(const MeasurementDecisionDebugInfo& info)
-{
-    std::ostringstream os;
-    os << std::fixed << std::setprecision(3)
-       << "servingWeak=" << (info.servingWeak ? "YES" : "NO")
-       << " crossLayerWeak=" << (info.crossLayerWeak ? "YES" : "NO")
-       << " raw=" << info.rawCandidateCount
-       << " admitted=" << info.admissionAllowedCandidateCount
-       << " vis=" << info.visibilityQualifiedCandidateCount
-       << " quality=" << info.qualityQualifiedCandidateCount
-       << " scored=" << info.scoredCandidateCount
-       << " servingRsrp=" << info.servingRsrpDbm
-       << "dBm servingRsrq=" << info.servingRsrqDb
-       << "dB bestSignal=" << info.bestSignalCellId
-       << "(" << info.bestSignalRsrpDbm << "dBm"
-       << ",load=" << info.bestSignalLoadScore
-       << ",vis=" << info.bestSignalRemainingVisibilitySeconds << "s)"
-       << " bestJoint=" << info.bestJointCellId
-       << "(score=" << info.bestJointScore << ")"
-       << " servingJoint=" << info.servingJointScore
-       << " resolution=" << ToString(info.resolution)
-       << " selected=" << info.selectedCellId;
-    return os.str();
-}
 
 struct MeasurementDrivenDecisionContext
 {
@@ -389,8 +286,7 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                               uint16_t servingCellId,
                               uint32_t sourceSatIdx,
                               const UeRuntime& ue,
-                              const NrRrcSap::MeasResults& measResults,
-                              MeasurementDecisionDebugInfo* debugInfo = nullptr)
+                              const NrRrcSap::MeasResults& measResults)
 {
     std::vector<MeasurementCandidate> candidates;
     candidates.reserve(measResults.measResultListEutra.size());
@@ -437,16 +333,7 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
 
     if (candidates.empty())
     {
-        if (debugInfo != nullptr)
-        {
-            debugInfo->resolution = MeasurementDecisionResolution::NO_CANDIDATES;
-        }
         return std::nullopt;
-    }
-
-    if (debugInfo != nullptr)
-    {
-        debugInfo->rawCandidateCount = candidates.size();
     }
 
     if (context.handoverMode == HandoverMode::BASELINE)
@@ -456,14 +343,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                                   [](const auto& lhs, const auto& rhs) {
                                                       return lhs.rsrpDbm < rhs.rsrpDbm;
                                                   });
-        if (debugInfo != nullptr)
-        {
-            debugInfo->bestSignalCellId = bestSignal.cellId;
-            debugInfo->bestSignalRsrpDbm = bestSignal.rsrpDbm;
-            debugInfo->bestSignalLoadScore = bestSignal.loadScore;
-            debugInfo->selectedCellId = bestSignal.cellId;
-            debugInfo->resolution = MeasurementDecisionResolution::BASELINE_BEST_SIGNAL;
-        }
         return bestSignal;
     }
 
@@ -487,106 +366,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                          Simulator::Now().GetSeconds());
     const bool servingWeak = IsServingLinkWeak(context, measResults);
     const bool crossLayerWeak = IsCrossLayerPhyWeak(context, ue);
-    if (debugInfo != nullptr)
-    {
-        debugInfo->servingWeak = servingWeak;
-        debugInfo->crossLayerWeak = crossLayerWeak;
-        debugInfo->servingRsrpDbm = servingCandidate.rsrpDbm;
-        debugInfo->servingRsrqDb = servingCandidate.rsrqDb;
-    }
-
-    if (!UsesGuardedImprovedSelection(context.handoverMode))
-    {
-        if (debugInfo != nullptr)
-        {
-            debugInfo->admissionAllowedCandidateCount = candidates.size();
-            debugInfo->visibilityQualifiedCandidateCount = candidates.size();
-            debugInfo->qualityQualifiedCandidateCount = candidates.size();
-            debugInfo->scoredCandidateCount = candidates.size();
-        }
-
-        double minRsrpDbm = std::numeric_limits<double>::infinity();
-        double maxRsrpDbm = -std::numeric_limits<double>::infinity();
-        double minRsrqDb = std::numeric_limits<double>::infinity();
-        double maxRsrqDb = -std::numeric_limits<double>::infinity();
-        if (std::isfinite(servingCandidate.rsrpDbm))
-        {
-            minRsrpDbm = servingCandidate.rsrpDbm;
-            maxRsrpDbm = servingCandidate.rsrpDbm;
-        }
-        if (std::isfinite(servingCandidate.rsrqDb))
-        {
-            minRsrqDb = servingCandidate.rsrqDb;
-            maxRsrqDb = servingCandidate.rsrqDb;
-        }
-        for (const auto& candidate : candidates)
-        {
-            minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
-            maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
-            if (std::isfinite(candidate.rsrqDb))
-            {
-                minRsrqDb = std::min(minRsrqDb, candidate.rsrqDb);
-                maxRsrqDb = std::max(maxRsrqDb, candidate.rsrqDb);
-            }
-        }
-
-        const double totalWeight =
-            std::max(1e-9,
-                     context.improvedSignalWeight + context.improvedLoadWeight +
-                         context.improvedVisibilityWeight);
-        const double normalizedSignalWeight = context.improvedSignalWeight / totalWeight;
-        const double normalizedLoadWeight = context.improvedLoadWeight / totalWeight;
-        const double normalizedVisibilityWeight =
-            context.improvedVisibilityWeight / totalWeight;
-        const double normalizedRsrqWeight = 0.0;
-
-        for (auto& candidate : candidates)
-        {
-            candidate.visibilityScore =
-                ComputeVisibilityScore(context, candidate.remainingVisibilitySeconds);
-            candidate.jointScore = ComputeJointScore(candidate,
-                                                     minRsrpDbm,
-                                                     maxRsrpDbm,
-                                                     minRsrqDb,
-                                                     maxRsrqDb,
-                                                     normalizedSignalWeight,
-                                                     normalizedRsrqWeight,
-                                                     normalizedLoadWeight,
-                                                     normalizedVisibilityWeight,
-                                                     sourceLoadScore,
-                                                     sourceLoadPressure);
-        }
-
-        const auto bestJointIt =
-            std::max_element(candidates.begin(),
-                             candidates.end(),
-                             [](const auto& lhs, const auto& rhs) {
-                                 if (std::abs(lhs.jointScore - rhs.jointScore) > 1e-9)
-                                 {
-                                     return lhs.jointScore < rhs.jointScore;
-                                 }
-                                 return lhs.rsrpDbm < rhs.rsrpDbm;
-                             });
-        if (debugInfo != nullptr)
-        {
-            const auto bestSignalIt =
-                std::max_element(candidates.begin(),
-                                 candidates.end(),
-                                 [](const auto& lhs, const auto& rhs) {
-                                     return lhs.rsrpDbm < rhs.rsrpDbm;
-                                 });
-            debugInfo->bestSignalCellId = bestSignalIt->cellId;
-            debugInfo->bestSignalRsrpDbm = bestSignalIt->rsrpDbm;
-            debugInfo->bestSignalLoadScore = bestSignalIt->loadScore;
-            debugInfo->bestSignalRemainingVisibilitySeconds =
-                bestSignalIt->remainingVisibilitySeconds;
-            debugInfo->bestJointCellId = bestJointIt->cellId;
-            debugInfo->bestJointScore = bestJointIt->jointScore;
-            debugInfo->selectedCellId = bestJointIt->cellId;
-            debugInfo->resolution = MeasurementDecisionResolution::JOINT_BEST_SELECTED;
-        }
-        return *bestJointIt;
-    }
 
     std::vector<MeasurementCandidate> filteredCandidates;
     filteredCandidates.reserve(candidates.size());
@@ -597,10 +376,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
     if (filteredCandidates.empty())
     {
         filteredCandidates = candidates;
-    }
-    if (debugInfo != nullptr)
-    {
-        debugInfo->admissionAllowedCandidateCount = filteredCandidates.size();
     }
 
     if (context.improvedMinVisibilitySeconds > 0.0)
@@ -619,10 +394,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
             filteredCandidates = std::move(visibilityQualifiedCandidates);
         }
     }
-    if (debugInfo != nullptr)
-    {
-        debugInfo->visibilityQualifiedCandidateCount = filteredCandidates.size();
-    }
 
     std::vector<MeasurementCandidate> qualityQualifiedCandidates;
     qualityQualifiedCandidates.reserve(filteredCandidates.size());
@@ -638,10 +409,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
     if (!qualityQualifiedCandidates.empty())
     {
         filteredCandidates = std::move(qualityQualifiedCandidates);
-    }
-    if (debugInfo != nullptr)
-    {
-        debugInfo->qualityQualifiedCandidateCount = filteredCandidates.size();
     }
 
     const double servingRsrqDb =
@@ -673,17 +440,6 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
             });
             if (bestSignal->rsrpDbm > servingCandidate.rsrpDbm)
             {
-                if (debugInfo != nullptr)
-                {
-                    debugInfo->bestSignalCellId = bestSignal->cellId;
-                    debugInfo->bestSignalRsrpDbm = bestSignal->rsrpDbm;
-                    debugInfo->bestSignalLoadScore = bestSignal->loadScore;
-                    debugInfo->bestSignalRemainingVisibilitySeconds =
-                        bestSignal->remainingVisibilitySeconds;
-                    debugInfo->selectedCellId = bestSignal->cellId;
-                    debugInfo->resolution =
-                        MeasurementDecisionResolution::RSRQ_FALLBACK_BEST_SIGNAL;
-                }
                 return *bestSignal;
             }
         }
@@ -696,23 +452,8 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                              return lhs.rsrpDbm < rhs.rsrpDbm;
                          });
     const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
-    if (debugInfo != nullptr)
-    {
-        debugInfo->bestSignalCellId = bestSignalCandidate.cellId;
-        debugInfo->bestSignalRsrpDbm = bestSignalCandidate.rsrpDbm;
-        debugInfo->bestSignalLoadScore = bestSignalCandidate.loadScore;
-        debugInfo->bestSignalRemainingVisibilitySeconds =
-            bestSignalCandidate.remainingVisibilitySeconds;
-    }
     if (servingWeak || crossLayerWeak)
     {
-        if (debugInfo != nullptr)
-        {
-            debugInfo->selectedCellId = bestSignalCandidate.cellId;
-            debugInfo->resolution = servingWeak
-                                        ? MeasurementDecisionResolution::SERVING_WEAK_BEST_SIGNAL
-                                        : MeasurementDecisionResolution::CROSS_LAYER_WEAK_BEST_SIGNAL;
-        }
         return bestSignalCandidate;
     }
 
@@ -743,18 +484,9 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
         }
         scoredCandidates.push_back(candidate);
     }
-    if (debugInfo != nullptr)
-    {
-        debugInfo->scoredCandidateCount = scoredCandidates.size();
-    }
 
     if (scoredCandidates.empty())
     {
-        if (debugInfo != nullptr)
-        {
-            debugInfo->selectedCellId = bestSignalCandidate.cellId;
-            debugInfo->resolution = MeasurementDecisionResolution::SCORED_SET_EMPTY_BEST_SIGNAL;
-        }
         return bestSignalCandidate;
     }
 
@@ -833,30 +565,13 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                                         normalizedVisibilityWeight,
                                                         sourceLoadScore,
                                                         sourceLoadPressure);
-        if (debugInfo != nullptr)
-        {
-            debugInfo->bestJointCellId = bestJointIt->cellId;
-            debugInfo->bestJointScore = bestJointIt->jointScore;
-            debugInfo->servingJointScore = servingCandidate.jointScore;
-        }
         if (bestJointIt->jointScore <
             servingCandidate.jointScore + context.improvedMinJointScoreMargin)
         {
-            if (debugInfo != nullptr)
-            {
-                debugInfo->resolution = MeasurementDecisionResolution::JOINT_MARGIN_BLOCKED;
-            }
             return std::nullopt;
         }
     }
 
-    if (debugInfo != nullptr)
-    {
-        debugInfo->bestJointCellId = bestJointIt->cellId;
-        debugInfo->bestJointScore = bestJointIt->jointScore;
-        debugInfo->selectedCellId = bestJointIt->cellId;
-        debugInfo->resolution = MeasurementDecisionResolution::JOINT_BEST_SELECTED;
-    }
     return *bestJointIt;
 }
 

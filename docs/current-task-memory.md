@@ -13,7 +13,7 @@
 - 当前 `ueLayoutType = poisson-3ring` 是唯一 UE 生成方式；旧固定 UE 布局入口已从活动代码中移除
 - 当前 `2x4 + poisson-3ring + overlap-only + beam-only` 是唯一论文写作和正式结果方案；旧固定 UE、旧结果目录和旧门控组合只作为历史背景，不再进入主线结果
 - 当前毕设收口目标已经调整为业务、切换与负载层指标优先：`E2E delay`、`packet loss rate`、`throughput`、`completed handovers`、`ping-pong`、`Jain load fairness`
-- `SINR`、`PHY DL TB error / mean TBler`、阵列规模、波束宽度、功率、`MCS`、切换执行时延与信令开销现在只保留为诊断口径，不再进入正式论文主表
+- `SINR`、`PHY DL TB error / mean TBler`、阵列规模、波束宽度、功率、`MCS` 与信令开销不再进入正式论文主表；当前主表只保留业务、切换与负载层 KPI
 
 当前默认关键参数：
 - `gNbNum = 8`
@@ -24,12 +24,7 @@
 - `poissonLambda = 1.5`
 - `maxUePerCell = 5`
 - `ueLayoutRandomSeed = 42`
-- `enforceBeamExclusionRing = true`
-- `beamExclusionMode = overlap-only`
 - `beamExclusionCandidateK = 64`
-- `realLinkGateMode = beam-only`
-- `enforceBeamCoverageForRealLinks = true`
-- `enforceAnchorCellForRealLinks = false`
 - `preferDemandAnchorCells = true`
 - `anchorSelectionMode = demand-max-ue-near-nadir`
 - `demandSnapshotMode = runtime-underserved-ue`
@@ -49,7 +44,6 @@
 - `measurementReportIntervalMs = 120 ms`
 - `measurementMaxReportCells = 8`
 - `handoverMode = baseline`
-- `enablePhyDlTbStats = false`
 - `enableSatelliteStateTrace = true`
 - `improvedSignalWeight = 0.7`
 - `improvedLoadWeight = 0.3`
@@ -81,14 +75,13 @@
 - `b00MaxAttenuationDb = 30.0`
 - 几何波束 `BeamModelConfig` 的峰值、宽度和衰减由 `b00-*` 与 `gNB 12x12` 自动推导
 - `earthFixedBeamTargetMode = grid-anchor`
-- `phyDlTbIntervalSeconds = 1.0 s`
 
 ## 当前已确认实现
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
 - `main()` 当前已进一步把无线 bootstrap、UE 初始接入/业务安装、trace 输出生命周期分别下放到 `scratch/handover/leo-ntn-handover-radio.h`、`scratch/handover/leo-ntn-handover-scenario.h` 与 `scratch/handover/leo-ntn-handover-output.h`，主脚本继续朝“场景装配 + 时序调度 + 汇总收尾”收口
 - 当前 `UE` 位置生成逻辑已收口为“两阶段”实现：先生成局部东-北平面偏移模板，再统一转换为 `WGS84` 地理点和 `ECEF`
 - 当前默认且唯一的 `UE` 布局为 `poisson-3ring`：在中心及两圈共 `19` 个 hex cell 内按截断泊松权重分配 `UE`，并在各 cell 内随机撒点；实现保持总数等于 `ueNum`，以维持现有节点、业务和统计管线
-- 当前默认波束锚点使用 `overlap-only` 排他：一个卫星波束占用某个 hex 中心后，其它卫星不能复用同一个 anchor cell，但允许相邻 anchor 参与竞争
+- 当前默认波束锚点使用固定 overlap-only 排他：一个卫星波束占用某个 hex 中心后，其它卫星不能复用同一个 anchor cell，但允许相邻 anchor 参与竞争
 - 当前默认锚点选择模式已切到 `demand-max-ue-near-nadir`：先取星下点最近格作为主落点；若主落点有 `UE` 且合法，则直接使用；若主落点无 `UE`，只检查周围一圈邻格，只要存在合法且有 `UE` 的候选，就优先选择其中“运行时 demand 权重”最高的格子，若权重并列，再按驻留 `UE` 数和“更接近星下点/更低扫描代价”打破平局；仅当主落点和周围一圈都没有 `UE` 时，才允许回退到这个空主落点
 - 当前默认 `demandSnapshotMode = runtime-underserved-ue`：需求格子不再只按启动时静态 UE 布局统计，而是在每个更新周期按 UE 所在地面格子重建 demand snapshot；若 UE 当前无服务、已偏离服务星锚点/主覆盖、服务星过载，或最近 PHY 已进入弱链路状态，则对应格子的 demand 权重会上调
 - 若主落点或一圈内有需求的候选因重复/邻占排他或 beam/scan 约束而不合法，则当前周期不会硬抢非法格子，而是继续回退到现有合法候选链
@@ -101,7 +94,7 @@
 - baseline 与 improved 都通过 `NrLeoA3MeasurementHandoverAlgorithm` 注册标准 A3 测量，并在同一份 `MeasurementReport` 上做目标选择
 - `handoverMode = baseline` 时，直接选择最强测量邻区，不再额外计算 `remainingVisibility`
 - `handoverMode = improved` 时，直接在同一批测量邻区上按“信号质量 + 可见性效用 + 负载效用”联合打分，并对过载候选、联合领先持续时间、最小剩余可见时间、过小负载优势和过小联合分差做额外门控
-- 当前新增 `handoverMode = improved-score-only` 诊断入口：复用与 baseline 相同的 `MeasurementReport` 候选和 real-link gate，只保留 `signal + load + visibility` 联合评分，不再叠加 weak-link fallback、stable-lead、joint-margin、candidate quality/visibility hard gate 等保护层
+- 当前 `handoverMode` 已收口为 `baseline` 与 `improved` 两种正式路径；旧 `improved-score-only` 诊断入口已移除
 - 当前 improved 可选启用轻量跨层 PHY 辅助：若最近下行 TB 已持续出现 `TBler` 偏高或 `SINR <= -5 dB`，则把当前服务星判为弱 PHY，并放宽部分等待门控
 - 周期更新中已经会计算每星 `attachedUeCount`、`offeredPacketRate`、`loadScore`、`admissionAllowed`
 - 当前默认输出 `satellite_state_trace.csv`，用于保留每星每时刻原始负载状态并计算 Jain load fairness
@@ -130,8 +123,6 @@
   - `e2e_flow_metrics.csv`（当 `enableFlowMonitor = true`，正式 KPI 跑再显式开启）
   - `sat_anchor_trace.csv`（当 `enableSatAnchorTrace = true`）
   - `sat_ground_track.csv`（当 `enableSatGroundTrackTrace = true`）
-  - `phy_dl_tb_metrics.csv`（当 `enablePhyDlTbStats = true`，只作坏链路背景诊断）
-  - `phy_dl_tb_interval_metrics.csv`（当 `enablePhyDlTbStats = true`，只作时间窗背景诊断）
 - 当前常用分析脚本：
   - `scratch/plotting/plot_hex_grid_svg.py`
     - 当前只输出交互式 `HTML`；`HTML` 默认会叠加同目录下的 `ue_layout.csv`，并支持 `8` 星筛选、最终波束落点轨迹与真实连续地面轨迹双层对照
@@ -154,7 +145,7 @@
   - `completed handovers`
   - `ping-pong`
   - `Jain load fairness`
-- 后续定位最差 `UE`、最差时间窗和服务星/候选星竞争关系时，以这些最终指标的变化为准；`PHY TB` 统计只作为辅助诊断
+- 后续定位最差 `UE`、最差时间窗和服务星/候选星竞争关系时，以这些最终指标的变化为准
 
 ## 当前工作边界
 - 当前不把“继续扩大星座规模”作为默认主线，除非现有 `2x4` 场景已无法体现算法差异
@@ -167,7 +158,7 @@
 
 ## 当前优先方向
 - 稳住 `2x4 + poisson-3ring + overlap-only + beam-only` baseline 场景
-- 当前 same-frequency 默认 baseline 固定为：`reuse1 + ofdma-rr + earthFixedBeamTargetMode=grid-anchor + beamExclusionMode=overlap-only + realLinkGateMode=beam-only + beamExclusionCandidateK=64 + gNB antenna array 12x12`
+- 当前 same-frequency 默认 baseline 固定为：`reuse1 + ofdma-rr + earthFixedBeamTargetMode=grid-anchor + overlap-only + beam-only + beamExclusionCandidateK=64 + gNB antenna array 12x12`
 - 当前最优先的工作不是继续扫 PHY 小开关，而是在固定场景和固定 baseline 上，让 `baseline / improved` 在以下指标上拉开差异：
   - 更低 `E2E delay`
   - 更低 `packet loss rate`

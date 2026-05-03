@@ -20,8 +20,8 @@
 
 补充边界：
 - `ueLayoutType=poisson-3ring` 是当前唯一 UE 生成入口；旧固定 UE 布局入口已移除
-- `beamExclusionMode=overlap-only` 与 `realLinkGateMode=beam-only` 是当前唯一正式论文场景口径；其它门控组合只作为历史诊断，不再驱动论文结果
-- `SINR`、`PHY DL TB error / TBler`、阵元、波束宽度、功率、切换执行时延和信令开销现在只保留为诊断项，不进入正式论文主表
+- 同格锚点排他与 `beam-only` 真实链路门控已经收口为唯一正式论文场景口径；旧门控组合的活动入口已移除
+- `SINR`、`PHY DL TB error / TBler`、阵元、波束宽度、功率和信令开销不进入正式论文主表；主表只保留业务、切换与负载层 KPI
 
 ## 当前默认场景口径
 场景：
@@ -34,12 +34,7 @@
 - `poissonLambda = 1.5`
 - `maxUePerCell = 5`
 - `ueLayoutRandomSeed = 42`
-- `enforceBeamExclusionRing = true`
-- `beamExclusionMode = overlap-only`
 - `beamExclusionCandidateK = 64`
-- `realLinkGateMode = beam-only`
-- `enforceBeamCoverageForRealLinks = true`
-- `enforceAnchorCellForRealLinks = false`
 - `preferDemandAnchorCells = true`
 - `anchorSelectionMode = demand-max-ue-near-nadir`
 - `demandSnapshotMode = runtime-underserved-ue`
@@ -101,14 +96,10 @@
 - `realisticBfTriggerEvent = srs-count`
 - `realisticBfUpdatePeriodicity = 3`
 - `realisticBfUpdateDelayMs = 0`
-- `phyDlTbIntervalSeconds = 1.0 s`
 - `enableSatAnchorTrace = false`
 - `enableSatGroundTrackTrace = false`
 - `enableSatelliteStateTrace = true`
 - `enableFlowMonitor = false`
-- `enablePhyDlTbStats = false`
-- `enablePhyDlTbTrace = false`
-- `phyDlTbTracePath = <outputDir>/phy_dl_tb_trace.csv`
 - `useWgs84HexGrid = true`
 - `anchorGridSwitchGuardMeters = 0`
 - `anchorGridHysteresisSeconds = 0`
@@ -123,16 +114,15 @@
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认还给 `plane 0` 增加了 `+1.09 deg` 的额外 `RAAN` 偏转，并把双轨 `RAAN` 间隔收紧到 `-0.58 deg`，用来把 plane 0 压到接近 `73-63-53` 这条线、把 plane 1 压到接近 `97-87-77` 这条线；当前 `plane0TimeOffsetSeconds=-3.5 s` 用于把 plane 0 的 sat0 初始落点调到 `hex73` 附近，`plane1OverpassGapSeconds=3 s` 用于在主同轨间隔改为 `6 s` 后保持 plane 1 初始诊断几何不变
 - 当前 `poisson-3ring` 在中心及两圈共 `19` 个 hex cell 内按截断泊松权重生成 `UE` 分配，并在各 cell 内随机撒点；当前实现保持总数等于 `ueNum`，以避免破坏现有节点、业务和统计管线
-- 当前默认仍保持 `anchorGridHexRadiusKm = hexCellRadiusKm`，并使用 `overlap-only` 波束锚点排他：其它卫星不能复用同一个 anchor cell，但允许相邻 anchor 参与竞争，作为论文唯一正式锚点口径
+- 当前默认仍保持 `anchorGridHexRadiusKm = hexCellRadiusKm`，并使用固定的 overlap-only 波束锚点排他：其它卫星不能复用同一个 anchor cell，但允许相邻 anchor 参与竞争，作为论文唯一正式锚点口径
 - 当前默认锚点选择模式为 `demand-max-ue-near-nadir`：先取星下点最近格作为主落点；若主落点有 `UE` 且合法，则直接使用；若主落点无 `UE`，则只检查周围一圈邻格，只要存在合法且有 `UE` 的候选，就优先选择其中“运行时 demand 权重”最高的格子；若权重并列，再按驻留 `UE` 数以及“更接近星下点 + 更低扫描代价”打破平局
 - 当前默认 `demandSnapshotMode = runtime-underserved-ue`：需求格子在每个更新周期按 UE 所在地面格子重建；若 UE 当前无服务、已偏离服务星锚点/主覆盖、服务星过载，或最近 PHY 已进入弱链路状态，则对应格子的 demand 权重会上调
 - 若主落点和周围一圈都没有 `UE`，则允许回退到这个空主落点；但若周围一圈存在 `UE` 候选、却都因重复/邻占排他或 beam/scan 约束而不合法，则不会为了追 `UE` 去破坏排他规则，而是继续走合法 fallback
-- 若需回到旧口径，可显式设置 `anchorSelectionMode=demand-nearest` 与 `demandSnapshotMode=static-layout`
-- 当前实现仍允许给锚点切换增加距离优势与持续领先门控；若要做不带排他的旧口径对照，可显式关闭 `enforceBeamExclusionRing`
+- 若需回到旧锚点选择口径，可显式设置 `anchorSelectionMode=demand-nearest` 与 `demandSnapshotMode=static-layout`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
 - 当前稳定默认真实 NR PHY 为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 12x12`、`UE 1x2`，该口径自 `v4.3` 起引入，当前 `research-v6.1` 继续沿用；正式论文结果不再把 PHY/SINR/TBler 放入主表
 - 当前默认 `earthFixedBeamTargetMode=grid-anchor`：真实 gNB 发射波束锁到当前卫星已分配的唯一合法 anchor hex 中心，不跟随单个 `UE`
-- 当前默认 `realLinkGateMode=beam-only`：真实接入/切换候选只要求落在连续主波束覆盖内，不再叠加 anchor hex cell gate，作为论文唯一正式候选门控口径
+- 当前固定使用 `beam-only` 真实链路候选门控：真实接入/切换候选只要求落在连续主波束覆盖内，不再叠加 anchor hex cell gate，作为论文唯一正式候选门控口径
 - 当前默认 `b00BeamwidthDeg=4.0` 已按真实 PHY 总方向图收紧，并配合 `gNB 12x12 UPA + b00-custom + ideal-earth-fixed` 进一步提高发射端空间定向性，使默认口径更接近当前 hex 小区尺度
 - 几何波束参数现在从真实 PHY 默认口径自动推导：`gMax0Dbi = b00MaxGainDb + 10*log10(gnbAntennaRows * gnbAntennaColumns)`，`theta3dBRad = DegToRad(b00BeamwidthDeg)`，`slaVDb = b00MaxAttenuationDb`
 - 当前所有卫星默认共享同一个 `2 GHz / 40 MHz / 1 CC` operation band，因此若需要验证高 `PHY DL TB error rate` 是否主要来自同频干扰，应优先从当前 same-frequency 场景内解释。旧的 carrier-reuse / inter-frequency 诊断入口已经从活动工作区移除。
@@ -148,7 +138,6 @@
 - 判决主线为：标准 `MeasurementReport` 上报的 `RSRP` 比较、`hysteresis` 与 `TTT`
 - `handoverMode = baseline` 时，直接在 A3 上报候选中选择最强邻区，不再额外计算 `remainingVisibility`
 - `handoverMode = improved` 时，仍使用同一批真实测量候选，但在目标选择时联合考虑 `RSRP`、`RSRQ`、`remainingVisibility` 与 `loadScore`，并在源站接近拥塞时进一步偏向轻载候选
-- `handoverMode = improved-score-only` 时，仍使用同一批真实测量候选，但只保留 `signal + load + visibility` 联合评分，不再叠加 weak-link fallback、stable-lead、joint-margin、candidate quality/visibility hard gate 等保护层；该模式当前只作为诊断入口，用来判断“联合评分本身”是否值得继续保留
 - improved 允许先用最小剩余可见时间做硬门控，再在保留下来的候选中做联合评分；只有当同一目标的联合领先状态持续至少 `improvedMinStableLeadTimeSeconds`，且最佳候选的联合分数相对当前服务星至少高出 `improvedMinJointScoreMargin` 时，才触发切换
 - 当前 improved 还支持一层轻量弱链路保护：默认候选最小 `RSRP` 与服务弱链路 `RSRP` 门槛均为 `-118 dBm`，并保留 `RSRQ` 门槛；在当前服务链路已经明显偏弱时优先回到更保守的强信号切换
 - 当前 improved 还保留一层可选的轻量跨层 PHY 辅助：当最近 PHY `TBler/SINR` 持续恶化时，可临时放宽部分等待门控
@@ -168,7 +157,6 @@
 - 若需检查失败切换、失败原因或未闭合事件，优先查看 `handover_event_trace.csv`
 - 若已显式开启 `enableFlowMonitor`，需检查下行业务端到端时延与丢包率时，优先查看 `e2e_flow_metrics.csv`
 - 负载均衡正式分析优先查看 `satellite_state_trace.csv`，并基于每时刻每星 `attached_ue_count` 计算 Jain fairness
-- 若临时需要解释异常链路，可显式开启 `enablePhyDlTbStats` 后补看 `phy_dl_tb_metrics.csv` 和 `phy_dl_tb_interval_metrics.csv`；这些文件不属于正式论文主表
 
 ### 2. 研究行为验证
 目标：确认当前 baseline 是否具备研究分析价值。
