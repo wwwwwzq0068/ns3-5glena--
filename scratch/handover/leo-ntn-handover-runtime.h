@@ -354,6 +354,75 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
 }
 
 inline void
+ClearStableLeadTracking(UeRuntime& ue)
+{
+    ue.stableLeadSourceCell = 0;
+    ue.stableLeadTargetCell = 0;
+    ue.stableLeadSinceSeconds = -1.0;
+}
+
+inline void
+RegisterHandoverFailure(UeRuntime& ue, HandoverFailureReason reason)
+{
+    switch (reason)
+    {
+    case HandoverFailureReason::NO_PREAMBLE:
+        ue.handoverFailureNoPreambleCount++;
+        break;
+    case HandoverFailureReason::MAX_RACH:
+        ue.handoverFailureMaxRachCount++;
+        break;
+    case HandoverFailureReason::LEAVING_TIMEOUT:
+        ue.handoverFailureLeavingCount++;
+        break;
+    case HandoverFailureReason::JOINING_TIMEOUT:
+        ue.handoverFailureJoiningCount++;
+        break;
+    case HandoverFailureReason::UNKNOWN:
+    case HandoverFailureReason::NONE:
+        ue.handoverFailureUnknownCount++;
+        break;
+    }
+}
+
+inline void
+ApplyDlPhyTbSampleToUe(UeRuntime& ue,
+                       bool corrupt,
+                       double tbler,
+                       double sinr,
+                       double alpha)
+{
+    const double boundedAlpha = std::clamp(alpha, 1e-6, 1.0);
+    const double corruptIndicator = corrupt ? 1.0 : 0.0;
+    if (ue.recentPhySampleCount == 0)
+    {
+        ue.recentPhyCorruptRateEwma = corruptIndicator;
+        ue.recentPhyTblerEwma = tbler;
+    }
+    else
+    {
+        ue.recentPhyCorruptRateEwma =
+            (1.0 - boundedAlpha) * ue.recentPhyCorruptRateEwma + boundedAlpha * corruptIndicator;
+        ue.recentPhyTblerEwma = (1.0 - boundedAlpha) * ue.recentPhyTblerEwma + boundedAlpha * tbler;
+    }
+    ue.recentPhySampleCount++;
+
+    if (sinr > 0.0)
+    {
+        const double sinrDb = 10.0 * std::log10(sinr);
+        if (!std::isfinite(ue.recentPhySinrDbEwma) || ue.recentPhySampleCount <= 1)
+        {
+            ue.recentPhySinrDbEwma = sinrDb;
+        }
+        else
+        {
+            ue.recentPhySinrDbEwma =
+                (1.0 - boundedAlpha) * ue.recentPhySinrDbEwma + boundedAlpha * sinrDb;
+        }
+    }
+}
+
+inline void
 InstallStaticNeighbourRelations(std::vector<SatelliteRuntime>& satellites)
 {
     for (uint32_t servingSatIdx = 0; servingSatIdx < satellites.size(); ++servingSatIdx)

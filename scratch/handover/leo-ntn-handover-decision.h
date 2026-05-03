@@ -77,6 +77,84 @@ struct MeasurementCandidate
     double jointScore = -std::numeric_limits<double>::infinity();
 };
 
+struct MeasurementDrivenHandoverConfig
+{
+    HandoverMode handoverMode = HandoverMode::BASELINE;
+    double improvedSignalWeight = 0.7;
+    double improvedRsrqWeight = 0.3;
+    double improvedLoadWeight = 0.3;
+    double improvedVisibilityWeight = 0.2;
+    double improvedMinLoadScoreDelta = 0.2;
+    double improvedMaxSignalGapDb = 3.0;
+    double improvedMinStableLeadTimeSeconds = 0.12;
+    double improvedMinVisibilitySeconds = 1.0;
+    double improvedVisibilityHorizonSeconds = 8.0;
+    double improvedVisibilityPredictionStepSeconds = 0.5;
+    double improvedMinJointScoreMargin = 0.03;
+    double improvedMinCandidateRsrpDbm = -118.0;
+    double improvedMinCandidateRsrqDb = -17.0;
+    double improvedServingWeakRsrpDbm = -118.0;
+    double improvedServingWeakRsrqDb = -15.0;
+    double improvedMinRsrqAdvantageDb = 0.0;
+    bool improvedEnableCrossLayerPhyAssist = false;
+    double improvedCrossLayerPhyAlpha = 0.02;
+    double improvedCrossLayerTblerThreshold = 0.48;
+    double improvedCrossLayerSinrThresholdDb = -5.0;
+    uint32_t improvedCrossLayerMinSamples = 50;
+    uint16_t measurementReportIntervalMs = 120;
+    uint8_t measurementMaxReportCells = 8;
+};
+
+inline MeasurementDrivenHandoverConfig
+BuildMeasurementDrivenHandoverConfig(const BaselineSimulationConfig& config)
+{
+    MeasurementDrivenHandoverConfig handoverConfig;
+    handoverConfig.measurementReportIntervalMs = config.measurementReportIntervalMs;
+    handoverConfig.measurementMaxReportCells =
+        static_cast<uint8_t>(std::clamp<uint16_t>(config.measurementMaxReportCells, 1, 32));
+    handoverConfig.handoverMode = ParseHandoverMode(config.handoverMode);
+    handoverConfig.improvedSignalWeight = config.improvedSignalWeight;
+    handoverConfig.improvedLoadWeight = config.improvedLoadWeight;
+    handoverConfig.improvedRsrqWeight = config.improvedRsrqWeight;
+    handoverConfig.improvedVisibilityWeight = config.improvedVisibilityWeight;
+    handoverConfig.improvedMinLoadScoreDelta = config.improvedMinLoadScoreDelta;
+    handoverConfig.improvedMaxSignalGapDb = config.improvedMaxSignalGapDb;
+    handoverConfig.improvedMinStableLeadTimeSeconds = config.improvedMinStableLeadTimeSeconds;
+    handoverConfig.improvedMinVisibilitySeconds = config.improvedMinVisibilitySeconds;
+    handoverConfig.improvedVisibilityHorizonSeconds = config.improvedVisibilityHorizonSeconds;
+    handoverConfig.improvedVisibilityPredictionStepSeconds =
+        config.improvedVisibilityPredictionStepSeconds;
+    handoverConfig.improvedMinJointScoreMargin = config.improvedMinJointScoreMargin;
+    handoverConfig.improvedMinCandidateRsrpDbm = config.improvedMinCandidateRsrpDbm;
+    handoverConfig.improvedMinCandidateRsrqDb = config.improvedMinCandidateRsrqDb;
+    handoverConfig.improvedServingWeakRsrpDbm = config.improvedServingWeakRsrpDbm;
+    handoverConfig.improvedServingWeakRsrqDb = config.improvedServingWeakRsrqDb;
+    handoverConfig.improvedMinRsrqAdvantageDb = config.improvedMinRsrqAdvantageDb;
+    handoverConfig.improvedEnableCrossLayerPhyAssist =
+        config.improvedEnableCrossLayerPhyAssist;
+    handoverConfig.improvedCrossLayerPhyAlpha = config.improvedCrossLayerPhyAlpha;
+    handoverConfig.improvedCrossLayerTblerThreshold = config.improvedCrossLayerTblerThreshold;
+    handoverConfig.improvedCrossLayerSinrThresholdDb =
+        config.improvedCrossLayerSinrThresholdDb;
+    handoverConfig.improvedCrossLayerMinSamples = config.improvedCrossLayerMinSamples;
+    return handoverConfig;
+}
+
+inline bool
+IsCrossLayerPhyWeak(const MeasurementDrivenHandoverConfig& config, const UeRuntime& ue)
+{
+    if (!config.improvedEnableCrossLayerPhyAssist ||
+        ue.recentPhySampleCount < config.improvedCrossLayerMinSamples)
+    {
+        return false;
+    }
+
+    const bool tblerWeak = ue.recentPhyTblerEwma >= config.improvedCrossLayerTblerThreshold;
+    const bool sinrWeak = std::isfinite(ue.recentPhySinrDbEwma) &&
+                          ue.recentPhySinrDbEwma <= config.improvedCrossLayerSinrThresholdDb;
+    return tblerWeak || sinrWeak;
+}
+
 struct MeasurementDrivenDecisionContext
 {
     const std::vector<SatelliteRuntime>& satellites;
@@ -108,6 +186,45 @@ struct MeasurementDrivenDecisionContext
                                                 const LeoOrbitCalculator::GroundPoint& ueGroundPoint,
                                                 double nowSeconds) = nullptr;
 };
+
+inline MeasurementDrivenDecisionContext
+BuildMeasurementDrivenDecisionContext(
+    const std::vector<SatelliteRuntime>& satellites,
+    const std::map<uint16_t, uint32_t>& cellToSatellite,
+    const MeasurementDrivenHandoverConfig& handoverConfig,
+    double gmstAtEpochRad,
+    double carrierFrequencyHz,
+    double minElevationRad,
+    double loadCongestionThreshold,
+    bool (*isCandidateAllowed)(uint32_t satIdx, const UeRuntime& ue),
+    bool (*isCrossLayerPhyWeak)(const UeRuntime& ue))
+{
+    MeasurementDrivenDecisionContext context{satellites, cellToSatellite};
+    context.gmstAtEpochRad = gmstAtEpochRad;
+    context.carrierFrequencyHz = carrierFrequencyHz;
+    context.minElevationRad = minElevationRad;
+    context.loadCongestionThreshold = loadCongestionThreshold;
+    context.handoverMode = handoverConfig.handoverMode;
+    context.improvedSignalWeight = handoverConfig.improvedSignalWeight;
+    context.improvedRsrqWeight = handoverConfig.improvedRsrqWeight;
+    context.improvedLoadWeight = handoverConfig.improvedLoadWeight;
+    context.improvedVisibilityWeight = handoverConfig.improvedVisibilityWeight;
+    context.improvedMinLoadScoreDelta = handoverConfig.improvedMinLoadScoreDelta;
+    context.improvedMaxSignalGapDb = handoverConfig.improvedMaxSignalGapDb;
+    context.improvedMinVisibilitySeconds = handoverConfig.improvedMinVisibilitySeconds;
+    context.improvedVisibilityHorizonSeconds = handoverConfig.improvedVisibilityHorizonSeconds;
+    context.improvedVisibilityPredictionStepSeconds =
+        handoverConfig.improvedVisibilityPredictionStepSeconds;
+    context.improvedMinJointScoreMargin = handoverConfig.improvedMinJointScoreMargin;
+    context.improvedMinCandidateRsrpDbm = handoverConfig.improvedMinCandidateRsrpDbm;
+    context.improvedMinCandidateRsrqDb = handoverConfig.improvedMinCandidateRsrqDb;
+    context.improvedServingWeakRsrpDbm = handoverConfig.improvedServingWeakRsrpDbm;
+    context.improvedServingWeakRsrqDb = handoverConfig.improvedServingWeakRsrqDb;
+    context.improvedMinRsrqAdvantageDb = handoverConfig.improvedMinRsrqAdvantageDb;
+    context.isCandidateAllowed = isCandidateAllowed;
+    context.isCrossLayerPhyWeak = isCrossLayerPhyWeak;
+    return context;
+}
 
 inline std::optional<uint32_t>
 ResolveUeIndexFromServingCellAndRnti(const std::vector<UeRuntime>& ues,

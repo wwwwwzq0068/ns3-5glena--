@@ -258,6 +258,37 @@ FlushHandoverDlThroughputTraceRows(double nowSeconds,
     }
 }
 
+inline void
+WriteHandoverEventTraceRow(std::ofstream& handoverEventTrace,
+                           double nowSeconds,
+                           uint32_t ueIdx,
+                           uint32_t handoverId,
+                           const std::string& eventName,
+                           uint16_t sourceCellId,
+                           uint16_t targetCellId,
+                           int32_t sourceSatIdx,
+                           int32_t targetSatIdx,
+                           double delayMs,
+                           bool pingPongDetected,
+                           HandoverFailureReason failureReason = HandoverFailureReason::NONE)
+{
+    if (!handoverEventTrace.is_open())
+    {
+        return;
+    }
+
+    handoverEventTrace << std::fixed << std::setprecision(3) << nowSeconds << "," << ueIdx << ","
+                       << handoverId << "," << eventName << "," << sourceCellId << ","
+                       << targetCellId << "," << sourceSatIdx << "," << targetSatIdx << ",";
+    if (std::isfinite(delayMs))
+    {
+        handoverEventTrace << std::fixed << std::setprecision(3) << delayMs;
+    }
+    handoverEventTrace << "," << (pingPongDetected ? 1 : 0) << ","
+                       << ToString(failureReason) << "\n";
+    handoverEventTrace.flush();
+}
+
 } // namespace ns3
 
 #endif // LEO_NTN_HANDOVER_TRACE_H
