@@ -12,6 +12,7 @@
 #include "handover/beam-link-budget.h"
 #include "handover/leo-ntn-handover-config.h"
 #include "handover/leo-ntn-handover-decision.h"
+#include "handover/leo-ntn-handover-grid-anchor.h"
 #include "handover/leo-ntn-handover-output.h"
 #include "handover/leo-ntn-handover-radio.h"
 #include "handover/leo-orbit-calculator.h"
@@ -23,7 +24,6 @@
 #include "handover/b00-equivalent-antenna-model.h"
 #include "handover/earth-fixed-beam-target.h"
 #include "handover/earth-fixed-gnb-beamforming.h"
-#include "handover/grid-anchor-landing-rule.h"
 #include "handover/leo-ntn-handover-utils.h"
 #include "handover/wgs84-hex-grid.h"
 #include <algorithm>
@@ -34,7 +34,6 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -117,12 +116,7 @@ static std::vector<Wgs84HexGridCell> g_hexGridCells;
 static std::unordered_map<uint32_t, size_t> g_hexGridCellIndexById;
 // 预计算的一圈邻区目录，避免 anchor 逻辑在每次更新时重扫整张网格。
 static std::unordered_map<uint32_t, std::vector<uint32_t>> g_firstRingNeighborGridIdsById;
-// 当前 UE 布局实际占用的 hex 小区。
-static std::set<uint32_t> g_demandGridIds;
-// 每个需求 hex 小区内的真实驻留 UE 数量。
-static std::map<uint32_t, uint32_t> g_demandGridUeCounts;
-// 运行时 anchor 选择使用的 demand 优先级权重。
-static std::map<uint32_t, uint32_t> g_demandGridPriorityWeights;
+static DemandGridSnapshot g_demandGridSnapshot;
 
 // 以下开关控制控制台输出详略程度。
 static bool g_compactReport = true;
@@ -157,99 +151,6 @@ static std::ofstream g_satelliteStateTrace;
 static std::ofstream g_handoverThroughputTrace;
 // 精确记录 HO-START / HO-END-OK 时刻的事件导出文件。
 static std::ofstream g_handoverEventTrace;
-
-static std::string
-FormatUintList(const std::vector<uint32_t>& values)
-{
-    std::ostringstream oss;
-    oss << "[";
-    for (size_t i = 0; i < values.size(); ++i)
-    {
-        if (i > 0)
-        {
-            oss << ",";
-        }
-        oss << values[i];
-    }
-    oss << "]";
-    return oss.str();
-}
-
-static double
-DistanceMeters(const Vector& a, const Vector& b)
-{
-    const double dx = a.x - b.x;
-    const double dy = a.y - b.y;
-    const double dz = a.z - b.z;
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-static std::optional<uint32_t> FindNearestGridCellId(const Vector& pointEcef);
-
-static const Wgs84HexGridCell*
-LookupHexGridCellById(uint32_t gridId)
-{
-    const auto it = g_hexGridCellIndexById.find(gridId);
-    if (it == g_hexGridCellIndexById.end() || it->second >= g_hexGridCells.size())
-    {
-        return nullptr;
-    }
-    return &g_hexGridCells[it->second];
-}
-
-static void
-RebuildHexGridRuntimeCaches()
-{
-    g_hexGridCellIndexById.clear();
-    g_firstRingNeighborGridIdsById.clear();
-
-    if (g_hexGridCells.empty())
-    {
-        return;
-    }
-
-    g_hexGridCellIndexById.reserve(g_hexGridCells.size());
-    for (size_t i = 0; i < g_hexGridCells.size(); ++i)
-    {
-        g_hexGridCellIndexById[g_hexGridCells[i].id] = i;
-    }
-
-    g_firstRingNeighborGridIdsById.reserve(g_hexGridCells.size());
-    for (const auto& centerCell : g_hexGridCells)
-    {
-        auto& neighbors = g_firstRingNeighborGridIdsById[centerCell.id];
-        for (const auto& candidateCell : g_hexGridCells)
-        {
-            if (candidateCell.id == centerCell.id)
-            {
-                continue;
-            }
-
-            const double eastDelta = candidateCell.eastMeters - centerCell.eastMeters;
-            const double northDelta = candidateCell.northMeters - centerCell.northMeters;
-            const double neighborDistanceMeters = std::sqrt(3.0) * g_anchorGridHexRadiusKm * 1000.0;
-            const double guardDistanceMeters = neighborDistanceMeters * 1.01;
-            if (eastDelta * eastDelta + northDelta * northDelta <=
-                guardDistanceMeters * guardDistanceMeters)
-            {
-                neighbors.push_back(candidateCell.id);
-            }
-        }
-    }
-}
-
-static void
-InitializeUeHomeGridIds()
-{
-    for (auto& ue : g_ues)
-    {
-        ue.homeGridId = 0;
-        if (const auto gridId = FindNearestGridCellId(ue.groundPoint.ecef))
-        {
-            ue.homeGridId = gridId.value();
-        }
-    }
-}
 
 static Vector
 ResolveSatelliteBeamTargetEcef(uint32_t satIdx, const Vector& satEcef)
@@ -288,473 +189,9 @@ ResetRuntimeState(uint32_t gNbNum)
     }
 }
 
-static const std::vector<uint32_t>&
-FindFirstRingNeighborGridIds(uint32_t centerGridId)
-{
-    static const std::vector<uint32_t> kEmptyNeighborGridIds;
-    const auto it = g_firstRingNeighborGridIdsById.find(centerGridId);
-    return (it != g_firstRingNeighborGridIdsById.end()) ? it->second : kEmptyNeighborGridIds;
-}
-
-/**
- * 收集其它卫星波束已经占用的锚点及其一圈邻区。
- */
-static std::set<uint32_t>
-BuildBeamAnchorExclusionSet(uint32_t selfSatIndex)
-{
-    std::set<uint32_t> blockedGridIds;
-    if (g_hexGridCells.empty())
-    {
-        return blockedGridIds;
-    }
-
-    for (uint32_t satIdx = 0; satIdx < g_satellites.size(); ++satIdx)
-    {
-        if (satIdx == selfSatIndex || g_satellites[satIdx].currentAnchorGridId == 0)
-        {
-            continue;
-        }
-
-        const auto* occupiedCell =
-            LookupHexGridCellById(g_satellites[satIdx].currentAnchorGridId);
-        if (occupiedCell == nullptr)
-        {
-            continue;
-        }
-
-        blockedGridIds.insert(occupiedCell->id);
-    }
-    return blockedGridIds;
-}
-
-static uint32_t
-GetGridAnchorCandidateCount()
-{
-    return std::max<uint32_t>({1, g_gridNearestK, g_beamExclusionCandidateK});
-}
-
 static int32_t ResolveSatelliteIndexFromCellId(uint16_t cellId);
 static bool IsCrossLayerPhyWeak(const UeRuntime& ue);
 static bool IsUeInsideAssignedBeam(uint32_t satIdx, const UeRuntime& ue);
-
-static std::optional<uint32_t>
-FindNearestGridCellId(const Vector& pointEcef)
-{
-    if (g_hexGridCells.empty())
-    {
-        return std::nullopt;
-    }
-
-    const auto nearestIndices = FindNearestHexCellIndices(g_hexGridCells, pointEcef, 1);
-    if (nearestIndices.empty())
-    {
-        return std::nullopt;
-    }
-    return g_hexGridCells[nearestIndices.front()].id;
-}
-
-static void
-ClearDemandGridSnapshot()
-{
-    g_demandGridIds.clear();
-    g_demandGridUeCounts.clear();
-    g_demandGridPriorityWeights.clear();
-}
-
-static void
-AccumulateDemandGridSnapshot(uint32_t gridId, uint32_t residentUeIncrement, uint32_t priorityWeightIncrement)
-{
-    if (residentUeIncrement == 0 && priorityWeightIncrement == 0)
-    {
-        return;
-    }
-    g_demandGridIds.insert(gridId);
-    g_demandGridUeCounts[gridId] += residentUeIncrement;
-    g_demandGridPriorityWeights[gridId] += priorityWeightIncrement;
-}
-
-static void
-RefreshDemandGridSnapshotFromPlacements(const std::vector<UePlacement>& uePlacements)
-{
-    ClearDemandGridSnapshot();
-    if (!g_useWgs84HexGrid || g_hexGridCells.empty())
-    {
-        return;
-    }
-
-    for (const auto& placement : uePlacements)
-    {
-        if (const auto gridId = FindNearestGridCellId(placement.groundPoint.ecef))
-        {
-            AccumulateDemandGridSnapshot(gridId.value(), 1, 1);
-        }
-    }
-}
-
-static void
-RefreshDemandGridSnapshotFromRuntime()
-{
-    ClearDemandGridSnapshot();
-    if (!g_useWgs84HexGrid || g_hexGridCells.empty())
-    {
-        return;
-    }
-
-    for (const auto& ue : g_ues)
-    {
-        if (ue.homeGridId == 0)
-        {
-            continue;
-        }
-
-        uint32_t priorityWeight = 1;
-        uint16_t servingCellId = 0;
-        if (ue.dev && ue.dev->GetRrc())
-        {
-            servingCellId = ue.dev->GetRrc()->GetCellId();
-        }
-        const int32_t servingSatIdx = ResolveSatelliteIndexFromCellId(servingCellId);
-        if (g_demandSnapshotMode == DemandSnapshotMode::RUNTIME_UNDERSERVED_UE)
-        {
-            if (servingSatIdx < 0 || static_cast<uint32_t>(servingSatIdx) >= g_satellites.size())
-            {
-                priorityWeight += 2;
-            }
-            else
-            {
-                const auto& servingSat = g_satellites[static_cast<uint32_t>(servingSatIdx)];
-                if (servingSat.currentAnchorGridId != 0 &&
-                    servingSat.currentAnchorGridId != ue.homeGridId)
-                {
-                    priorityWeight += 1;
-                }
-                if (!IsUeInsideAssignedBeam(static_cast<uint32_t>(servingSatIdx), ue))
-                {
-                    priorityWeight += 1;
-                }
-                if (!servingSat.admissionAllowed)
-                {
-                    priorityWeight += 1;
-                }
-            }
-            if (IsCrossLayerPhyWeak(ue))
-            {
-                priorityWeight += 1;
-            }
-        }
-
-        AccumulateDemandGridSnapshot(ue.homeGridId, 1, priorityWeight);
-    }
-}
-
-static uint32_t
-GetDemandGridPriorityWeight(uint32_t gridId)
-{
-    const auto it = g_demandGridPriorityWeights.find(gridId);
-    return (it != g_demandGridPriorityWeights.end()) ? it->second : 0;
-}
-
-static uint32_t
-GetDemandGridUeCount(uint32_t gridId)
-{
-    const auto it = g_demandGridUeCounts.find(gridId);
-    return (it != g_demandGridUeCounts.end()) ? it->second : 0;
-}
-
-static GridAnchorSelection
-ComputeDemandAwareGridAnchorSelection(const Vector& satEcef,
-                                      uint32_t candidateCount,
-                                      const std::set<uint32_t>& blockedGridIds)
-{
-    auto fallback = ComputeGridAnchorSelection(g_hexGridCells, satEcef, candidateCount, blockedGridIds);
-    if (!g_preferDemandAnchorCells || g_demandGridIds.empty())
-    {
-        return fallback;
-    }
-
-    const Vector nadirPoint = ProjectNadirToWgs84(satEcef);
-    const auto computeDemandCandidateScore =
-        [&](const Wgs84HexGridCell& cell) -> std::optional<double> {
-        const auto anchorBudget =
-            CalculateEarthFixedBeamBudget(satEcef, cell.ecef, cell.ecef, g_beamModelConfig);
-        if (!anchorBudget.valid || !anchorBudget.beamLocked)
-        {
-            return std::nullopt;
-        }
-
-        const double distanceMeters = DistanceMeters(nadirPoint, cell.ecef);
-        return distanceMeters + anchorBudget.scanLossDb * 1000.0;
-    };
-
-    const auto makeLandingCandidate = [&](uint32_t gridId) -> GridAnchorLandingCandidate {
-        GridAnchorLandingCandidate candidate;
-        candidate.gridId = gridId;
-
-        const auto* cell = LookupHexGridCellById(gridId);
-        if (cell == nullptr)
-        {
-            return candidate;
-        }
-
-        candidate.ueCount = GetDemandGridUeCount(gridId);
-        candidate.priorityWeight = GetDemandGridPriorityWeight(gridId);
-        const auto score = computeDemandCandidateScore(*cell);
-        candidate.legal = blockedGridIds.find(gridId) == blockedGridIds.end() && score.has_value();
-        if (score.has_value())
-        {
-            candidate.score = score.value();
-        }
-        return candidate;
-    };
-
-    if (!fallback.nearestGridIds.empty())
-    {
-        const uint32_t primaryGridId = fallback.nearestGridIds.front();
-        std::vector<GridAnchorLandingCandidate> firstRingCandidates;
-        for (const auto neighborGridId : FindFirstRingNeighborGridIds(primaryGridId))
-        {
-            firstRingCandidates.push_back(makeLandingCandidate(neighborGridId));
-        }
-
-        const auto landingDecision =
-            SelectPreferredGridAnchorLanding(makeLandingCandidate(primaryGridId), firstRingCandidates);
-        if (landingDecision.found)
-        {
-            if (const auto* chosenCell = LookupHexGridCellById(landingDecision.anchorGridId))
-            {
-                fallback.found = true;
-                fallback.anchorGridId = chosenCell->id;
-                fallback.anchorEcef = chosenCell->ecef;
-                return fallback;
-            }
-        }
-    }
-
-    if (g_anchorSelectionMode == AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR)
-    {
-        uint32_t bestPriorityWeight = 0;
-        uint32_t bestUeCount = 0;
-        double bestScore = std::numeric_limits<double>::infinity();
-        const Wgs84HexGridCell* bestCell = nullptr;
-
-        for (const auto gridId : fallback.nearestGridIds)
-        {
-            const auto* cell = LookupHexGridCellById(gridId);
-            if (cell == nullptr || g_demandGridIds.find(cell->id) == g_demandGridIds.end() ||
-                blockedGridIds.find(cell->id) != blockedGridIds.end())
-            {
-                continue;
-            }
-
-            const uint32_t priorityWeight = GetDemandGridPriorityWeight(cell->id);
-            const uint32_t ueCount = GetDemandGridUeCount(cell->id);
-            if (ueCount == 0)
-            {
-                continue;
-            }
-
-            const auto score = computeDemandCandidateScore(*cell);
-            if (!score.has_value())
-            {
-                continue;
-            }
-
-            if (bestCell == nullptr || priorityWeight > bestPriorityWeight ||
-                (priorityWeight == bestPriorityWeight && ueCount > bestUeCount) ||
-                (priorityWeight == bestPriorityWeight && ueCount == bestUeCount &&
-                 score.value() < bestScore))
-            {
-                bestCell = cell;
-                bestPriorityWeight = priorityWeight;
-                bestUeCount = ueCount;
-                bestScore = score.value();
-            }
-        }
-
-        if (bestCell != nullptr)
-        {
-            fallback.found = true;
-            fallback.anchorGridId = bestCell->id;
-            fallback.anchorEcef = bestCell->ecef;
-            return fallback;
-        }
-    }
-
-    double bestScore = std::numeric_limits<double>::infinity();
-    const Wgs84HexGridCell* bestCell = nullptr;
-
-    for (const auto& cell : g_hexGridCells)
-    {
-        if (g_demandGridIds.find(cell.id) == g_demandGridIds.end() ||
-            blockedGridIds.find(cell.id) != blockedGridIds.end())
-        {
-            continue;
-        }
-
-        const auto score = computeDemandCandidateScore(cell);
-        if (!score.has_value())
-        {
-            continue;
-        }
-
-        if (score.value() < bestScore)
-        {
-            bestScore = score.value();
-            bestCell = &cell;
-        }
-    }
-
-    if (bestCell == nullptr)
-    {
-        return fallback;
-    }
-
-    fallback.found = true;
-    fallback.anchorGridId = bestCell->id;
-    fallback.anchorEcef = bestCell->ecef;
-    return fallback;
-}
-
-/**
- * 根据卫星当前位置更新其六边形网格锚点。
- *
- * 这个函数只在启用 WGS84 六边形网格时生效。
- */
-static void
-UpdateSatelliteAnchorFromGrid(uint32_t satIndex, const Vector& satEcef, double nowSeconds, bool forceLog)
-{
-    if (!g_useWgs84HexGrid || g_hexGridCells.empty() || satIndex >= g_satellites.size())
-    {
-        return;
-    }
-
-    auto& sat = g_satellites[satIndex];
-    const auto blockedGridIds = BuildBeamAnchorExclusionSet(satIndex);
-    const auto anchor = ComputeDemandAwareGridAnchorSelection(satEcef,
-                                                              GetGridAnchorCandidateCount(),
-                                                              blockedGridIds);
-    if (!anchor.found)
-    {
-        return;
-    }
-
-    sat.nearestGridIds = anchor.nearestGridIds;
-    const auto logAnchor = [&](uint32_t anchorGridId) {
-        std::cout << "[GRID-ANCHOR] t=" << std::fixed << std::setprecision(3) << nowSeconds << "s"
-                  << " sat" << satIndex
-                  << " cell=" << sat.dev->GetCellId()
-                  << " anchorGrid=" << anchorGridId
-                  << " nearestK=" << FormatUintList(sat.nearestGridIds) << std::endl;
-    };
-    const auto clearPendingAnchor = [&]() {
-        sat.pendingAnchorGridId = 0;
-        sat.pendingAnchorEcef = Vector(0.0, 0.0, 0.0);
-        sat.pendingAnchorLeadStartTimeSeconds = -1.0;
-    };
-    const auto commitAnchor = [&](uint32_t anchorGridId, const Vector& anchorEcef) {
-        sat.currentAnchorGridId = anchorGridId;
-        sat.cellAnchorEcef = anchorEcef;
-        clearPendingAnchor();
-    };
-
-    if (sat.currentAnchorGridId == 0)
-    {
-        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
-        if (forceLog || g_printGridAnchorEvents)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    if (anchor.anchorGridId == sat.currentAnchorGridId)
-    {
-        sat.cellAnchorEcef = anchor.anchorEcef;
-        clearPendingAnchor();
-        if (forceLog)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    const bool currentAnchorBlocked =
-        (blockedGridIds.find(sat.currentAnchorGridId) != blockedGridIds.end());
-    const Vector nadirPoint = ProjectNadirToWgs84(satEcef);
-    const double candidateDistanceMeters = DistanceMeters(nadirPoint, anchor.anchorEcef);
-    double currentDistanceMeters = std::numeric_limits<double>::infinity();
-    if (const auto* currentCell = LookupHexGridCellById(sat.currentAnchorGridId))
-    {
-        currentDistanceMeters = DistanceMeters(nadirPoint, currentCell->ecef);
-    }
-    else
-    {
-        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
-        if (forceLog || g_printGridAnchorEvents)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    if (currentAnchorBlocked)
-    {
-        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
-        if (forceLog || g_printGridAnchorEvents)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    const bool candidateHasGuardAdvantage =
-        (currentDistanceMeters - candidateDistanceMeters >= g_anchorGridSwitchGuardMeters - 1e-9);
-    if (!candidateHasGuardAdvantage)
-    {
-        clearPendingAnchor();
-        if (forceLog)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    if (g_anchorGridHysteresisSeconds <= 0.0)
-    {
-        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
-        if (forceLog || g_printGridAnchorEvents)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    if (sat.pendingAnchorGridId != anchor.anchorGridId)
-    {
-        sat.pendingAnchorGridId = anchor.anchorGridId;
-        sat.pendingAnchorEcef = anchor.anchorEcef;
-        sat.pendingAnchorLeadStartTimeSeconds = nowSeconds;
-        if (forceLog)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-        return;
-    }
-
-    sat.pendingAnchorEcef = anchor.anchorEcef;
-    if (nowSeconds - sat.pendingAnchorLeadStartTimeSeconds + 1e-9 >= g_anchorGridHysteresisSeconds)
-    {
-        commitAnchor(anchor.anchorGridId, anchor.anchorEcef);
-        if (forceLog || g_printGridAnchorEvents)
-        {
-            logAnchor(sat.currentAnchorGridId);
-        }
-    }
-    else if (forceLog)
-    {
-        logAnchor(sat.currentAnchorGridId);
-    }
-}
 
 static void
 ReportStateTransition(std::string,
@@ -1412,12 +849,45 @@ UpdateConstellation(Time interval, Time stopTime)
 
     if (g_demandSnapshotMode == DemandSnapshotMode::RUNTIME_UNDERSERVED_UE)
     {
-        RefreshDemandGridSnapshotFromRuntime();
+        RefreshDemandGridSnapshotFromRuntime(
+            g_demandGridSnapshot,
+            g_useWgs84HexGrid,
+            g_hexGridCells,
+            g_ues,
+            g_satellites,
+            g_demandSnapshotMode,
+            [](uint16_t cellId) {
+                return ResolveSatelliteIndexFromCellId(cellId);
+            },
+            [](uint32_t satIdx, const UeRuntime& ue) {
+                return IsUeInsideAssignedBeam(satIdx, ue);
+            },
+            [](const UeRuntime& ue) {
+                return IsCrossLayerPhyWeak(ue);
+            });
     }
 
     for (uint32_t i = 0; i < g_satellites.size(); ++i)
     {
-        UpdateSatelliteAnchorFromGrid(i, referenceStates[i].ecef, nowSeconds, false);
+        UpdateSatelliteAnchorFromGrid(g_satellites,
+                                      g_hexGridCells,
+                                      g_hexGridCellIndexById,
+                                      g_firstRingNeighborGridIdsById,
+                                      g_demandGridSnapshot,
+                                      g_beamModelConfig,
+                                      g_useWgs84HexGrid,
+                                      g_preferDemandAnchorCells,
+                                      g_anchorSelectionMode,
+                                      g_anchorGridHexRadiusKm,
+                                      g_gridNearestK,
+                                      g_beamExclusionCandidateK,
+                                      g_anchorGridSwitchGuardMeters,
+                                      g_anchorGridHysteresisSeconds,
+                                      g_printGridAnchorEvents,
+                                      i,
+                                      referenceStates[i].ecef,
+                                      nowSeconds,
+                                      false);
     }
     FlushSatelliteAnchorAndGroundTrackTraceRows(
         nowSeconds,
@@ -1603,7 +1073,10 @@ main(int argc, char* argv[])
                                            g_gridHeightKm * 1000.0,
                                            g_anchorGridHexRadiusKm * 1000.0);
         NS_ABORT_MSG_IF(g_hexGridCells.empty(), "hex-grid generation produced 0 cells");
-        RebuildHexGridRuntimeCaches();
+        RebuildHexGridRuntimeCaches(g_hexGridCells,
+                                    g_anchorGridHexRadiusKm,
+                                    g_hexGridCellIndexById,
+                                    g_firstRingNeighborGridIdsById);
 
         if (cfg.startupVerbose)
         {
@@ -1615,7 +1088,8 @@ main(int argc, char* argv[])
                       << " cells=" << g_hexGridCells.size()
                       << " K=" << g_gridNearestK
                       << " beamExclusion=overlap-only"
-                      << " exclusionK=" << GetGridAnchorCandidateCount()
+                      << " exclusionK=" << GetGridAnchorCandidateCount(g_gridNearestK,
+                                                                        g_beamExclusionCandidateK)
                       << " realLinkGate=beam-only"
                       << " demandAnchor=" << (g_preferDemandAnchorCells ? "on" : "off")
                       << " anchorMode=" << ToString(g_anchorSelectionMode)
@@ -1637,7 +1111,10 @@ main(int argc, char* argv[])
     else
     {
         g_hexGridCells.clear();
-        RebuildHexGridRuntimeCaches();
+        RebuildHexGridRuntimeCaches(g_hexGridCells,
+                                    g_anchorGridHexRadiusKm,
+                                    g_hexGridCellIndexById,
+                                    g_firstRingNeighborGridIdsById);
     }
 
     if (cfg.startupVerbose)
@@ -1875,10 +1352,14 @@ main(int argc, char* argv[])
     DumpUeLayoutCsv(cfg.ueLayoutPath, uePlacements);
     if (g_useWgs84HexGrid && !g_hexGridCells.empty())
     {
-        RefreshDemandGridSnapshotFromPlacements(uePlacements);
+        RefreshDemandGridSnapshotFromPlacements(g_demandGridSnapshot,
+                                                g_useWgs84HexGrid,
+                                                g_hexGridCells,
+                                                uePlacements);
         if (cfg.startupVerbose)
         {
-            std::vector<uint32_t> demandGridIds(g_demandGridIds.begin(), g_demandGridIds.end());
+            std::vector<uint32_t> demandGridIds(g_demandGridSnapshot.gridIds.begin(),
+                                                g_demandGridSnapshot.gridIds.end());
             std::cout << "[UE-Layout] demandGridIds=" << FormatUintList(demandGridIds)
                       << " demandAnchor=" << (g_preferDemandAnchorCells ? "on" : "off")
                       << " anchorMode=" << ToString(g_anchorSelectionMode)
@@ -1985,10 +1466,22 @@ main(int argc, char* argv[])
 
             if (g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
-                const auto blockedGridIds = BuildBeamAnchorExclusionSet(std::numeric_limits<uint32_t>::max());
-                const auto anchor = ComputeDemandAwareGridAnchorSelection(initState.ecef,
-                                                                          GetGridAnchorCandidateCount(),
-                                                                          blockedGridIds);
+                const auto blockedGridIds =
+                    BuildBeamAnchorExclusionSet(g_satellites,
+                                                g_hexGridCells,
+                                                g_hexGridCellIndexById,
+                                                std::numeric_limits<uint32_t>::max());
+                const auto anchor = ComputeDemandAwareGridAnchorSelection(
+                    g_hexGridCells,
+                    g_hexGridCellIndexById,
+                    g_firstRingNeighborGridIdsById,
+                    g_demandGridSnapshot,
+                    g_beamModelConfig,
+                    g_preferDemandAnchorCells,
+                    g_anchorSelectionMode,
+                    initState.ecef,
+                    GetGridAnchorCandidateCount(g_gridNearestK, g_beamExclusionCandidateK),
+                    blockedGridIds);
                 if (anchor.found)
                 {
                     sat.currentAnchorGridId = anchor.anchorGridId;
@@ -2001,7 +1494,25 @@ main(int argc, char* argv[])
 
             if (cfg.startupVerbose && g_useWgs84HexGrid && !g_hexGridCells.empty())
             {
-                UpdateSatelliteAnchorFromGrid(globalSatIdx, initState.ecef, 0.0, true);
+                UpdateSatelliteAnchorFromGrid(g_satellites,
+                                              g_hexGridCells,
+                                              g_hexGridCellIndexById,
+                                              g_firstRingNeighborGridIdsById,
+                                              g_demandGridSnapshot,
+                                              g_beamModelConfig,
+                                              g_useWgs84HexGrid,
+                                              g_preferDemandAnchorCells,
+                                              g_anchorSelectionMode,
+                                              g_anchorGridHexRadiusKm,
+                                              g_gridNearestK,
+                                              g_beamExclusionCandidateK,
+                                              g_anchorGridSwitchGuardMeters,
+                                              g_anchorGridHysteresisSeconds,
+                                              g_printGridAnchorEvents,
+                                              globalSatIdx,
+                                              initState.ecef,
+                                              0.0,
+                                              true);
             }
 
             if (cfg.startupVerbose)
@@ -2073,7 +1584,7 @@ main(int argc, char* argv[])
                                      routingHelper,
                                      [](const Ptr<NrUeNetDevice>&) {});
 
-    InitializeUeHomeGridIds();
+    InitializeUeHomeGridIds(g_ues, g_hexGridCells);
 
     FlowMonitorHelper flowMonitorHelper;
     Ptr<FlowMonitor> flowMonitor;
