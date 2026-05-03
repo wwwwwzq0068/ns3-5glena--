@@ -175,6 +175,53 @@ struct BaselineSimulationConfig
     uint32_t srsSymbols = 0;
 };
 
+enum class AnchorSelectionMode
+{
+    DEMAND_NEAREST,
+    DEMAND_MAX_UE_NEAR_NADIR,
+};
+
+inline AnchorSelectionMode
+ParseAnchorSelectionMode(const std::string& anchorSelectionMode)
+{
+    if (anchorSelectionMode == "demand-max-ue-near-nadir")
+    {
+        return AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR;
+    }
+    return AnchorSelectionMode::DEMAND_NEAREST;
+}
+
+inline const char*
+ToString(AnchorSelectionMode anchorSelectionMode)
+{
+    return anchorSelectionMode == AnchorSelectionMode::DEMAND_MAX_UE_NEAR_NADIR
+               ? "demand-max-ue-near-nadir"
+               : "demand-nearest";
+}
+
+enum class DemandSnapshotMode
+{
+    STATIC_UE_LAYOUT,
+    RUNTIME_UNDERSERVED_UE,
+};
+
+inline DemandSnapshotMode
+ParseDemandSnapshotMode(const std::string& demandSnapshotMode)
+{
+    if (demandSnapshotMode == "static-layout")
+    {
+        return DemandSnapshotMode::STATIC_UE_LAYOUT;
+    }
+    return DemandSnapshotMode::RUNTIME_UNDERSERVED_UE;
+}
+
+inline const char*
+ToString(DemandSnapshotMode demandSnapshotMode)
+{
+    return demandSnapshotMode == DemandSnapshotMode::STATIC_UE_LAYOUT ? "static-layout"
+                                                                     : "runtime-underserved-ue";
+}
+
 inline BeamModelConfig
 DeriveBeamModelConfig(const BaselineSimulationConfig& config)
 {

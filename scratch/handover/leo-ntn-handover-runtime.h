@@ -353,6 +353,27 @@ ResetUeRuntime(UeRuntime& ue, uint32_t gNbNum)
     ue.lastHoEndOkTimeSeconds = -1.0;
 }
 
+inline void
+InstallStaticNeighbourRelations(std::vector<SatelliteRuntime>& satellites)
+{
+    for (uint32_t servingSatIdx = 0; servingSatIdx < satellites.size(); ++servingSatIdx)
+    {
+        auto& servingSat = satellites[servingSatIdx];
+        servingSat.activeNeighbours.clear();
+        for (uint32_t neighbourSatIdx = 0; neighbourSatIdx < satellites.size(); ++neighbourSatIdx)
+        {
+            if (neighbourSatIdx == servingSatIdx)
+            {
+                continue;
+            }
+
+            const uint16_t neighbourCellId = satellites[neighbourSatIdx].dev->GetCellId();
+            servingSat.activeNeighbours.insert(neighbourCellId);
+            servingSat.rrc->AddX2Neighbour(neighbourCellId);
+        }
+    }
+}
+
 /**
  * 根据 IMSI 反查 UE 序号。
  *
