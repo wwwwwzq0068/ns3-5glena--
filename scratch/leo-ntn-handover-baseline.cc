@@ -1,4 +1,3 @@
-#include "ns3/antenna-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
 #include "ns3/flow-monitor-module.h"
@@ -21,7 +20,6 @@
 #include "handover/leo-ntn-handover-scenario.h"
 #include "handover/leo-ntn-handover-trace.h"
 #include "handover/leo-ntn-handover-update.h"
-#include "handover/b00-equivalent-antenna-model.h"
 #include "handover/earth-fixed-beam-target.h"
 #include "handover/earth-fixed-gnb-beamforming.h"
 #include "handover/leo-ntn-handover-utils.h"
@@ -62,63 +60,42 @@ NS_LOG_COMPONENT_DEFINE("LeoDynamicHandoverDemo");
 // 全局状态与配置镜像
 // ============================================================================
 
-// 当前仿真中的卫星运行时对象。
+// 核心运行时索引。
 static std::vector<SatelliteRuntime> g_satellites;
-// 当前仿真中的 UE 运行时对象。
 static std::vector<UeRuntime> g_ues;
-// 小区 ID 到卫星索引的映射，用于从 RRC 服务小区反查服务卫星。
 static std::map<uint16_t, uint32_t> g_cellToSatellite;
-// IMSI 到 UE 序号的映射，仅用于日志和统计。
 static std::map<uint64_t, uint32_t> g_imsiToUe;
-
-// 卫星全局索引到 gNB 设备的显式映射（用于 carrier reuse 模式）。
+// 卫星全局索引到 gNB 设备的显式映射。
 static std::vector<Ptr<NrGnbNetDevice>> g_satelliteGnbDevices;
 
-// 参考 UE 地面点，用于轨道自动对齐和默认几何计算。
+// 几何、波束与网格配置镜像。
 static LeoOrbitCalculator::GroundPoint g_ueGroundPoint;
-// 默认小区锚点地面位置；未启用六边形网格时，波束会指向该位置。
 static LeoOrbitCalculator::GroundPoint g_cellGroundPoint;
-// 仿真纪元的格林威治恒星时。
 static double g_gmstAtEpochRad = 0.0;
-// 最小可见仰角门限。
 static double g_minElevationRad = LeoOrbitCalculator::DegToRad(10.0);
-// 当前载波频率，供轨道几何和链路预算共用。
 static double g_carrierFrequencyHz = 2e9;
-// 简化波束与链路预算模型配置。
 static BeamModelConfig g_beamModelConfig;
-// 是否启用 WGS84 六边形网格作为地面锚点。
 static bool g_useWgs84HexGrid = true;
-// 是否将六边形网格中心锁定到 UE 所在区域。
-static bool g_lockGridCenterToUe = true;
 static double g_gridCenterLatitudeDeg = 45.6;
 static double g_gridCenterLongitudeDeg = 84.9;
 static double g_gridWidthKm = 400.0;
 static double g_gridHeightKm = 400.0;
 static double g_anchorGridHexRadiusKm = 20.0;
-// 每颗卫星用于锚点选择的最近网格候选数。
 static uint32_t g_gridNearestK = 3;
-// 启用波束排他时，用于搜索可用锚点的最近候选数。
 static uint32_t g_beamExclusionCandidateK = 32;
-// 是否优先把卫星锚点分配到实际存在 UE 的 hex 小区。
 static bool g_preferDemandAnchorCells = true;
 static EarthFixedBeamTargetMode g_earthFixedBeamTargetMode =
     EarthFixedBeamTargetMode::NADIR_CONTINUOUS;
-// 新锚点至少需要领先多少距离，才会进入切换门控。
 static double g_anchorGridSwitchGuardMeters = 0.0;
-// 新锚点需要持续领先多久，才允许真正切换。
 static double g_anchorGridHysteresisSeconds = 0.0;
-static std::string g_outputDir = "scratch/results";
 static bool g_printGridCatalog = true;
-static std::string g_gridCatalogPath = JoinOutputPath(g_outputDir, "hex_grid_cells.csv");
-// 预生成的六边形网格目录。
+static std::string g_gridCatalogPath = JoinOutputPath("scratch/results", "hex_grid_cells.csv");
 static std::vector<Wgs84HexGridCell> g_hexGridCells;
-// hex 小区编号到目录索引的只读查表，避免热路径里重复线性扫描。
 static std::unordered_map<uint32_t, size_t> g_hexGridCellIndexById;
-// 预计算的一圈邻区目录，避免 anchor 逻辑在每次更新时重扫整张网格。
 static std::unordered_map<uint32_t, std::vector<uint32_t>> g_firstRingNeighborGridIdsById;
 static DemandGridSnapshot g_demandGridSnapshot;
 
-// 以下开关控制控制台输出详略程度。
+// 输出、进度和 KPI 配置镜像。
 static bool g_compactReport = true;
 static bool g_printGridAnchorEvents = false;
 static bool g_printKpiReports = false;
@@ -132,24 +109,19 @@ static double g_progressStopTimeSeconds = 0.0;
 static double g_offeredPacketRatePerUe = 250.0;
 static double g_maxSupportedUesPerSatellite = 5.0;
 static double g_loadCongestionThreshold = 0.8;
-static double g_hoHysteresisDb = 2.0;
 static double g_pingPongWindowSeconds = 1.5;
 
+// 切换策略运行时配置。
 static AnchorSelectionMode g_anchorSelectionMode = AnchorSelectionMode::DEMAND_NEAREST;
 static DemandSnapshotMode g_demandSnapshotMode = DemandSnapshotMode::RUNTIME_UNDERSERVED_UE;
-
 static MeasurementDrivenHandoverConfig g_measurementDrivenConfig;
 static std::vector<Ptr<NrLeoA3MeasurementHandoverAlgorithm>> g_handoverAlgorithms;
 
-// 逐时刻卫星波束锚点导出文件。
+// Trace streams.
 static std::ofstream g_satAnchorTrace;
-// 逐时刻卫星真实连续地面投影导出文件。
 static std::ofstream g_satGroundTrackTrace;
-// 逐时刻卫星负载状态导出文件，用于论文负载均衡统计。
 static std::ofstream g_satelliteStateTrace;
-// 切换窗口下行吞吐采样导出文件。
 static std::ofstream g_handoverThroughputTrace;
-// 精确记录 HO-START / HO-END-OK 时刻的事件导出文件。
 static std::ofstream g_handoverEventTrace;
 
 static Vector
@@ -960,7 +932,6 @@ static void
 ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
 {
     g_useWgs84HexGrid = config.useWgs84HexGrid;
-    g_lockGridCenterToUe = config.lockGridCenterToUe;
     g_gridCenterLatitudeDeg = config.gridCenterLatitudeDeg;
     g_gridCenterLongitudeDeg = config.gridCenterLongitudeDeg;
     g_gridWidthKm = config.gridWidthKm;
@@ -974,7 +945,6 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_earthFixedBeamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
     g_anchorGridSwitchGuardMeters = config.anchorGridSwitchGuardMeters;
     g_anchorGridHysteresisSeconds = config.anchorGridHysteresisSeconds;
-    g_outputDir = config.outputDir;
     g_printGridCatalog = config.printGridCatalog;
     g_gridCatalogPath = config.gridCatalogPath;
     g_compactReport = config.compactReport;
@@ -990,7 +960,6 @@ ApplyGlobalMirrorConfig(const BaselineSimulationConfig& config)
     g_offeredPacketRatePerUe = config.lambda;
     g_maxSupportedUesPerSatellite = config.maxSupportedUesPerSatellite;
     g_loadCongestionThreshold = config.loadCongestionThreshold;
-    g_hoHysteresisDb = config.hoHysteresisDb;
     g_pingPongWindowSeconds = config.pingPongWindowSeconds;
     g_measurementDrivenConfig = BuildMeasurementDrivenHandoverConfig(config);
 }
@@ -1173,7 +1142,7 @@ main(int argc, char* argv[])
                   << std::endl;
         std::cout << "[Handover] a3=measurement-report"
                   << " mode=" << ToString(g_measurementDrivenConfig.handoverMode)
-                  << " hysteresis=" << g_hoHysteresisDb << "dB"
+                  << " hysteresis=" << cfg.hoHysteresisDb << "dB"
                   << " ttt=" << static_cast<double>(cfg.hoTttMs) / 1000.0 << "s"
                   << " improvedSignalWeight="
                   << g_measurementDrivenConfig.improvedSignalWeight
@@ -1229,7 +1198,7 @@ main(int argc, char* argv[])
                   << " scheduler=ofdma-rr"
                   << " ueIpv4Forwarding=" << (cfg.disableUeIpv4Forwarding ? "OFF" : "ON")
                   << std::endl;
-        std::cout << "[Output] dir=" << g_outputDir << std::endl;
+        std::cout << "[Output] dir=" << cfg.outputDir << std::endl;
         if (cfg.enableHandoverThroughputTrace)
         {
             std::cout << "[Output] handoverThroughputTrace=" << cfg.handoverThroughputTracePath
