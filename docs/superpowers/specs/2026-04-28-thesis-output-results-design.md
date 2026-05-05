@@ -9,14 +9,16 @@ balancing and enough trajectory data to draw scenario figures.
 
 ## Scope
 
+The formal `research-v6.1` scenario is fixed to `2x4 + poisson-3ring + overlap-only + beam-only`.
+
 Formal thesis output compares only:
 
 - `baseline`: standard MeasurementReport-driven A3-style handover, signal-only target choice.
 - `improved`: full signal/load/visibility-aware handover strategy with the existing stability
   and gating protections enabled.
 
-`improved-score-only` remains a diagnostic mode but is not part of the formal thesis output
-path.
+The old `improved-score-only` diagnostic mode has been removed from the active reproduction
+package.
 
 ## Metric Boundary
 
@@ -38,18 +40,15 @@ The formal result metrics intentionally exclude:
 - handover delay
 - signaling overhead
 
-PHY-layer statistics should remain available only as a hidden diagnostic path. Formal runs and
-summary scripts must not require `enablePhyDlTbStats=true`.
-
-This changes the previous research-output emphasis: existing docs that list `SINR` as a core
-final metric must be synchronized when implementation starts.
+PHY-layer CSV statistics are no longer part of the active reproduction output. Formal runs
+and summary scripts do not require a PHY TB statistics switch.
 
 ## Formal Directory Layout
 
-Formal results should use:
+Formal 40s results should use a dedicated root so they do not overwrite older formal runs:
 
 ```text
-scratch/results/formal/
+scratch/results/formal/v6.1-poisson3ring-overlap-beamonly-40s/
   baseline/
     seed-01/
     seed-02/
@@ -86,7 +85,7 @@ future thesis figures need the source geometry and trajectory data.
 
 ## Satellite State Trace
 
-Add a formal satellite state trace:
+Formal runs keep a satellite state trace:
 
 ```text
 time_s,sat,plane,slot,cell,anchor_grid_id,
@@ -117,8 +116,6 @@ The formal summary path should generate:
 run_summary.csv
 paper_kpi_summary.csv
 paper_kpi_comparison.csv
-paper_kpi_comparison.png
-load_balance_jain_timeseries.png
 ```
 
 `run_summary.csv` contains one row per run:
@@ -136,7 +133,7 @@ e2e_delay_ms_mean,e2e_delay_ms_std,
 packet_loss_percent_mean,packet_loss_percent_std,
 throughput_mbps_mean,throughput_mbps_std,
 completed_ho_mean,completed_ho_std,
-ping_pong_mean,ping_pong_std,
+ping_pong_count_mean,ping_pong_count_std,
 load_balance_jain_mean,load_balance_jain_std
 ```
 
@@ -153,19 +150,8 @@ The relative direction should be:
 - context dependent: completed handovers
 - higher is better: throughput, Jain load fairness
 
-## Implementation Boundary
+## Current Status
 
-Implementation should first add the satellite state trace and the summary script. The existing
-PHY diagnostic implementation can stay in code, but formal output docs and summary scripts should
-not mention PHY files as required artifacts.
-
-Important `scratch/` documentation must be synchronized after implementation:
-
-- `scratch/README.md`
-- `scratch/baseline-definition.md`
-- `scratch/midterm-report/README.md`
-
-The broader research-memory docs should also be updated to demote `SINR` from final output:
-
-- `docs/research-context.md`
-- `docs/current-task-memory.md`
+The satellite state trace and summary script have been implemented. The existing PHY diagnostic
+implementation remains in code, but formal output docs and summary scripts no longer require PHY
+files as thesis artifacts.

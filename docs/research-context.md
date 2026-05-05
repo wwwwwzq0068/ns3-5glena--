@@ -3,6 +3,7 @@
 ## Thesis Scope
 - Topic: LEO constellation handover strategy design and simulation in NS-3 for 5G-NTN.
 - Current implementation path: ns-3.46 plus 5G-LENA/NR, with LEO mobility and beam-aware handover logic.
+- Current thesis data version: `research-v6.1`, fixed to `2x4 + poisson-3ring + overlap-only + beam-only`.
 - Main scenarios:
   - inter-beam handover within the same satellite
   - inter-satellite handover across moving LEO nodes
@@ -26,11 +27,11 @@
 - Reduce unnecessary handovers and ping-pong behavior.
 - Maintain throughput continuity during serving satellite changes.
 - Incorporate load-aware target selection rather than leaving it as an optional extension, because the thesis task explicitly requires considering both signal quality and satellite load.
-- `SINR`, `PHY DL TB error / TBler`, detailed antenna tuning, handover delay, and signaling overhead are now diagnostics only; they are not part of the formal thesis result table.
+- `SINR`, `PHY DL TB error / TBler`, detailed antenna tuning, and signaling overhead are no longer part of the formal thesis result table or active reproduction output.
 
 ## Technical Directions
 - Model LEO mobility and time-varying NTN channel behavior.
-- Use the current `2x4` dual-plane local scenario as the fixed near-term baseline, with `B00` as the current control group for baseline / improved comparison.
+- Use the current `2x4 + poisson-3ring + overlap-only + beam-only` local scenario as the sole formal baseline / improved comparison setting.
 - Implement a clean traditional A3-style baseline in NS-3 C++.
 - Use signal quality metrics such as RSRP and RSRQ.
 - Design a custom strategy that combines signal quality with load or cost-function based decision rules.

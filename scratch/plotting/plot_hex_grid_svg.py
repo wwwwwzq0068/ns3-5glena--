@@ -959,21 +959,11 @@ def main() -> None:
     p.add_argument("--width", type=int, default=1600)
     p.add_argument("--height", type=int, default=1200)
     p.add_argument("--margin", type=int, default=80)
-    p.add_argument("--show-labels", type=_parse_bool, default=True)
-    p.add_argument("--label-step", type=int, default=1, help="Show one label every N cells")
-    p.add_argument("--show-centers", type=_parse_bool, default=True)
     p.add_argument("--title", default="WGS84 Hex Grid")
     p.add_argument("--subtitle", default="")
     p.add_argument("--ue-csv", type=Path, help="Optional UE layout CSV to overlay")
     p.add_argument("--sat-anchor-csv", type=Path, help="Optional satellite anchor trace CSV to overlay")
     p.add_argument("--sat-ground-track-csv", type=Path, help="Optional continuous satellite ground-track CSV to overlay")
-    p.add_argument("--ue-show-labels", type=_parse_bool, default=True)
-    p.add_argument("--ue-label-prefix", default="UE")
-    p.add_argument("--highlight-ue-cells", type=_parse_bool, default=False)
-    p.add_argument("--show-only-occupied-labels", type=_parse_bool, default=False)
-    p.add_argument("--focus-occupied-cells", type=_parse_bool, default=False)
-    p.add_argument("--focus-padding-hex", type=float, default=1.2)
-    p.add_argument("--legend-scale", type=float, default=1.0)
     p.add_argument(
         "--plane-north-offsets-m",
         type=_parse_plane_north_offsets,

@@ -5,7 +5,7 @@
  * 设计目标：
  * - 使用 clipped-parabolic 公式（与旧 B00 几何波束同源）
  * - 通过数值标定让 PHY 总波束逼近旧 B00 几何理想波束（38 dBi / 4°）
- * - 参数可配置：阵元峰值增益、波束宽度、旁瓣衰减上限
+ * - 参数可配置：阵元峰值增益、方向图宽度参数、旁瓣衰减上限
  *
  * 公式：
  * G_elem(psi) = G_elem_max - min(12 * (psi / theta_elem)^2, A_elem_max)
@@ -13,7 +13,7 @@
  * 其中：
  * - psi：离轴角（相对阵元 boresight）
  * - G_elem_max：阵元峰值增益
- * - theta_elem：阵元波束宽度（-3 dB 宽度）
+ * - theta_elem：阵元方向图宽度参数（不是严格 -3 dB 宽度）
  * - A_elem_max：旁瓣衰减上限
  */
 
@@ -43,7 +43,8 @@ namespace ns3
  * The element power pattern is:
  * G_elem(psi) = G_elem_max - min(12 * (psi / theta_elem)^2, A_elem_max)
  *
- * where psi is the off-boresight angle in degrees.
+ * where psi is the off-boresight angle in degrees and theta_elem is the
+ * clipped-parabolic width parameter, not a strict -3 dB beamwidth.
  */
 class B00EquivalentAntennaModel : public AntennaModel
 {
@@ -80,14 +81,14 @@ class B00EquivalentAntennaModel : public AntennaModel
     double GetMaxGainDb() const;
 
     /**
-     * @brief Set the beamwidth (degrees) for -3 dB point.
-     * @param beamwidthDeg the beamwidth in degrees
+     * @brief Set the clipped-parabolic width parameter in degrees.
+     * @param beamwidthDeg the width parameter in degrees
      */
     void SetBeamwidthDeg(double beamwidthDeg);
 
     /**
-     * @brief Get the beamwidth (degrees) for -3 dB point.
-     * @return the beamwidth in degrees
+     * @brief Get the clipped-parabolic width parameter in degrees.
+     * @return the width parameter in degrees
      */
     double GetBeamwidthDeg() const;
 
@@ -105,7 +106,7 @@ class B00EquivalentAntennaModel : public AntennaModel
 
   private:
     double m_maxGainDb;         //!< Maximum gain at boresight (dBi)
-    double m_beamwidthDeg;      //!< Beamwidth for -3 dB point (degrees)
+    double m_beamwidthDeg;      //!< Clipped-parabolic width parameter (degrees)
     double m_maxAttenuationDb;  //!< Maximum attenuation for side lobe (dB)
 };
 
@@ -126,8 +127,8 @@ B00EquivalentAntennaModel::GetTypeId()
                                              &B00EquivalentAntennaModel::GetMaxGainDb),
                           MakeDoubleChecker<double>())
             .AddAttribute("BeamwidthDeg",
-                          "The beamwidth (degrees) for -3 dB point. "
-                          "This is the element-level beamwidth, not the total beamwidth.",
+                          "The clipped-parabolic width parameter in degrees. "
+                          "This is an element-level formula parameter, not the total -3 dB beamwidth.",
                           DoubleValue(15.0),  // Initial estimate: need calibration
                           MakeDoubleAccessor(&B00EquivalentAntennaModel::SetBeamwidthDeg,
                                              &B00EquivalentAntennaModel::GetBeamwidthDeg),

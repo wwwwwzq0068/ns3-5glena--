@@ -31,10 +31,10 @@ CountVisibilityPrediction(const MeasurementDrivenDecisionContext&,
 }
 
 double
-ScoreOnlyVisibilityPrediction(const MeasurementDrivenDecisionContext&,
-                              uint32_t satIdx,
-                              const LeoOrbitCalculator::GroundPoint&,
-                              double)
+ImprovedVisibilityPrediction(const MeasurementDrivenDecisionContext&,
+                             uint32_t satIdx,
+                             const LeoOrbitCalculator::GroundPoint&,
+                             double)
 {
     return satIdx == 1 ? 8.0 : 1.0;
 }
@@ -95,10 +95,12 @@ BuildDecisionContext(std::vector<SatelliteRuntime>& satellites,
 int
 main()
 {
-    Require(ParseHandoverMode("improved-score-only") == HandoverMode::IMPROVED_SCORE_ONLY,
-            "handover mode parser should accept the score-only mode");
-    Require(std::string(ToString(HandoverMode::IMPROVED_SCORE_ONLY)) == "improved-score-only",
-            "handover mode formatter should expose the score-only mode");
+    Require(ParseHandoverMode("improved") == HandoverMode::IMPROVED,
+            "handover mode parser should accept the improved mode");
+    Require(ParseHandoverMode("improved-score-only") == HandoverMode::BASELINE,
+            "score-only diagnostic mode should not be accepted in the final reproduction package");
+    Require(ParseHandoverMode("unknown") == HandoverMode::BASELINE,
+            "unknown handover modes should fall back to baseline");
 
     std::vector<SatelliteRuntime> satellites(3);
     for (auto& satellite : satellites)
@@ -148,21 +150,21 @@ main()
     {
         satellites[1].loadScore = 0.15;
         satellites[2].loadScore = 0.75;
-        auto context = BuildDecisionContext(satellites,
-                                            cellToSatellite,
-                                            HandoverMode::IMPROVED_SCORE_ONLY);
+        auto context = BuildDecisionContext(satellites, cellToSatellite, HandoverMode::IMPROVED);
         context.improvedSignalWeight = 0.4;
         context.improvedLoadWeight = 0.3;
         context.improvedVisibilityWeight = 0.3;
-        context.predictRemainingVisibilitySeconds = &ScoreOnlyVisibilityPrediction;
+        context.improvedMinVisibilitySeconds = 0.0;
+        context.improvedMinJointScoreMargin = 0.0;
+        context.predictRemainingVisibilitySeconds = &ImprovedVisibilityPrediction;
         g_visibilityPredictionCallCount = 0;
         const auto selectedTarget =
             SelectMeasurementDrivenTarget(context, 10, 0, ue, measResults);
 
         Require(selectedTarget.has_value(),
-                "score-only target selection should still produce a candidate");
+                "improved target selection should still produce a candidate");
         Require(selectedTarget->cellId == 20,
-                "score-only target selection should be able to prefer the better joint candidate");
+                "improved target selection should be able to prefer the better joint candidate");
     }
 
     std::cout << "[TEST-PASS] measurement-driven decision behavior is correct" << std::endl;

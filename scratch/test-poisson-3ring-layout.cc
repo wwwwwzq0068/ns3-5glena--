@@ -45,14 +45,15 @@ int
 main()
 {
     UeLayoutConfig layout;
-    layout.layoutType = "poisson-3ring";
     layout.hexCellRadiusMeters = 20000.0;
     layout.poissonLambda = 1.5;
     layout.maxUePerCell = 5;
     layout.randomSeed = 7;
 
-    const auto placements = BuildUePlacements(45.6, 84.9, 0.0, 25, layout);
-    Require(placements.size() == 25, "poisson-3ring should build exactly ueNum placements");
+    const uint32_t requestedUeNum = 30;
+    const auto placements = BuildUePlacements(45.6, 84.9, 0.0, requestedUeNum, layout);
+    Require(placements.size() == requestedUeNum,
+            "poisson-3ring should build exactly requested UE placements");
 
     std::map<std::string, uint32_t> roleCounts;
     for (const auto& placement : placements)
@@ -69,7 +70,7 @@ main()
     Require(roleCounts["p3-ring1"] > 0, "poisson-3ring should place demand in first-ring cells");
     Require(roleCounts["p3-ring2"] > 0, "poisson-3ring should place demand in second-ring cells");
 
-    const auto repeated = BuildUePlacements(45.6, 84.9, 0.0, 25, layout);
+    const auto repeated = BuildUePlacements(45.6, 84.9, 0.0, requestedUeNum, layout);
     Require(repeated.size() == placements.size(), "poisson-3ring should be reproducible by seed");
     for (uint32_t i = 0; i < placements.size(); ++i)
     {

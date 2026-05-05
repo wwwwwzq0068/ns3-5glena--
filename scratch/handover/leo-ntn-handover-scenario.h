@@ -8,7 +8,7 @@
  *
  * 设计目标：
  * - 将每个 UE 的初始服务星选择、attach、默认路由和业务安装从主脚本抽离；
- * - 保持七小区 baseline 的初始接入口径不变；
+ * - 保持当前 baseline 的初始接入口径与 UE 空间分布生成逻辑解耦；
  * - 让 `main()` 更聚焦于场景阶段划分，而不是逐 UE 装配细节。
  */
 
@@ -108,33 +108,6 @@ DisableUeIpv4ForwardingIfRequested(const BaselineSimulationConfig& config, const
     }
 }
 
-inline bool
-IsUeInInitialAnchorCell(const UeScenarioInstallContext& context,
-                        const BaselineSimulationConfig& config,
-                        const UeRuntime& ue,
-                        uint32_t satIdx)
-{
-    const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
-    if (ResolveEffectiveRealLinkGateMode(config) != "beam-and-anchor" ||
-        !RequiresDiscreteAnchorCellGate(beamTargetMode))
-    {
-        return true;
-    }
-    if (context.hexGridCells == nullptr || context.hexGridCells->empty() ||
-        context.satellites[satIdx].currentAnchorGridId == 0)
-    {
-        return false;
-    }
-
-    const auto nearestIndices = FindNearestHexCellIndices(*context.hexGridCells, ue.groundPoint.ecef, 1);
-    if (nearestIndices.empty())
-    {
-        return false;
-    }
-    return (*context.hexGridCells)[nearestIndices.front()].id ==
-           context.satellites[satIdx].currentAnchorGridId;
-}
-
 inline uint32_t
 SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                              const BaselineSimulationConfig& config,
@@ -142,7 +115,6 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                              uint32_t ueIdx)
 {
     const auto beamTargetMode = ParseEarthFixedBeamTargetMode(config.earthFixedBeamTargetMode);
-    const std::string realLinkGateMode = ResolveEffectiveRealLinkGateMode(config);
     uint32_t initialAttachIdx = 0;
     uint32_t bestVisibleIdx = 0;
     uint32_t bestAnyIdx = 0;
@@ -171,11 +143,8 @@ SelectInitialAttachSatellite(const UeScenarioInstallContext& context,
                                                           context.beamModelConfig);
 
         const bool accessAllowed =
-            realLinkGateMode == "off" ||
-            (budget.beamLocked &&
-             budget.offBoresightAngleRad <= context.beamModelConfig.theta3dBRad &&
-             (realLinkGateMode == "beam-only" ||
-              IsUeInInitialAnchorCell(context, config, ue, satIdx)));
+            budget.beamLocked &&
+            budget.offBoresightAngleRad <= context.beamModelConfig.theta3dBRad;
         if (state.elevationRad > bestAnyElevation)
         {
             bestAnyElevation = state.elevationRad;

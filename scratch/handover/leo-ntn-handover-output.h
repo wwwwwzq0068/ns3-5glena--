@@ -17,7 +17,6 @@ struct BaselineTraceOutputSet
     std::ofstream* satelliteStateTrace = nullptr;
     std::ofstream* handoverThroughputTrace = nullptr;
     std::ofstream* handoverEventTrace = nullptr;
-    std::ofstream* phyDlTbTrace = nullptr;
 };
 
 inline void
@@ -28,8 +27,7 @@ InitializeBaselineTraceOutputs(const BaselineSimulationConfig& config,
                         outputs.satGroundTrackTrace == nullptr ||
                         outputs.satelliteStateTrace == nullptr ||
                         outputs.handoverThroughputTrace == nullptr ||
-                        outputs.handoverEventTrace == nullptr ||
-                        outputs.phyDlTbTrace == nullptr,
+                        outputs.handoverEventTrace == nullptr,
                     "BaselineTraceOutputSet contains null stream pointers");
 
     if (config.enableSatAnchorTrace)
@@ -84,19 +82,6 @@ InitializeBaselineTraceOutputs(const BaselineSimulationConfig& config,
                         << config.handoverEventTracePath);
     outputs.handoverEventTrace->flush();
 
-    if (config.enablePhyDlTbTrace)
-    {
-        const bool phyReady = ResetCsvOutputStream(*outputs.phyDlTbTrace,
-                                                   config.phyDlTbTracePath,
-                                                   HandoverCsvHeaders::kPhyDlTbTrace);
-        NS_ABORT_MSG_IF(!phyReady,
-                        "Failed to open PHY DL TB trace CSV: " << config.phyDlTbTracePath);
-    }
-    else
-    {
-        CloseOutputStream(*outputs.phyDlTbTrace);
-    }
-
     if (config.enableHandoverThroughputTrace)
     {
         const bool throughputReady =
@@ -120,16 +105,14 @@ CloseBaselineTraceOutputs(const BaselineTraceOutputSet& outputs)
                         outputs.satGroundTrackTrace == nullptr ||
                         outputs.satelliteStateTrace == nullptr ||
                         outputs.handoverThroughputTrace == nullptr ||
-                        outputs.handoverEventTrace == nullptr ||
-                        outputs.phyDlTbTrace == nullptr,
+                        outputs.handoverEventTrace == nullptr,
                     "BaselineTraceOutputSet contains null stream pointers");
 
     CloseOutputStreams(*outputs.satAnchorTrace,
                        *outputs.satGroundTrackTrace,
                        *outputs.satelliteStateTrace,
                        *outputs.handoverThroughputTrace,
-                       *outputs.handoverEventTrace,
-                       *outputs.phyDlTbTrace);
+                       *outputs.handoverEventTrace);
 }
 
 } // namespace ns3

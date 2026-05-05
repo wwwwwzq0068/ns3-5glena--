@@ -139,8 +139,9 @@ $$P_{\text{rx}} \approx P_{\text{tx}} + G_{\text{tx}} + G_{\text{rx}} - L_{\text
 
 ## 七、当前工作区口径
 
-- 已发布稳定节点：`research-v6.0`
+- 当前版本定位：`research-v6.1`
 - 当前默认真实天线配置：`gNB b00-custom + UE three-gpp`
 - 当前默认波束方法：`ideal-earth-fixed`
+- 本文只作为 PHY/几何诊断背景；正式论文主表不使用 `SINR`、`TBler` 或物理层小开关对照结果。
 
 如果要解释当前高 `PHY DL TB error rate`，应优先考虑同频干扰、阵列定向性和离轴/旁瓣影响，而不是只看这份几何链路预算表。
