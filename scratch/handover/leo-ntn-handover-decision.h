@@ -399,15 +399,45 @@ IsCrossLayerPhyWeak(const MeasurementDrivenDecisionContext& context, const UeRun
 }
 
 inline std::optional<MeasurementCandidate>
-SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
-                              uint16_t servingCellId,
-                              uint32_t sourceSatIdx,
-                              const UeRuntime& ue,
-                              const NrRrcSap::MeasResults& measResults)
+SelectStrongestSignalCandidate(const std::vector<MeasurementCandidate>& candidates)
+{
+    if (candidates.empty())
+    {
+        return std::nullopt;
+    }
+    return *std::max_element(candidates.begin(),
+                             candidates.end(),
+                             [](const auto& lhs, const auto& rhs) {
+                                 return lhs.rsrpDbm < rhs.rsrpDbm;
+                             });
+}
+
+template <typename Predicate>
+inline void
+KeepCandidatesIfAny(std::vector<MeasurementCandidate>& candidates, Predicate&& predicate)
+{
+    std::vector<MeasurementCandidate> qualifiedCandidates;
+    qualifiedCandidates.reserve(candidates.size());
+    std::copy_if(candidates.begin(),
+                 candidates.end(),
+                 std::back_inserter(qualifiedCandidates),
+                 std::forward<Predicate>(predicate));
+    if (!qualifiedCandidates.empty())
+    {
+        candidates = std::move(qualifiedCandidates);
+    }
+}
+
+inline std::vector<MeasurementCandidate>
+BuildMeasuredCandidates(const MeasurementDrivenDecisionContext& context,
+                        uint16_t servingCellId,
+                        const UeRuntime& ue,
+                        const NrRrcSap::MeasResults& measResults)
 {
     std::vector<MeasurementCandidate> candidates;
     candidates.reserve(measResults.measResultListEutra.size());
 
+    const double nowSeconds = Simulator::Now().GetSeconds();
     for (const auto& neighbour : measResults.measResultListEutra)
     {
         if (!neighbour.haveRsrpResult || neighbour.physCellId == servingCellId)
@@ -420,8 +450,7 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
         {
             continue;
         }
-        if (context.isCandidateAllowed != nullptr &&
-            !context.isCandidateAllowed(satIt->second, ue))
+        if (context.isCandidateAllowed != nullptr && !context.isCandidateAllowed(satIt->second, ue))
         {
             continue;
         }
@@ -440,33 +469,22 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
         if (UsesJointScoreSelection(context.handoverMode))
         {
             candidate.remainingVisibilitySeconds =
-                PredictRemainingVisibilitySeconds(context,
-                                                 candidate.satIdx,
-                                                 ue.groundPoint,
-                                                 Simulator::Now().GetSeconds());
+                PredictRemainingVisibilitySeconds(context, candidate.satIdx, ue.groundPoint, nowSeconds);
         }
         candidates.push_back(candidate);
     }
 
-    if (candidates.empty())
-    {
-        return std::nullopt;
-    }
+    return candidates;
+}
 
-    if (context.handoverMode == HandoverMode::BASELINE)
-    {
-        const auto bestSignal = *std::max_element(candidates.begin(),
-                                                  candidates.end(),
-                                                  [](const auto& lhs, const auto& rhs) {
-                                                      return lhs.rsrpDbm < rhs.rsrpDbm;
-                                                  });
-        return bestSignal;
-    }
-
-    const double sourceLoadScore =
-        (sourceSatIdx < context.satellites.size()) ? context.satellites[sourceSatIdx].loadScore : 0.0;
-    const double sourceLoadPressure =
-        ComputeLoadPressureFromScore(sourceLoadScore, context.loadCongestionThreshold);
+inline MeasurementCandidate
+BuildServingMeasurementCandidate(const MeasurementDrivenDecisionContext& context,
+                                 uint16_t servingCellId,
+                                 uint32_t sourceSatIdx,
+                                 const UeRuntime& ue,
+                                 const NrRrcSap::MeasResults& measResults,
+                                 double sourceLoadScore)
+{
     MeasurementCandidate servingCandidate;
     servingCandidate.satIdx = sourceSatIdx;
     servingCandidate.cellId = servingCellId;
@@ -481,136 +499,136 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                          sourceSatIdx,
                                          ue.groundPoint,
                                          Simulator::Now().GetSeconds());
-    const bool servingWeak = IsServingLinkWeak(context, measResults);
-    const bool crossLayerWeak = IsCrossLayerPhyWeak(context, ue);
+    return servingCandidate;
+}
 
-    std::vector<MeasurementCandidate> filteredCandidates;
-    filteredCandidates.reserve(candidates.size());
-    std::copy_if(candidates.begin(),
-                 candidates.end(),
-                 std::back_inserter(filteredCandidates),
-                 [](const auto& candidate) { return candidate.admissionAllowed; });
-    if (filteredCandidates.empty())
-    {
-        filteredCandidates = candidates;
-    }
+inline void
+ApplyImprovedCandidateFilters(const MeasurementDrivenDecisionContext& context,
+                              std::vector<MeasurementCandidate>& candidates)
+{
+    KeepCandidatesIfAny(candidates, [](const auto& candidate) {
+        return candidate.admissionAllowed;
+    });
 
     if (context.improvedMinVisibilitySeconds > 0.0)
     {
-        std::vector<MeasurementCandidate> visibilityQualifiedCandidates;
-        visibilityQualifiedCandidates.reserve(filteredCandidates.size());
-        std::copy_if(filteredCandidates.begin(),
-                     filteredCandidates.end(),
-                     std::back_inserter(visibilityQualifiedCandidates),
-                     [&](const auto& candidate) {
-                         return candidate.remainingVisibilitySeconds >=
-                                context.improvedMinVisibilitySeconds;
-                     });
-        if (!visibilityQualifiedCandidates.empty())
-        {
-            filteredCandidates = std::move(visibilityQualifiedCandidates);
-        }
+        KeepCandidatesIfAny(candidates, [&](const auto& candidate) {
+            return candidate.remainingVisibilitySeconds >= context.improvedMinVisibilitySeconds;
+        });
     }
 
-    std::vector<MeasurementCandidate> qualityQualifiedCandidates;
-    qualityQualifiedCandidates.reserve(filteredCandidates.size());
-    std::copy_if(filteredCandidates.begin(),
-                 filteredCandidates.end(),
-                 std::back_inserter(qualityQualifiedCandidates),
-                 [&](const auto& candidate) {
-                     const bool rsrpOk = candidate.rsrpDbm >= context.improvedMinCandidateRsrpDbm;
-                     const bool rsrqOk = std::isfinite(candidate.rsrqDb) &&
-                                         candidate.rsrqDb >= context.improvedMinCandidateRsrqDb;
-                     return rsrpOk && rsrqOk;
-                 });
-    if (!qualityQualifiedCandidates.empty())
+    KeepCandidatesIfAny(candidates, [&](const auto& candidate) {
+        const bool rsrpOk = candidate.rsrpDbm >= context.improvedMinCandidateRsrpDbm;
+        const bool rsrqOk = std::isfinite(candidate.rsrqDb) &&
+                            candidate.rsrqDb >= context.improvedMinCandidateRsrqDb;
+        return rsrpOk && rsrqOk;
+    });
+}
+
+inline std::optional<MeasurementCandidate>
+ApplyRsrqAdvantageGuard(const MeasurementDrivenDecisionContext& context,
+                        const MeasurementCandidate& servingCandidate,
+                        bool servingWeak,
+                        std::vector<MeasurementCandidate>& candidates)
+{
+    if (context.improvedMinRsrqAdvantageDb <= 0.0 || servingWeak)
     {
-        filteredCandidates = std::move(qualityQualifiedCandidates);
+        return std::nullopt;
     }
 
     const double servingRsrqDb =
         std::isfinite(servingCandidate.rsrqDb) ? servingCandidate.rsrqDb : -19.5;
-    if (context.improvedMinRsrqAdvantageDb > 0.0 && !servingWeak)
+    std::vector<MeasurementCandidate> rsrqGuardCandidates;
+    rsrqGuardCandidates.reserve(candidates.size());
+    std::copy_if(candidates.begin(),
+                 candidates.end(),
+                 std::back_inserter(rsrqGuardCandidates),
+                 [&](const auto& candidate) {
+                     return std::isfinite(candidate.rsrqDb) &&
+                            candidate.rsrqDb >= servingRsrqDb + context.improvedMinRsrqAdvantageDb;
+                 });
+    if (!rsrqGuardCandidates.empty())
     {
-        std::vector<MeasurementCandidate> rsrqGuardCandidates;
-        rsrqGuardCandidates.reserve(filteredCandidates.size());
-        for (const auto& candidate : filteredCandidates)
-        {
-            const bool rsrqAdvantageOk = std::isfinite(candidate.rsrqDb) &&
-                                         candidate.rsrqDb >=
-                                             servingRsrqDb + context.improvedMinRsrqAdvantageDb;
-            if (rsrqAdvantageOk)
-            {
-                rsrqGuardCandidates.push_back(candidate);
-            }
-        }
-        if (!rsrqGuardCandidates.empty())
-        {
-            filteredCandidates = std::move(rsrqGuardCandidates);
-        }
-        else if (!filteredCandidates.empty())
-        {
-            const auto bestSignal = std::max_element(filteredCandidates.begin(),
-                                                     filteredCandidates.end(),
-                                                     [](const auto& lhs, const auto& rhs) {
-                                                         return lhs.rsrpDbm < rhs.rsrpDbm;
-            });
-            if (bestSignal->rsrpDbm > servingCandidate.rsrpDbm)
-            {
-                return *bestSignal;
-            }
-        }
+        candidates = std::move(rsrqGuardCandidates);
+        return std::nullopt;
     }
 
-    const auto bestSignalIt =
-        std::max_element(filteredCandidates.begin(),
-                         filteredCandidates.end(),
-                         [](const auto& lhs, const auto& rhs) {
-                             return lhs.rsrpDbm < rhs.rsrpDbm;
-                         });
-    const MeasurementCandidate bestSignalCandidate = *bestSignalIt;
-    if (servingWeak || crossLayerWeak)
+    const auto bestSignal = SelectStrongestSignalCandidate(candidates);
+    if (bestSignal.has_value() && bestSignal->rsrpDbm > servingCandidate.rsrpDbm)
     {
-        return bestSignalCandidate;
+        return bestSignal;
     }
+    return std::nullopt;
+}
 
-    const double dynamicMaxSignalGapDb =
-        context.improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
-    const double dynamicMinLoadScoreDelta =
+struct DynamicJointScoreConfig
+{
+    double maxSignalGapDb = 0.0;
+    double minLoadScoreDelta = 0.0;
+    double signalWeight = 0.0;
+    double rsrqWeight = 0.0;
+    double loadWeight = 0.0;
+    double visibilityWeight = 0.0;
+};
+
+inline DynamicJointScoreConfig
+BuildDynamicJointScoreConfig(const MeasurementDrivenDecisionContext& context,
+                             double sourceLoadPressure)
+{
+    DynamicJointScoreConfig config;
+    config.maxSignalGapDb = context.improvedMaxSignalGapDb + 2.0 * sourceLoadPressure;
+    config.minLoadScoreDelta =
         std::max(0.05, context.improvedMinLoadScoreDelta * (1.0 - 0.5 * sourceLoadPressure));
-    const double effectiveSignalWeight =
+    config.signalWeight =
         std::max(0.15, context.improvedSignalWeight * (1.0 - 0.4 * sourceLoadPressure));
-    const double effectiveRsrqWeight =
-        std::max(0.0, context.improvedRsrqWeight * (1.0 - 0.2 * sourceLoadPressure));
-    const double effectiveLoadWeight = context.improvedLoadWeight + 0.6 * sourceLoadPressure;
-    const double effectiveVisibilityWeight =
-        context.improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
+    config.rsrqWeight = std::max(0.0, context.improvedRsrqWeight * (1.0 - 0.2 * sourceLoadPressure));
+    config.loadWeight = context.improvedLoadWeight + 0.6 * sourceLoadPressure;
+    config.visibilityWeight = context.improvedVisibilityWeight * (1.0 - 0.2 * sourceLoadPressure);
 
+    const double totalWeight = std::max(
+        1e-9, config.signalWeight + config.rsrqWeight + config.loadWeight + config.visibilityWeight);
+    config.signalWeight /= totalWeight;
+    config.rsrqWeight /= totalWeight;
+    config.loadWeight /= totalWeight;
+    config.visibilityWeight /= totalWeight;
+    return config;
+}
+
+inline std::vector<MeasurementCandidate>
+BuildJointScoreCandidatePool(const std::vector<MeasurementCandidate>& candidates,
+                             const MeasurementCandidate& bestSignalCandidate,
+                             const DynamicJointScoreConfig& scoreConfig)
+{
     std::vector<MeasurementCandidate> scoredCandidates;
-    scoredCandidates.reserve(filteredCandidates.size());
-    for (const auto& candidate : filteredCandidates)
+    scoredCandidates.reserve(candidates.size());
+    for (const auto& candidate : candidates)
     {
         const double signalGapDb = bestSignalCandidate.rsrpDbm - candidate.rsrpDbm;
         const double loadAdvantage = bestSignalCandidate.loadScore - candidate.loadScore;
         const bool keepCandidate = candidate.cellId == bestSignalCandidate.cellId ||
-                                   signalGapDb <= dynamicMaxSignalGapDb ||
-                                   loadAdvantage >= dynamicMinLoadScoreDelta;
-        if (!keepCandidate)
+                                   signalGapDb <= scoreConfig.maxSignalGapDb ||
+                                   loadAdvantage >= scoreConfig.minLoadScoreDelta;
+        if (keepCandidate)
         {
-            continue;
+            scoredCandidates.push_back(candidate);
         }
-        scoredCandidates.push_back(candidate);
     }
+    return scoredCandidates;
+}
 
-    if (scoredCandidates.empty())
-    {
-        return bestSignalCandidate;
-    }
+inline void
+ComputeJointScoreRanges(const MeasurementCandidate& servingCandidate,
+                        const std::vector<MeasurementCandidate>& candidates,
+                        double& minRsrpDbm,
+                        double& maxRsrpDbm,
+                        double& minRsrqDb,
+                        double& maxRsrqDb)
+{
+    minRsrpDbm = std::numeric_limits<double>::infinity();
+    maxRsrpDbm = -std::numeric_limits<double>::infinity();
+    minRsrqDb = std::numeric_limits<double>::infinity();
+    maxRsrqDb = -std::numeric_limits<double>::infinity();
 
-    double minRsrpDbm = std::numeric_limits<double>::infinity();
-    double maxRsrpDbm = -std::numeric_limits<double>::infinity();
-    double minRsrqDb = std::numeric_limits<double>::infinity();
-    double maxRsrqDb = -std::numeric_limits<double>::infinity();
     if (std::isfinite(servingCandidate.rsrpDbm))
     {
         minRsrpDbm = servingCandidate.rsrpDbm;
@@ -621,7 +639,7 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
         minRsrqDb = servingCandidate.rsrqDb;
         maxRsrqDb = servingCandidate.rsrqDb;
     }
-    for (const auto& candidate : scoredCandidates)
+    for (const auto& candidate : candidates)
     {
         minRsrpDbm = std::min(minRsrpDbm, candidate.rsrpDbm);
         maxRsrpDbm = std::max(maxRsrpDbm, candidate.rsrpDbm);
@@ -631,16 +649,20 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
             maxRsrqDb = std::max(maxRsrqDb, candidate.rsrqDb);
         }
     }
+}
 
-    const double totalWeight = std::max(
-        1e-9,
-        effectiveSignalWeight + effectiveRsrqWeight + effectiveLoadWeight + effectiveVisibilityWeight);
-    const double normalizedSignalWeight = effectiveSignalWeight / totalWeight;
-    const double normalizedRsrqWeight = effectiveRsrqWeight / totalWeight;
-    const double normalizedLoadWeight = effectiveLoadWeight / totalWeight;
-    const double normalizedVisibilityWeight = effectiveVisibilityWeight / totalWeight;
-
-    for (auto& candidate : scoredCandidates)
+inline void
+AssignJointScores(const MeasurementDrivenDecisionContext& context,
+                  const DynamicJointScoreConfig& scoreConfig,
+                  double sourceLoadScore,
+                  double sourceLoadPressure,
+                  double minRsrpDbm,
+                  double maxRsrpDbm,
+                  double minRsrqDb,
+                  double maxRsrqDb,
+                  std::vector<MeasurementCandidate>& candidates)
+{
+    for (auto& candidate : candidates)
     {
         candidate.visibilityScore = ComputeVisibilityScore(context, candidate.remainingVisibilitySeconds);
         candidate.jointScore = ComputeJointScore(candidate,
@@ -648,13 +670,95 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                                 maxRsrpDbm,
                                                 minRsrqDb,
                                                 maxRsrqDb,
-                                                normalizedSignalWeight,
-                                                normalizedRsrqWeight,
-                                                normalizedLoadWeight,
-                                                normalizedVisibilityWeight,
+                                                scoreConfig.signalWeight,
+                                                scoreConfig.rsrqWeight,
+                                                scoreConfig.loadWeight,
+                                                scoreConfig.visibilityWeight,
                                                 sourceLoadScore,
                                                 sourceLoadPressure);
     }
+}
+
+inline std::optional<MeasurementCandidate>
+SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
+                              uint16_t servingCellId,
+                              uint32_t sourceSatIdx,
+                              const UeRuntime& ue,
+                              const NrRrcSap::MeasResults& measResults)
+{
+    auto candidates = BuildMeasuredCandidates(context, servingCellId, ue, measResults);
+
+    if (candidates.empty())
+    {
+        return std::nullopt;
+    }
+
+    if (context.handoverMode == HandoverMode::BASELINE)
+    {
+        return SelectStrongestSignalCandidate(candidates);
+    }
+
+    const double sourceLoadScore =
+        (sourceSatIdx < context.satellites.size()) ? context.satellites[sourceSatIdx].loadScore : 0.0;
+    const double sourceLoadPressure =
+        ComputeLoadPressureFromScore(sourceLoadScore, context.loadCongestionThreshold);
+    MeasurementCandidate servingCandidate = BuildServingMeasurementCandidate(context,
+                                                                            servingCellId,
+                                                                            sourceSatIdx,
+                                                                            ue,
+                                                                            measResults,
+                                                                            sourceLoadScore);
+    const bool servingWeak = IsServingLinkWeak(context, measResults);
+    const bool crossLayerWeak = IsCrossLayerPhyWeak(context, ue);
+
+    std::vector<MeasurementCandidate> filteredCandidates = candidates;
+    ApplyImprovedCandidateFilters(context, filteredCandidates);
+
+    const auto guardedTarget =
+        ApplyRsrqAdvantageGuard(context, servingCandidate, servingWeak, filteredCandidates);
+    if (guardedTarget.has_value())
+    {
+        return guardedTarget;
+    }
+
+    const auto bestSignalTarget = SelectStrongestSignalCandidate(filteredCandidates);
+    if (!bestSignalTarget.has_value())
+    {
+        return std::nullopt;
+    }
+    const MeasurementCandidate bestSignalCandidate = *bestSignalTarget;
+    if (servingWeak || crossLayerWeak)
+    {
+        return bestSignalCandidate;
+    }
+
+    const auto scoreConfig = BuildDynamicJointScoreConfig(context, sourceLoadPressure);
+    std::vector<MeasurementCandidate> scoredCandidates =
+        BuildJointScoreCandidatePool(filteredCandidates, bestSignalCandidate, scoreConfig);
+    if (scoredCandidates.empty())
+    {
+        return bestSignalCandidate;
+    }
+
+    double minRsrpDbm;
+    double maxRsrpDbm;
+    double minRsrqDb;
+    double maxRsrqDb;
+    ComputeJointScoreRanges(servingCandidate,
+                            scoredCandidates,
+                            minRsrpDbm,
+                            maxRsrpDbm,
+                            minRsrqDb,
+                            maxRsrqDb);
+    AssignJointScores(context,
+                      scoreConfig,
+                      sourceLoadScore,
+                      sourceLoadPressure,
+                      minRsrpDbm,
+                      maxRsrpDbm,
+                      minRsrqDb,
+                      maxRsrqDb,
+                      scoredCandidates);
 
     const auto bestJointIt =
         std::max_element(scoredCandidates.begin(),
@@ -676,10 +780,10 @@ SelectMeasurementDrivenTarget(const MeasurementDrivenDecisionContext& context,
                                                         maxRsrpDbm,
                                                         minRsrqDb,
                                                         maxRsrqDb,
-                                                        normalizedSignalWeight,
-                                                        normalizedRsrqWeight,
-                                                        normalizedLoadWeight,
-                                                        normalizedVisibilityWeight,
+                                                        scoreConfig.signalWeight,
+                                                        scoreConfig.rsrqWeight,
+                                                        scoreConfig.loadWeight,
+                                                        scoreConfig.visibilityWeight,
                                                         sourceLoadScore,
                                                         sourceLoadPressure);
         if (bestJointIt->jointScore <
