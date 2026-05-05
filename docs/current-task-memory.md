@@ -1,8 +1,8 @@
 # 当前任务记忆
 
 ## 当前版本状态
-- 当前版本定位：`6.1`（建议 Git tag：`research-v6.1`）
-- `research-v6.1` 定义为当前论文正式场景与结果数据版本；在 `research-v6.0` 输出链收口基础上，默认场景固定为 `2x4 + poisson-3ring + overlap-only + beam-only`
+- 当前版本定位：`6.2`（建议 Git tag：`research-v6.2`）
+- `research-v6.2` 定义为当前论文正式代码发布版本；在 `research-v6.1` 场景与结果数据口径基础上，合入 baseline 文件瘦身、切换决策 helper 拆分和文档版本收口。默认场景仍固定为 `2x4 + poisson-3ring + overlap-only + beam-only`
 - 当前主仿真入口：`scratch/leo-ntn-handover-baseline.cc`
 
 ## 当前 baseline 快照
@@ -79,6 +79,7 @@
 ## 当前已确认实现
 - 主脚本与运行时、统计、工具辅助头文件的拆分已经完成
 - `main()` 当前已进一步把无线 bootstrap、UE 初始接入/业务安装、trace 输出生命周期分别下放到 `scratch/handover/leo-ntn-handover-radio.h`、`scratch/handover/leo-ntn-handover-scenario.h` 与 `scratch/handover/leo-ntn-handover-output.h`，主脚本继续朝“场景装配 + 时序调度 + 汇总收尾”收口
+- `SelectMeasurementDrivenTarget` 已拆分为候选构建、候选过滤、RSRQ 保护、动态联合评分配置和评分赋值等小 helper，保持 baseline / improved 决策边界不变，降低后续调试目标选择逻辑的复杂度
 - 当前 `UE` 位置生成逻辑已收口为“两阶段”实现：先生成局部东-北平面偏移模板，再统一转换为 `WGS84` 地理点和 `ECEF`
 - 当前默认且唯一的 `UE` 布局为 `poisson-3ring`：在中心及两圈共 `19` 个 hex cell 内按截断泊松权重分配 `UE`，并在各 cell 内随机撒点；实现保持总数等于 `ueNum`，以维持现有节点、业务和统计管线
 - 当前默认波束锚点使用固定 overlap-only 排他：一个卫星波束占用某个 hex 中心后，其它卫星不能复用同一个 anchor cell，但允许相邻 anchor 参与竞争
@@ -169,11 +170,11 @@
 - 后续正式分析入口统一看 `scratch/results/formal/v6.1-poisson3ring-overlap-beamonly-40s/{baseline,improved}/seed-*`；历史固定 UE 与旧门控结果目录不再作为论文主线结果
 
 ## 当前收口结论
-- `research-v6.1` 的核心收口是正式论文场景与结果输出路径；baseline / full improved 固定在同一 `2x4 + poisson-3ring + overlap-only + beam-only` 下比较
+- `research-v6.2` 的核心收口是将 `research-v6.1` 场景口径合并到 `main` 并完成代码瘦身发布；baseline / full improved 仍固定在同一 `2x4 + poisson-3ring + overlap-only + beam-only` 下比较
 - 正式论文输出现在固定为：`E2E delay`、`packet loss rate`、`throughput`、`completed handovers`、`ping-pong`、`Jain load fairness`
 - 新增 `satellite_state_trace.csv` 作为每星每时刻原始负载状态；`scratch/plotting/summarize_thesis_results.py` 负责生成 `run_summary.csv`、`paper_kpi_summary.csv` 和 `paper_kpi_comparison.csv`
 - `plot_hex_grid_svg.py` 已收紧为 HTML-only 场景/轨迹示意脚本；旧的吞吐绘图脚本和批量实验矩阵脚本已从活动工作区移除
-- 历史固定 UE 和旧参数矩阵筛选只作为背景；`6.1` 正式论文数据统一从 `scratch/results/formal/v6.1-poisson3ring-overlap-beamonly-40s/{baseline,improved}/seed-*` 生成
+- 历史固定 UE 和旧参数矩阵筛选只作为背景；当前正式论文数据仍统一从 `scratch/results/formal/v6.1-poisson3ring-overlap-beamonly-40s/{baseline,improved}/seed-*` 生成，除非后续显式按 `research-v6.2` 重跑正式数据
 - 当前 same-frequency 默认 baseline 已经固定为：`reuse1 + ofdma-rr + grid-anchor + overlap-only + beam-only + beamExclusionCandidateK=64 + gNB antenna array 12x12`
 - 之前的大量 PHY / 阵元 / 波束 / 干扰诊断已经完成，它们的作用主要是帮助选定当前 baseline 默认口径；这些结果现在保留为历史背景，不再单独驱动后续优化顺序
 - 当前更重要的正式结论是：

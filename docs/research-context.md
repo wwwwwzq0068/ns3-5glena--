@@ -3,7 +3,7 @@
 ## Thesis Scope
 - Topic: LEO constellation handover strategy design and simulation in NS-3 for 5G-NTN.
 - Current implementation path: ns-3.46 plus 5G-LENA/NR, with LEO mobility and beam-aware handover logic.
-- Current thesis data version: `research-v6.1`, fixed to `2x4 + poisson-3ring + overlap-only + beam-only`.
+- Current thesis code release: `research-v6.2`, fixed to `2x4 + poisson-3ring + overlap-only + beam-only`.
 - Main scenarios:
   - inter-beam handover within the same satellite
   - inter-satellite handover across moving LEO nodes

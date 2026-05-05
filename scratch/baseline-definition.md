@@ -109,7 +109,7 @@
 - 当前固定 `NR` 下行调度器：`ofdma-rr`
 
 说明：
-- 这套参数代表当前工作区 `research-v6.1` 的默认 baseline 口径
+- 这套参数代表当前工作区 `research-v6.2` 的默认 baseline 口径
 - 当前后续一段时间不再通过继续扩星或切换场景开关来放大现象，而是固定当前 `2x4 + poisson-3ring + overlap-only + beam-only` 场景
 - 当前 `UE` 生成实现已收口为“局部东-北平面偏移模板 + 统一 `WGS84/ECEF` 转换”的两阶段写法
 - 当前默认还给 `plane 0` 增加了 `+1.09 deg` 的额外 `RAAN` 偏转，并把双轨 `RAAN` 间隔收紧到 `-0.58 deg`，用来把 plane 0 压到接近 `73-63-53` 这条线、把 plane 1 压到接近 `97-87-77` 这条线；当前 `plane0TimeOffsetSeconds=-3.5 s` 用于把 plane 0 的 sat0 初始落点调到 `hex73` 附近，`plane1OverpassGapSeconds=3 s` 用于在主同轨间隔改为 `6 s` 后保持 plane 1 初始诊断几何不变
@@ -120,7 +120,7 @@
 - 若主落点和周围一圈都没有 `UE`，则允许回退到这个空主落点；但若周围一圈存在 `UE` 候选、却都因重复/邻占排他或 beam/scan 约束而不合法，则不会为了追 `UE` 去破坏排他规则，而是继续走合法 fallback
 - 若需回到旧锚点选择口径，可显式设置 `anchorSelectionMode=demand-nearest` 与 `demandSnapshotMode=static-layout`
 - 当前 PHY 信道保留 `ThreeGpp` 路径并开启 `ShadowingEnabled`，baseline 与 improved 都直接消费标准 `MeasurementReport`
-- 当前稳定默认真实 NR PHY 为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 12x12`、`UE 1x2`，该口径自 `v4.3` 起引入，当前 `research-v6.1` 继续沿用；正式论文结果不再把 PHY/SINR/TBler 放入主表
+- 当前稳定默认真实 NR PHY 为 `gNB b00-custom + UE three-gpp`，阵列规模 `gNB 12x12`、`UE 1x2`，该口径自 `v4.3` 起引入，当前 `research-v6.2` 继续沿用；正式论文结果不再把 PHY/SINR/TBler 放入主表
 - 当前默认 `earthFixedBeamTargetMode=grid-anchor`：真实 gNB 发射波束锁到当前卫星已分配的唯一合法 anchor hex 中心，不跟随单个 `UE`
 - 当前固定使用 `beam-only` 真实链路候选门控：真实接入/切换候选只要求落在连续主波束覆盖内，不再叠加 anchor hex cell gate，作为论文唯一正式候选门控口径
 - 当前默认 `b00BeamwidthDeg=4.0` 已按真实 PHY 总方向图收紧，并配合 `gNB 12x12 UPA + b00-custom + ideal-earth-fixed` 进一步提高发射端空间定向性，使默认口径更接近当前 hex 小区尺度

@@ -10,7 +10,11 @@
 
 Formal result runs should retain the per-run KPI traces, `satellite_state_trace.csv`, and the HTML/trajectory files needed for thesis scenario figures. PHY/SINR/TBler CSV outputs are no longer part of the active reproduction package.
 
-Formal thesis version: `research-v6.1`.
+Formal thesis code release: `research-v6.2`.
+
+The retained formal data directory still uses the `v6.1-poisson3ring-overlap-beamonly-40s`
+name because those runs were generated under the unchanged `research-v6.1` scenario
+definition. Reuse that directory until a deliberate `research-v6.2` formal rerun is made.
 
 The only formal thesis scenario is now `2x4 + poisson-3ring + overlap-only + beam-only`, compared as baseline vs full improved.
 
